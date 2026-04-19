@@ -1,0 +1,43 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=device-google-komodo
+pkgdesc="Google Pixel 9 Pro XL"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools
+	linux-postmarketos-zumapro
+	firmware-google-komodo-brcm_a0
+	firmware-google-komodo-brcm_b0
+	firmware-google-komodo-brcm_b1
+	firmware-google-komodo-modem
+	firmware-google-komodo-aoc
+	alsa-ucm-conf-zumapro
+	linux-firmware-arm
+	linux-firmware-cirrus
+	neard
+	postmarketos-base
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+	modules-initfs
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+9b6da6cecf2210e818d56e723ea0f320a14d341053a9ca7ea92315ababd3e9970a0255de086c531a1d8182e6a00947c2b92c2ae38f4ad06201d4dae9a8926a0f  deviceinfo
+9ed1246237067259c1e533bbbda28de56836a8ebe2fe9dc079f038552062be6b7daf9e2f46261d293d7eb58fa2d3d52d516f98c309f6adcd01d910a0e436cfcf  kernel-cmdline.conf
+a5171dc7a4221a5a63c02820bac1e372c557cee72db9f777099f67eb272595fad6019f876cb47dd1bf455eeb3a45a74f215f2e8c44a6e1bf7cf3d7d9f49d98ad  modules-initfs
+"
