@@ -1,0 +1,81 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=linux-postmarketos-zumapro
+pkgver=7.2.0
+pkgrel=1
+pkgdesc="Google zumapro (Pixel 9 Series) close-to-mainline kernel"
+arch="aarch64"
+_carch="arm64"
+_flavor="postmarketos-zumapro"
+url="https://kernel.org"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps pmb:cross-native pmb:kconfigcheck-community"
+makedepends="
+	bison
+	clang
+	findutils
+	flex
+	lld
+	llvm
+	lz4
+	openssl-dev
+	perl
+	zstd
+	clang-dev
+	rust
+	rust-bindgen
+	rust-src
+	rustfmt
+	rust-clippy
+	dwarf-tools
+	pahole
+	elfutils-dev
+	python3-dev
+	linux-headers
+"
+
+# Source
+_owner="Trijal08"
+_repository="kernel-mainline"
+_commit="zumapro-google-caimito"
+_config="config-$_flavor.$arch"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+	$_config
+"
+builddir="$srcdir/$_repository-$_commit"
+_outdir="out"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/config-$_flavor.$CARCH" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-postmarketOS"
+}
+
+package() {
+	mkdir -p "$pkgdir"/boot
+
+	make Image.lz4 modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	install -D "$builddir"/include/config/kernel.release \
+		"$pkgdir"/usr/share/kernel/$_flavor/kernel.release
+
+	install -Dm644 "$builddir/arch/$_carch/boot/Image.lz4" \
+		"$pkgdir/boot/vmlinuz"
+}
+
+sha512sums="
+81370787a050fd60a57c9064a77d3f1247b0f9ca24b0898f93f0936742a0439aeef0407bb7c1af9c943f1ba82f472d89b47d6a4ad3335fbbe6c9fcf73f8efe7e  linux-postmarketos-zumapro-zumapro-google-caimito.tar.gz
+ea4f2dbcdcd621114123165de49f14096abda6d02d1579ce486189be16f7ef5998580aeb3b1f3988333b888ee8fc55db8ec134ec2bfb1acb1b74ec4e470aec25  config-postmarketos-zumapro.aarch64
+"
