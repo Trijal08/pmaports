@@ -1,0 +1,40 @@
+maintainer="Zunway Liang <zunway@outlook.com>"
+pkgname=firmware-xiaomi-jason
+pkgver=1
+pkgrel=0
+_commit="7b174a6ff04a70e3d16a13258bc8d492d06058a0"
+pkgdesc="Firmware files for Xiaomi Mi Note 3"
+url="https://postmarketos.org"
+arch="aarch64"
+license="proprietary"
+options="!strip !check !archcheck !spdx !tracedeps pmb:cross-native"
+makedepends="qca-swiss-army-knife"
+source="$pkgname-$pkgver-r$pkgrel.tar.bz2::https://fw.minlexx.ru/firmware-xiaomi-jason.tar.bz2
+	$pkgname-$pkgver-r$pkgrel-a512_zap.elf::https://github.com/TheMuppets/proprietary_vendor_xiaomi_jason/raw/$_commit/proprietary/vendor/firmware/a512_zap.elf
+"
+builddir="$srcdir"
+
+build() {
+	# Create board-2.bin
+	ath10k-bdencoder -c config.json -o board-2.bin
+
+	# Create firmware-5.bin
+	ath10k-fwencoder --create \
+		--features=wowlan,no-nwifi-decap-4addr-padding,allows-mesh-bcast,mgmt-tx-by-ref,non-bmi,single-chan-info-per-channel,raw-mode  \
+		--set-wmi-op-version=tlv --set-htt-op-version=tlv \
+		--set-fw-api=5
+}
+
+package() {
+	install -Dm644 firmware-5.bin \
+		-t "$pkgdir"/usr/lib/firmware/ath10k/WCN3990/hw1.0/
+	install -Dm644 board-2.bin \
+		-t "$pkgdir"/usr/lib/firmware/ath10k/WCN3990/hw1.0/
+	install -Dm644 "$pkgname"-"$pkgver"-r"$pkgrel"-a512_zap.elf \
+		"$pkgdir"/usr/lib/firmware/postmarketos/a512_zap.mbn
+}
+
+sha512sums="
+2663f954866bc40e9c97efde20d507991e00eb9133e5e9fedb0dd45616ea225aed59da973766a83c2c0b199ddeb9ddfb6d5ee62b39eb759cb98000ef37cce7dd  firmware-xiaomi-jason-1-r0.tar.bz2
+5775b04d191ab2b5de7183b6e971e08e45e5056952e7ec67c0e583933e1e918e7143abdc255829c1eb0da8767f9cd69c67cf854df9ade20ad9dbbf531293ce44  firmware-xiaomi-jason-1-r0-a512_zap.elf
+"
