@@ -1,0 +1,111 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=firmware-google-komodo
+pkgver=20260627
+pkgrel=1
+pkgdesc="Firmware for Google Pixel 9 Pro XL"
+subpackages="
+	$pkgname-brcm_a0
+	$pkgname-brcm_b0
+	$pkgname-brcm_b1
+	"
+arch="aarch64"
+_carch="arm64"
+_flavor="postmarketos-zumapro"
+url="https://kernel.org"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps pmb:cross-native"
+
+# Source
+_owner="TheMuppets"
+_repository="proprietary_vendor_google_komodo"
+_commit="lineage-24.0"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+"
+builddir="$srcdir/$_repository-$_commit"
+
+package() {
+	# parent package is empty
+	mkdir -p "$pkgdir"
+}
+
+brcm_a0() {
+	pkgdesc="Google Pixel 9 Pro XL Broadcom BCM4390A0 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4390A0.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+
+brcm_b0() {
+	pkgdesc="Google Pixel 9 Pro XL Broadcom BCM4390B0 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4390B0.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+
+brcm_b1() {
+	pkgdesc="Google Pixel 9 Pro XL Broadcom BCM4390B1 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4390B1.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+sha512sums="
+703537d568d2d2a7c0380029574bdd75187815d849e451122320de81b55c4750effc3840c9ab7dbb2157b2d0dc732a0958bbc19a9210426629b9b98eee0827a6  firmware-google-komodo-lineage-24.0.tar.gz
+"

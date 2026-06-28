@@ -10,6 +10,10 @@ options="!check !archcheck"
 depends="
 	android-tools
 	linux-postmarketos-zumapro
+	firmware-google-komodo-brcm_a0
+	firmware-google-komodo-brcm_b0
+	firmware-google-komodo-brcm_b1
+	linux-firmware-arm
 	postmarketos-base
 "
 makedepends="devicepkg-dev"
