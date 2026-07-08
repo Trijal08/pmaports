@@ -1,0 +1,15 @@
+diff --git a/steamos-manager/src/session.rs b/steamos-manager/src/session.rs
+index 28e3918..e40a0e0 100644
+--- a/steamos-manager/src/session.rs
++++ b/steamos-manager/src/session.rs
+@@ -32,8 +32,8 @@ use crate::manager::root::RootManagerProxy;
+ use crate::systemd::{ActiveState, JobMode, SystemdUnit};
+ use crate::{Service, path, session_connection, system_connection};
+ 
+-const CONFIG_PREFIX_USR: &str = "/usr/lib/sddm/sddm.conf.d";
+-const CONFIG_PREFIX: &str = "/etc/sddm.conf.d";
++const CONFIG_PREFIX_USR: &str = "/etc/plasmalogin.conf.d";
++const CONFIG_PREFIX: &str = "/etc/plasmalogin.conf.d";
+ const SESSION_CHECK_PATH_LEGACY: &str = "steamos.conf";
+ const CONFIG_PATH_LEGACY: &str = "zz-steamos-autologin.conf";
+ const TEMPORARY_CONFIG_PATH_LEGACY: &str = "zzt-steamos-temp-login.conf";

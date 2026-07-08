@@ -1,0 +1,61 @@
+# Co-Maintainer: Anton Bambura <jenneron@protonmail.com>
+maintainer="Victoria Brekenfeld <pkg@drakulix.de>"
+pkgname=steamos-manager
+pkgver=26.4.1
+pkgrel=0
+pkgdesc="SteamOS Manager is a system daemon that aims to abstract Steam's interactions with the operating system."
+url="https://gitlab.steamos.cloud/holo/steamos-manager"
+# armv7: error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+# ppc64le: error[E0659]: `STATX_TYPE` is ambiguous
+arch="all !armv7 !ppc64le"
+license="MIT"
+depends="orca"
+makedepends="
+	sccache
+	cargo
+	cargo-auditable
+	rust
+	clang21-dev
+	eudev-dev
+	glib-dev
+	speech-dispatcher-dev
+"
+depends="pipewire-tools"
+source="https://gitlab.steamos.cloud/holo/steamos-manager/-/archive/v$pkgver/steamos-manager-v$pkgver.tar.gz
+	0001-use-gamescope-session-plus.patch
+	0002-use-plasmalogin.patch
+"
+subpackages="
+	$pkgname-systemd
+	$pkgname-dbus
+	$pkgname-doc
+"
+# remote_battery_charge_limit1_autoadd_drop_remote test depends on race conditions on slow CI runners
+# ERROR: crossdirect: rustc version mismatch between native and build chroot.
+options="!check !pmb:crossdirect"
+builddir="$srcdir/$pkgname-v$pkgver"
+
+build() {
+	make build CARGOFLAGS=auditable
+}
+
+package() {
+	make install DESTDIR="$pkgdir"
+
+	# conflicts with orca package
+	rm $pkgdir/usr/lib/systemd/user/orca.service
+
+	install -Dm644 LICENSE -t "$pkgdir"/usr/share/licenses/"$pkgname"
+}
+
+dbus() {
+	pkgdesc="DBus configs for $pkgname"
+	install_if="$pkgname=$pkgver-r$pkgrel dbus"
+	amove usr/share/dbus-1
+}
+
+sha512sums="
+ed6425b34c648934741ee1a10eab55c4eaa3300a0063f400aa5c9588e99e7ae9515d807db95ea5b755bc2ed9d5192912f66e8bcc37bad101e57b7b3a5c9a377c  steamos-manager-v26.4.1.tar.gz
+839081302f85a43ab996e878fdd4a780df4862fdaa34a1e58e722a1bcc7a30d847b82f120255a1b9c18f0a0bf80cfd14339f33f434b8862a68e04353720832e6  0001-use-gamescope-session-plus.patch
+2e0638452cbf3032c931da136969489ff2d864edcb112818b5ad9144efa19c66d8c110ebb1a665fcb230f0d10fee5a103f46293e0b813265d9bc81e82feed763  0002-use-plasmalogin.patch
+"

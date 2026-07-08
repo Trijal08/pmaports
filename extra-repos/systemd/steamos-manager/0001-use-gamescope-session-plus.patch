@@ -1,0 +1,49 @@
+diff --git a/steamos-manager/src/session.rs b/steamos-manager/src/session.rs
+index 28e3918..32eefb7 100644
+--- a/steamos-manager/src/session.rs
++++ b/steamos-manager/src/session.rs
+@@ -272,7 +272,8 @@ impl SessionManager {
+     }
+ 
+     pub(crate) async fn current_login_mode(&self) -> Result<LoginMode> {
+-        if self.unit_is_active("gamescope-session.service").await? {
++        if self.unit_is_active("gamescope-session-plus@steam.service").await? 
++        || self.unit_is_active("gamescope-session-plus@opengamepadui.service").await? {
+             return Ok(LoginMode::Game);
+         }
+         Ok(LoginMode::Desktop)
+@@ -358,7 +359,15 @@ impl SessionManager {
+ 
+     pub(crate) async fn session_for_mode(&self, mode: LoginMode) -> Result<String> {
+         match mode {
+-            LoginMode::Game => Ok(String::from("gamescope-wayland.desktop")),
++            LoginMode::Game => {
++                if try_exists(path(
++                    "/usr/share/wayland-sessions/gamescope-session-steam.desktop",
++                )).await? {
++                    Ok(String::from("gamescope-session-steam.desktop"))
++                } else {
++                    Ok(String::from("gamescope-session-opengamepadui.desktop"))
++                }
++            }
+             LoginMode::Desktop => self.default_desktop_session().await,
+         }
+     }
+@@ -794,7 +803,7 @@ mod test {
+             .await
+             .unwrap();
+         write(
+-            path("/usr/share/wayland-sessions/gamescope-wayland.desktop"),
++            path("/usr/share/wayland-sessions/gamescope-session-steam.desktop"),
+             b"",
+         )
+         .await
+@@ -823,7 +832,7 @@ mod test {
+         notify.notified().await;
+         assert_eq!(
+             root_manager.get().await.temporary_session,
+-            "gamescope-wayland.desktop"
++            "gamescope-session-steam.desktop"
+         );
+         {
+             let mut unit = unit.get_mut().await;
