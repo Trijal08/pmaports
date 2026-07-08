@@ -1,0 +1,57 @@
+diff --git a/main.c b/main.c
+index 97bad39..f52f17c 100644
+--- a/main.c
++++ b/main.c
+@@ -29,7 +29,6 @@ enum sfd_event {
+ };
+ 
+ struct sfd_state {
+-	char steam_path[PATH_MAX];
+     struct pollfd fds[SFD_EVENT_COUNT];
+     sd_bus* bus;
+     sd_bus_slot *xdg_slot;
+@@ -69,8 +68,8 @@ static void spawn_async_no_shell(char *argv[]) {
+ static void send_to_steam(struct sfd_state *state, char *url_string) {
+     char *argv[] =
+     {
+-        state->steam_path,
+-		"-ifrunning",
++        "steam",
++	    "-ifrunning",
+         url_string,
+         NULL,
+     };
+@@ -260,17 +259,6 @@ static int init_signalfd() {
+ 	return sfd;
+ }
+ 
+-static void init_steam_path(struct sfd_state *state) {
+-	const char *homedir;
+-	if ((homedir = getenv("HOME")) == NULL) {
+-		homedir = getpwuid(getuid())->pw_dir;
+-	}
+-
+-	snprintf(state->steam_path, sizeof(state->steam_path),
+-		"%s/.steam/root/ubuntu12_32/steam",
+-		homedir);
+-}
+-
+ static bool init_dbus(struct sfd_state *state) {
+     int ret = 0;
+ 
+@@ -309,8 +297,6 @@ static void finish_state(struct sfd_state *state) {
+ }
+ 
+ static bool init_state(struct sfd_state *state) {
+-	init_steam_path(state);
+-
+     if (!init_dbus(state)) {
+         finish_state(state);
+         return false;
+@@ -420,4 +406,4 @@ int main(int argc, char *argv[]) {
+     success = run_loop(&state);
+     finish_state(&state);
+     return success ? EXIT_SUCCESS : EXIT_FAILURE;
+-}
+\ No newline at end of file
++}
