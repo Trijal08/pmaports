@@ -1,0 +1,41 @@
+From 3a480508da5a536c07190d2d50c718cada509d5d Mon Sep 17 00:00:00 2001
+From: Casey Connolly <casey.connolly@linaro.org>
+Date: Sat, 6 Jun 2026 17:08:56 +0200
+Subject: [PATCH 1/2] run steam from PATH
+
+Signed-off-by: Casey Connolly <casey.connolly@linaro.org>
+---
+ powerbuttond.c | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/powerbuttond.c b/powerbuttond.c
+index 5361506e9181..2f947f1ab69c 100644
+--- a/powerbuttond.c
++++ b/powerbuttond.c
+@@ -127,21 +127,18 @@ out:
+ 	return num_devs;
+ }
+ 
+ void steam_message(const char* type) {
+-	char steam[PATH_MAX];
+ 	char message[32];
+-	char* home = getenv("HOME");
+-	char* const args[] = {steam, "-ifrunning", message, NULL};
++	char* const args[] = {"steam", "-ifrunning", message, NULL};
+ 
+ 	alarm(0);
+ 	got_alarm = false;
+ 
+-	snprintf(steam, sizeof(steam), "%s/.steam/root/ubuntu12_32/steam", home);
+ 	snprintf(message, sizeof(message), "steam://%s", type);
+ 
+ 	pid_t pid;
+-	if (posix_spawn(&pid, steam, NULL, NULL, args, environ) < 0) {
++	if (posix_spawnp(&pid, "steam", NULL, NULL, args, environ) < 0) {
+ 		return;
+ 	}
+ 	while (true) {
+ 		if (waitpid(pid, NULL, 0) > 0) {
+-- 
+2.54.0
+

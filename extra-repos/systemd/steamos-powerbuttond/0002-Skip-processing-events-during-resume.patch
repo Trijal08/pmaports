@@ -1,0 +1,114 @@
+From 66804a16f20c398dbb7282bbc02f78ece7ac21a8 Mon Sep 17 00:00:00 2001
+From: Casey Connolly <kcxt@postmarketos.org>
+Date: Wed, 22 Oct 2025 15:29:16 -0700
+Subject: [PATCH 2/2] Skip processing events during resume
+
+Avoid immediately going to sleep after waking up if we get the power
+button press.
+---
+ Makefile       |  6 +++---
+ powerbuttond.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 98a494613592..374a59b50373 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,6 +1,6 @@
+-LIB_CFLAGS := $(shell pkg-config --cflags libevdev libudev)
+-LIB_LDFLAGS := $(shell pkg-config --libs libevdev libudev)
++LIB_CFLAGS := $(shell pkg-config --cflags libevdev libudev libsystemd)
++LIB_LDFLAGS := $(shell pkg-config --libs libevdev libudev libsystemd)
+ 
+ CFLAGS += -Wall -Wextra $(LIB_CFLAGS)
+ 
+ ifneq ($(ASAN),)
+@@ -17,9 +17,9 @@ endif
+ all: steamos-powerbuttond
+ .PHONY: clean install
+ 
+ steamos-powerbuttond: powerbuttond.o
+-	$(CC) $(LIB_LDFLAGS) $(LDFLAGS) $< -o $@
++	$(LD) $(LIB_LDFLAGS) $(LDFLAGS) $< -o $@
+ 
+ %.o: %.c
+ 	$(CC) $(CFLAGS) $^ -c -o $@
+ 
+diff --git a/powerbuttond.c b/powerbuttond.c
+index 2f947f1ab69c..b545f0aaf885 100644
+--- a/powerbuttond.c
++++ b/powerbuttond.c
+@@ -15,8 +15,9 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/wait.h>
+ #include <unistd.h>
++#include <systemd/sd-bus.h>
+ 
+ #define MAX_DEVS 10
+ 
+ #define MOD_LSHIFT 0x01
+@@ -126,17 +127,60 @@ out:
+ 
+ 	return num_devs;
+ }
+ 
++int preparing_for_sleep()
++{
++    sd_bus *bus = NULL;
++    sd_bus_error err = SD_BUS_ERROR_NULL;
++    int r, prep_for_sleep = 0;
++
++    r = sd_bus_open_system(&bus);
++    if (r < 0) {
++        fprintf(stderr, "dbus open fail: %s\n", strerror(-r));
++        return -1;
++    }
++
++    r = sd_bus_get_property_trivial(
++        bus,
++        "org.freedesktop.login1",
++        "/org/freedesktop/login1",
++        "org.freedesktop.login1.Manager",
++        "PreparingForSleep",
++        &err,
++        'b', &prep_for_sleep);
++
++    if (r < 0) {
++        fprintf(stderr, "dbus query fail: %s: %s\n", err.name, err.message);
++        sd_bus_error_free(&err);
++        sd_bus_unref(bus);
++        return -1;
++    }
++
++    sd_bus_unref(bus);
++
++    return prep_for_sleep;
++}
++
+ void steam_message(const char* type) {
+ 	char message[32];
+ 	char* const args[] = {"steam", "-ifrunning", message, NULL};
+ 
++	if(preparing_for_sleep() == 1)
++	{
++		//we want to ignore this event because we either already are suspending, or currently resuming
++		//todo various cleanup stuff here -- alarms / button state??
++		printf("skipping power button push since we are already suspending or still actively resuming\n");
++		return;
++	}
++
+ 	alarm(0);
+ 	got_alarm = false;
+ 
+ 	snprintf(message, sizeof(message), "steam://%s", type);
+ 
++	printf("submitting %s power press to steam\n",type);
++
+ 	pid_t pid;
+ 	if (posix_spawnp(&pid, "steam", NULL, NULL, args, environ) < 0) {
+ 		return;
+ 	}
+-- 
+2.54.0
+

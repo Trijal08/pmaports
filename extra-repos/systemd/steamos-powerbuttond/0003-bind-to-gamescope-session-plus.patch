@@ -1,0 +1,18 @@
+diff --git a/steamos-powerbuttond.service b/steamos-powerbuttond.service
+index 478e3f4..4cb40d1 100644
+--- a/steamos-powerbuttond.service
++++ b/steamos-powerbuttond.service
+@@ -1,8 +1,11 @@
+ [Unit]
+ Description=Power Button daemon for SteamOS
+-Requisite=gamescope-session.service
++Requisite=gamescope-session-plus@steam.service
+ 
+ [Service]
+-ExecStart=/usr/lib/hwsupport/steamos-powerbuttond
++ExecStart=/usr/bin/systemd-inhibit --what=handle-suspend-key:handle-power-key:handle-hibernate-key --who=gamescope-session --why="gamescope-session handles power button events" /usr/lib/hwsupport/steamos-powerbuttond
+ Restart=on-failure
+ Slice=session.slice
++
++[Install]
++WantedBy=graphical-session.target
