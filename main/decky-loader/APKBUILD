@@ -1,0 +1,71 @@
+# Co-Maintainer: Anton Bambura <jenneron@protonmail.com>
+maintainer="Victoria Brekenfeld <pkg@drakulix.de>"
+pkgname=decky-loader
+pkgver=3.3.1
+pkgrel=0
+pkgdesc="A plugin loader for the Steam Deck"
+url="https://github.com/SteamDeckHomebrew/decky-loader"
+# riscv64: Error: string or blob too big
+arch="all !riscv64"
+# The project does not specify GPL v2 variant
+# https://github.com/SteamDeckHomebrew/decky-loader/issues/1015
+license="GPL-2.0-only"
+depends="
+	py3-aiohttp
+	py3-aiohttp-jinja2
+	py3-aiohttp-cors
+	py3-certifi
+	py3-multidict
+	py3-packaging
+	py3-setproctitle
+	py3-watchdog
+"
+makedepends="
+	nodejs
+	pnpm
+	py3-poetry-core
+	py3-gpep517
+	python3-dev
+	rollup
+"
+subpackages="$pkgname-systemd $pkgname-pyc"
+source="$pkgname-v$pkgver.tar.gz::https://github.com/SteamDeckHomebrew/decky-loader/archive/refs/tags/v$pkgver.tar.gz
+	decky-loader.service
+	0001-build-use-system-dependencies.patch
+	0002-frontend-Hide-updater.patch
+	0003-frontend-Add-Nura-warning.patch
+"
+options="!check" # no tests
+
+prepare() {
+	default_prepare
+
+	# set version
+	sed -i "s/version = \"0.0.0\"/version = \"$pkgver\"/" "$builddir"/backend/pyproject.toml
+
+	cd "$builddir"/frontend
+	pnpm link /usr/share/node_modules/rollup
+	pnpm install --frozen-lockfile
+}
+
+build() {
+	cd "$builddir"/frontend
+	pnpm run build
+
+	cd "$builddir"/backend
+	export POETRY_DYNAMIC_VERSIONING_BYPASS="$pkgver"
+	gpep517 build-wheel --wheel-dir .dist --output-fd 3 3>&1
+}
+
+package() {
+	python3 -m installer -d "$pkgdir" "$builddir"/backend/.dist/*.whl
+	install -Dm644 "$srcdir"/decky-loader.service "$pkgdir"/usr/lib/systemd/user/decky-loader.service
+}
+
+sha512sums="
+36a9d50219ba3cdc2cf0eba92df7e715c4d2eb43376b36092c2c5d4ff7093199357cc6e3d15ba3272cdde8ab4016f5230893432d9bbd9c1a741a2ff2628d4a4e  decky-loader-v3.3.1.tar.gz
+3ca5a0c1bcdae09e988de46ab51d58e9b97770bca7265dec390685d16b6d1b2151889c0c3aba64adc72f63a4ca267413575b6f2c96cb41d926ff655756482d1d  decky-loader.service
+fdacbe0d2a642fc91e01e0d5ac6a3d181ad6c2b3541c20740621491ceabe6b03e345e7d4c01a6a07b4d3dab088ff33fa6f485e27fba3e0cf7042e84cd25c14d8  0001-build-use-system-dependencies.patch
+a536a78d8f07fc4087fc52e24cc4da92c9c0526d0235412d180418861d40a1a062d3587a6f26672fa38da993d1129381649339cb5521e301656fd5b0b4d06d0f  0002-frontend-Hide-updater.patch
+ed05d7267f67a736ee50b07ae5206b60228d05a4c88c27a6aa0d99757f6bd5decc856eccfe2b0e339d186a244ead0ef935f132c93ba41adcc2f6dc65dcf43ab9  0003-frontend-Add-Nura-warning.patch
+"

@@ -1,0 +1,64 @@
+From 77b74b80b283722a5e71cd37d7c100644ce7c0be Mon Sep 17 00:00:00 2001
+From: Victoria Brekenfeld <github@drakulix.de>
+Date: Sun, 5 Jul 2026 11:47:19 +0200
+Subject: [PATCH 2/3] frontend: Hide updater
+
+---
+ .../settings/pages/general/NotificationSettings.tsx       | 8 --------
+ frontend/src/components/settings/pages/general/index.tsx  | 5 -----
+ frontend/src/notification-service.tsx                     | 2 +-
+ 3 files changed, 1 insertion(+), 14 deletions(-)
+
+diff --git a/frontend/src/components/settings/pages/general/NotificationSettings.tsx b/frontend/src/components/settings/pages/general/NotificationSettings.tsx
+index 693fa62..da57e9e 100644
+--- a/frontend/src/components/settings/pages/general/NotificationSettings.tsx
++++ b/frontend/src/components/settings/pages/general/NotificationSettings.tsx
+@@ -12,14 +12,6 @@ const NotificationSettings: FC = () => {
+ 
+   return (
+     <>
+-      <Field label={t('SettingsGeneralIndex.notifications.decky_updates_label')}>
+-        <Toggle
+-          value={notificationSettings.deckyUpdates}
+-          onChange={(deckyUpdates) => {
+-            notificationService.update({ ...notificationSettings, deckyUpdates });
+-          }}
+-        />
+-      </Field>
+       <Field label={t('SettingsGeneralIndex.notifications.plugin_updates_label')}>
+         <Toggle
+           value={notificationSettings.pluginUpdates}
+diff --git a/frontend/src/components/settings/pages/general/index.tsx b/frontend/src/components/settings/pages/general/index.tsx
+index 84ad88f..cccfda7 100644
+--- a/frontend/src/components/settings/pages/general/index.tsx
++++ b/frontend/src/components/settings/pages/general/index.tsx
+@@ -19,13 +19,8 @@ export default function GeneralSettings({
+ 
+   return (
+     <DialogBody>
+-      <DialogControlsSection>
+-        <DialogControlsSectionHeader>{t('SettingsGeneralIndex.updates.header')}</DialogControlsSectionHeader>
+-        <UpdaterSettings />
+-      </DialogControlsSection>
+       <DialogControlsSection>
+         <DialogControlsSectionHeader>{t('SettingsGeneralIndex.beta.header')}</DialogControlsSectionHeader>
+-        <BranchSelect />
+         <StoreSelect />
+       </DialogControlsSection>
+       <DialogControlsSection>
+diff --git a/frontend/src/notification-service.tsx b/frontend/src/notification-service.tsx
+index 188cebd..268efbb 100644
+--- a/frontend/src/notification-service.tsx
++++ b/frontend/src/notification-service.tsx
+@@ -7,7 +7,7 @@ export interface NotificationSettings {
+ }
+ 
+ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+-  deckyUpdates: true,
++  deckyUpdates: false,
+   pluginUpdates: true,
+ };
+ 
+-- 
+2.54.0
+

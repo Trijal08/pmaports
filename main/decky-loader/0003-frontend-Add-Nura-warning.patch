@@ -1,0 +1,60 @@
+From 1f3905a451e00afaa2c514dde6208696b5112fed Mon Sep 17 00:00:00 2001
+From: Victoria Brekenfeld <github@drakulix.de>
+Date: Sun, 5 Jul 2026 11:48:03 +0200
+Subject: [PATCH 3/3] frontend: Add Nura warning
+
+---
+ frontend/src/components/PluginView.tsx | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/frontend/src/components/PluginView.tsx b/frontend/src/components/PluginView.tsx
+index ffaa176..7f27995 100644
+--- a/frontend/src/components/PluginView.tsx
++++ b/frontend/src/components/PluginView.tsx
+@@ -1,4 +1,4 @@
+-import { ButtonItem, ErrorBoundary, Focusable, PanelSection, PanelSectionRow } from '@decky/ui';
++import { ButtonItem, DialogButton, ErrorBoundary, Focusable, PanelSection, PanelSectionRow, Navigation } from '@decky/ui';
+ import { FC, useMemo } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import { FaBan, FaEyeSlash } from 'react-icons/fa';
+@@ -8,6 +8,11 @@ import NotificationBadge from './NotificationBadge';
+ import { useQuickAccessVisible } from './QuickAccessVisibleState';
+ import TitleView from './TitleView';
+ 
++const navLink = (url: string) => {
++  Navigation.CloseSideMenus();
++  Navigation.NavigateToExternalWeb(url);
++};
++
+ const PluginView: FC = () => {
+   const {
+     plugins,
+@@ -69,7 +74,7 @@ const PluginView: FC = () => {
+               flexDirection: 'column',
+               position: 'absolute',
+               justifyContent: 'center',
+-              padding: '5px 0px',
++              padding: '5px 16px 5px 0px',
+             }}
+           >
+             {numberOfHidden > 0 && (
+@@ -84,6 +89,16 @@ const PluginView: FC = () => {
+                 <div>{t('PluginView.disabled', { count: disabledPlugins.length })}</div>
+               </div>
+             )}
++            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.9rem', paddingTop: '16px' }}>
++                Unofficial version of decky-loader for Nura.
++                <br/>
++                Some plugins will not work!
++            </div>
++            <PanelSectionRow>
++              <ButtonItem layout="below" onClick={() => navLink("https://gitlab.nura.eco/nura/pmaports/-/work_items/")}>
++                Bug Tracker
++              </ButtonItem>
++            </PanelSectionRow>
+           </div>
+         </PanelSection>
+       </div>
+-- 
+2.54.0
+

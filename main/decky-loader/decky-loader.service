@@ -1,0 +1,21 @@
+[Unit]
+Description=SteamDeck Plugin Loader
+ConditionPathIsDirectory=%D/Steam
+
+[Service]
+Type=simple
+Restart=always
+TimeoutStopSec=15
+ExecStartPre=/usr/bin/touch %D/Steam/.cef-enable-remote-debugging
+ExecStartPre=/usr/bin/mkdir -p %D/decky-loader/services
+ExecStartPre=/usr/bin/mkdir -p %D/decky-loader/plugins
+ExecStartPre=-/usr/bin/ash -c "for plugin in $(ls /usr/share/decky-loader/plugins 2>/dev/null); do rm $HOME/.local/share/decky-loader/plugins/$plugin; ln -s /usr/share/decky-loader/plugins/$plugin $HOME/.local/share/decky-loader/plugins/$plugin; done"
+ExecStart=/usr/bin/decky-loader
+WorkingDirectory=-%D/decky-loader/services
+Environment=UNPRIVILEGED_PATH=%D/decky-loader
+Environment=PRIVILEGED_PATH=%D/decky-loader
+Environment=LOG_LEVEL=INFO
+Environment=KEEP_SYSTEMD_SERVICE=1
+
+[Install]
+WantedBy=graphical-session.target
