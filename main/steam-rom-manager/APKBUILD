@@ -1,0 +1,56 @@
+# Co-Maintainer: Anton Bambura <jenneron@protonmail.com>
+maintainer="Victoria Brekenfeld <pkg@drakulix.de>"
+pkgname=steam-rom-manager
+pkgver=2.6.3
+pkgrel=0
+pkgdesc="The bulk game importer and artwork manager for Steam!"
+url="https://steamgriddb.github.io/steam-rom-manager/"
+arch="x86_64 aarch64" # blocked by electron
+license="GPL-3.0-or-later"
+depends="electron"
+makedepends="
+	electron-dev
+	electron-tasje
+	nodejs
+	npm
+	python3
+	yarn
+"
+source="$pkgname-v$pkgver.tar.gz::https://github.com/SteamGridDB/steam-rom-manager/archive/refs/tags/v$pkgver.tar.gz
+	steam-rom-manager
+"
+options="!check net" # No test suite
+
+prepare() {
+	default_prepare
+
+	npm --allow-git=all install
+	npm --allow-git=all install @node-steam/vdf
+}
+
+build() {
+	npm run prebuild:dist
+	npm run build:main
+	npm run build:renderer
+	npm prune --omit=dev
+	tasje pack --additional-asar-unpack '*.node'
+}
+
+package() {
+	install -Dm644 release/resources/app.asar \
+		-t "$pkgdir"/usr/lib/"$pkgname"
+	install -Dm644 release/steam-rom-manager.desktop \
+		-t "$pkgdir"/usr/share/applications
+	install -Dm755 "$srcdir"/steam-rom-manager \
+		-t "$pkgdir"/usr/bin
+
+	while read -r size; do
+		install -Dm644 release/icons/"$size".png \
+			"$pkgdir"/usr/share/icons/hicolor/"$size"/apps/"$pkgname".png
+	done < release/icons/size-list
+}
+
+sha512sums="
+2e7181b8d6000899b8a0cfd4a04c2ca4d9ddaf506c4deaed470cc19b18ad5a342f3c45eaa1577f1f637f1d60e4a06c9cee6db1d0975a90ef586a4c6aee651cd6  steam-rom-manager-v2.6.3.tar.gz
+e8a2ef335cdec8a9325676d094aa04eaeb8b7c9cc1a90bea516789824c8012f7e085c15481617021df9be3977697d97dc1939d807a5b6c179cb5d0cc25b6db70  steam-rom-manager
+"
