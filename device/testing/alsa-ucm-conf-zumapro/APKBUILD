@@ -1,0 +1,32 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=alsa-ucm-conf-zumapro
+pkgver=1
+pkgrel=0
+pkgdesc="ALSA UCM configuration for Google Zuma(Pro) devices"
+url="https://github.com/Trijal08/alsa-ucm-conf"
+arch="aarch64"
+license="BSD-3-Clause"
+provides="alsa-ucm-conf"
+provider_priority=1
+_owner="Trijal08"
+_repository="alsa-ucm-conf"
+# Pinned to a commit, not the branch: a branch tarball changes content under
+# a fixed checksum, so a push elsewhere breaks the build instead of being
+# picked up deliberately.
+_commit="afa4df2cca907976cbf798af37b77129d89d33c0"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+"
+options="!check"
+builddir="$srcdir/$_repository-$_commit"
+
+package() {
+	# install audio config files
+	mkdir -p "$pkgdir"/usr/share/alsa
+	cp -r "$builddir"/ucm2 \
+		"$pkgdir"/usr/share/alsa/
+}
+
+sha512sums="
+d588fd7870d46b3758f588b04716639aa40987d12d80ed8d24c1ea97472fd4aeb224f5e9b39006d6476bf329f6a2cd37dc0ba4700a6590eb7b9c0fc411d39641  alsa-ucm-conf-zumapro-afa4df2cca907976cbf798af37b77129d89d33c0.tar.gz
+"
