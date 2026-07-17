@@ -1,0 +1,146 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=firmware-google-komodo
+pkgver=20260627
+pkgrel=1
+pkgdesc="Firmware for Google Pixel 9 Pro XL"
+subpackages="
+	$pkgname-brcm_a0
+	$pkgname-brcm_b0
+	$pkgname-brcm_b1
+	$pkgname-modem
+	$pkgname-aoc
+	"
+arch="aarch64"
+_carch="arm64"
+_flavor="postmarketos-zumapro"
+url="https://kernel.org"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps pmb:cross-native"
+makedepends="
+	rsync
+"
+
+# Source
+_owner="TheMuppets"
+_repository="proprietary_vendor_google_komodo"
+_commit="lineage-24.0"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+	initramfs_setup_modemfw.sh
+"
+builddir="$srcdir/$_repository-$_commit"
+
+package() {
+	# parent package is empty
+	mkdir -p "$pkgdir"
+}
+
+brcm_a0() {
+	pkgdesc="Google Pixel 9 Pro XL Broadcom BCM4390A0 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4390_a0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390a0-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4390A0.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+
+brcm_b0() {
+	pkgdesc="Google Pixel 9 Pro XL Broadcom BCM4390B0 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4390_b0 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b0-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4390B0.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+
+brcm_b1() {
+	pkgdesc="Google Pixel 9 Pro XL Broadcom BCM4390B1 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4390_b1 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4390b1-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4390B1.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM_200.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+
+modem() {
+	pkgdesc="Google Pixel 9 Pro XL S5400 Modem and GNSS firmware"
+
+	# Modem Partition Mounting Script
+	install -Dm755 "$srcdir"/initramfs_setup_modemfw.sh \
+		-t "$subpkgdir/usr/share/mkinitfs/hooks-cleanup/"
+
+	# Carrier config
+	install -d "$subpkgdir/lib/firmware/google/s5400/carrierconfig/"
+	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/carrierconfig/ "$subpkgdir/lib/firmware/google/s5400/carrierconfig/"
+
+	# UE Cap config
+	install -d "$subpkgdir/lib/firmware/google/s5400/uecapconfig/"
+	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/uecapconfig/ "$subpkgdir/lib/firmware/google/s5400/uecapconfig/"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/kepler.bin \
+		"$subpkgdir/lib/firmware/google/s5400/kepler.bin"
+}
+
+aoc() {
+	pkgdesc="Google Pixel 9 Pro XL AoC (Always-on-Compute) firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/aoc.bin \
+		"$subpkgdir/lib/firmware/google/aoc.bin"
+}
+sha512sums="
+e372195b0d75517abecfd48431a353cbdd4a39e35bf7bacbf5a2bb3345209642acc29af04b7ca8858a7628bb62ab789b3e46e7389af276a0f2f55b5781b1d590  firmware-google-komodo-lineage-24.0.tar.gz
+f082c8c88af39bef00ed21876bf512bb1b15ef81a6985ad1a29e9251ff46662b65101eefffaee533fd1cd7ae577d67ee4a2f8a1a6c13a5496853e58c197dbc7b  initramfs_setup_modemfw.sh
+"
