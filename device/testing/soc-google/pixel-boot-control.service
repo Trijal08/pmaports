@@ -1,0 +1,19 @@
+[Unit]
+Description=Mark the current Google Pixel A/B boot successful
+Documentation=https://git.deusch.me/pixel-mainline/pixel-boot-control
+After=multi-user.target
+ConditionPathExists=/proc/bootconfig
+ConditionPathExists=/dev/disk/by-partlabel/devinfo
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/pixel-boot-control mark-successful
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictSUIDSGID=yes

@@ -1,0 +1,10 @@
+[Unit]
+Description=Delay the Google Pixel successful-boot mark until userspace is healthy
+
+[Timer]
+OnBootSec=60s
+AccuracySec=1s
+Unit=pixel-boot-control.service
+
+[Install]
+WantedBy=timers.target
