@@ -1,0 +1,71 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=soc-google
+pkgdesc="Common package for Google Tensor devices"
+pkgver=10
+pkgrel=0
+url="https://postmarketos.org"
+license="BSD-3-Clause"
+arch="aarch64"
+options="!check !archcheck !tracedeps !pmb:crossdirect"
+depends=""
+makedepends="
+	cargo
+	cargo-auditable
+"
+subpackages="
+	$pkgname-gbootctl-systemd:gbootctl_systemd
+	$pkgname-gbootctl
+"
+
+_commit="4b59e3d4278608622b95270c798ffabd47dd41fc"
+source="
+	pixel-boot-control-$_commit.tar.gz::https://git.deusch.me/pixel-mainline/pixel-boot-control/archive/$_commit.tar.gz
+	80-pixel-boot-control.preset
+	pixel-boot-control.service
+	pixel-boot-control.timer
+"
+builddir="$srcdir/pixel-boot-control"
+
+prepare() {
+	default_prepare
+	rm -f .cargo/config.toml
+	RUSTC_WRAPPER= cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	RUSTC_WRAPPER= cargo auditable build --release --frozen
+}
+
+package() {
+	mkdir -p "$pkgdir"
+
+	# Install the compiled native binary
+	install -Dm755 target/release/pixel-boot-control \
+		-t "$pkgdir/usr/sbin"
+}
+
+gbootctl_systemd() {
+	pkgdesc="Systemd units for pixel-boot-control"
+	install_if="$pkgname=$pkgver-r$pkgrel systemd"
+
+	install -Dm644 \
+		"$srcdir/pixel-boot-control.service" \
+		"$srcdir/pixel-boot-control.timer" \
+		-t "$subpkgdir/usr/lib/systemd/system"
+	install -Dm644 "$srcdir/80-pixel-boot-control.preset" \
+		-t "$subpkgdir/usr/lib/systemd/system-preset"
+}
+
+gbootctl() {
+	pkgdesc="Enable pixel-boot-control mark-boot-successful service"
+	depends="$pkgname-gbootctl-systemd"
+
+	mkdir -p "$subpkgdir"
+}
+
+sha512sums="
+233438049ef5fd57cfce45d792e56c481b508acbbb35cb96b5e5d54ebaa00fb9001cfaf9458ae235e9e32d6a28fc6d36987efd49f56b4bd7f7329cea903fb5ff  pixel-boot-control-4b59e3d4278608622b95270c798ffabd47dd41fc.tar.gz
+3796869695a46adb556f4795cf7eaf2eb1821a884e49594587f50f0093e8245b70537ac19c315dd67b816bab4bd24f5b1cd81beac914cb7c4aaa9ef326178574  80-pixel-boot-control.preset
+800b154d6fce5d0b719921964f9ed82699f73b3ab8e2b23673eeb8fc59559693c67bc28009f668207649c818f57760b24155f342efd22bf13ac5cf2abab25186  pixel-boot-control.service
+07ef08a91152686c80505b67fe528b29c4deda4ec55c8d9c0e6bbadea08f2eebbc5f93d4ed15e79cf9cf1498d21454836f409cdd3207a426193bd7680ffe1ce2  pixel-boot-control.timer
+"
