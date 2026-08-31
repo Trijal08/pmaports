@@ -1,0 +1,98 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=firmware-google-tegu
+pkgver=20260627
+pkgrel=1
+pkgdesc="Firmware for Google Pixel 9a"
+subpackages="
+	$pkgname-brcm_a3
+	$pkgname-modem
+	$pkgname-aoc
+	"
+arch="aarch64"
+_carch="arm64"
+_flavor="postmarketos-zumapro"
+url="https://kernel.org"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps pmb:cross-native"
+makedepends="
+	rsync
+"
+
+# Source
+_owner="TheMuppets"
+_repository="proprietary_vendor_google_tegu"
+_commit="lineage-24.0"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+	initramfs_setup_modemfw.sh
+	initramfs_setup_serialnumber.sh
+"
+builddir="$srcdir/$_repository-$_commit"
+
+package() {
+	# parent package is empty
+	mkdir -p "$pkgdir"
+}
+
+brcm_a3() {
+	pkgdesc="Google Pixel 9a Broadcom BCM4383A3 firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/fw_bcmdhd.bin_4383_a3 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4383a3-pcie.bin"
+
+	# NVRAM Blob (plain text)
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd.cal_4383_a3 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4383a3-pcie.txt"
+
+	# CLM Binary Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_clm.blob_4383_a3 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4383a3-pcie.clm_blob"
+
+	# TXCAP Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/bcmdhd_txcap.blob_4383_a3 \
+		"$subpkgdir/lib/firmware/brcm/brcmfmac4383a3-pcie.txcap_blob"
+
+	# Bluetooth HCD Blob
+	# install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM.hcd \
+	# 	"$subpkgdir/lib/firmware/brcm/BCM4383A3.hcd"
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/brcm/BCM.hcd \
+		"$subpkgdir/lib/firmware/brcm/BCM.hcd"
+}
+
+modem() {
+	pkgdesc="Google Pixel 9a S5300 Modem and GNSS firmware"
+
+	# Modem Partition Mounting Script
+	install -Dm755 "$srcdir"/initramfs_setup_modemfw.sh \
+		-t "$subpkgdir/usr/share/mkinitfs/hooks-cleanup/"
+
+	# Carrier config
+	install -d "$subpkgdir/lib/firmware/google/s5300/carrierconfig/"
+	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/carrierconfig/ "$subpkgdir/lib/firmware/google/s5300/carrierconfig/"
+
+	# UE Cap config
+	install -d "$subpkgdir/lib/firmware/google/s5300/uecapconfig/"
+	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/uecapconfig/ "$subpkgdir/lib/firmware/google/s5300/uecapconfig/"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/kepler.bin \
+		"$subpkgdir/lib/firmware/google/s5300/kepler.bin"
+}
+
+aoc() {
+	pkgdesc="Google Pixel 9a AoC (Always-on-Compute) firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/aoc.bin \
+		"$subpkgdir/lib/firmware/google/aoc.bin"
+
+	# AoC Sensor USF Registry
+	install -d "$subpkgdir/lib/firmware/google/usf/tegu/"
+	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/etc/sensors/registry/ "$subpkgdir/lib/firmware/google/usf/tegu/"
+}
+sha512sums="
+0756158d4bcc4258624c532f630f573387f7e60a87ae9a096c95e6eadd99735dbceb58853bfa34d93633fb646380c3a0eecd2187ece4c6786b2d1745554b5ec6  firmware-google-tegu-lineage-24.0.tar.gz
+c001a99177b0a186393cc3afd5b4ba42a1ab144b44a2a6bdb1af8430fa10a11940354d850e64895f14f5743a5bc41b8bbe143813cb4229b3b988b72d8d9c2b79  initramfs_setup_modemfw.sh
+fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
+"
