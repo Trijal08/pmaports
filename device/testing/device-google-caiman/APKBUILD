@@ -1,0 +1,85 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=device-google-caiman
+pkgdesc="Google Pixel 9 Pro"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools
+	linux-postmarketos-zumapro
+	firmware-google-caiman-brcm_a0
+	firmware-google-caiman-brcm_b0
+	firmware-google-caiman-brcm_b1
+	firmware-google-caiman-modem
+	firmware-google-caiman-aoc
+	firmware-google-caiman-audio
+	firmware-google-caiman-mfc
+	linux-firmware-arm
+	linux-firmware-cirrus
+	soc-google
+	soc-google-gbootctl
+	exynos-modem
+	modemmanager-samsung-sit
+	neard
+	postmarketos-base
+"
+
+# eSIM support. Pinned to the device because both halves are modem transport,
+# not a user preference, and no UI meta pulls either in.
+#
+# exynos-modem-polkit is the gate: without it sit-proxy defaults to --auth none
+# and serves only the root-only /run/sit-proxy/{0,1} sockets, so the desktop
+# backend gets EACCES on connect and the app reports "No eSIM support". The
+# drop-in sets SIT_PROXY_AUTH=polkit, which is what creates the 0.auth endpoint.
+#
+# lpa-gtk is the only GUI frontend for lpac; it pulls exynos-modem-lpa and the
+# patched lpac 2.3.0-r1 (stock r0 dies in euicc_init) in behind it.
+depends="$depends
+	exynos-modem-polkit
+	lpa-gtk
+"
+makedepends="devicepkg-dev"
+subpackages="$pkgname-audio"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+# Audio, the way the PinePhone's device package carries it: only pulled in once
+# a UI with audio is installed, and nothing in it is a user preference.
+#
+# pinephone-callaudiod rather than callaudiod, which the UI asks for and this
+# provides.  Upstream callaudiod cannot switch the output on a card configured
+# through the use case manager: such a card has one port per sink -- a mapping,
+# and so a sink, per UCM device -- and callaudiod switches output by setting a
+# port on the sink it bound to, so the speakerphone button set its own state
+# and nothing moved.  pinephone-callaudiod switches card profiles instead,
+# which is the only thing that works here, and it needs nothing
+# device-specific: ACP builds its profile names out of any UCM devices called
+# Earpiece, Speaker and Mic.
+audio() {
+	install_if="$pkgname=$pkgver-r$pkgrel postmarketos-base-ui-audio"
+	depends="
+		alsa-ucm-conf-zumapro
+		pinephone-callaudiod
+		postmarketos-base-ui-audio-backend-pipewire
+	"
+
+	mkdir -p "$subpkgdir"
+}
+
+sha512sums="
+229a3aea30ce1f7e59e99eedee6aee0b7685a3a811777040a4b521973b5dcc8361ae7ead8a81fcf4caa6484bcfb1413331e680751c6d5b8411cb4ca1ebae8db4  deviceinfo
+6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
+"
