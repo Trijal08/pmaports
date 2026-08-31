@@ -1,0 +1,44 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=device-google-tokay
+pkgdesc="Google Pixel 9"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools
+	linux-postmarketos-zumapro
+	firmware-google-tokay-brcm_a0
+	firmware-google-tokay-brcm_b0
+	firmware-google-tokay-brcm_b1
+	firmware-google-tokay-modem
+	firmware-google-tokay-aoc
+	firmware-google-tokay-audio
+	alsa-ucm-conf-zumapro
+	linux-firmware-arm
+	linux-firmware-cirrus
+	soc-google
+	soc-google-gbootctl
+	neard
+	postmarketos-base
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+9c5d6a29ebc2f26d13a914a3d0d8638643529358210b706076478ee6aa0bb9d10f5ac012862eeae1b6af71f0149ca66a6cbad7517fe1ea69cbc2c2b40f98b9b0  deviceinfo
+6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
+"
