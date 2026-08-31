@@ -1,0 +1,44 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=device-google-comet
+pkgdesc="Google Pixel 9 Pro Fold"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools
+	linux-postmarketos-zumapro
+	firmware-google-comet-brcm_a0
+	firmware-google-comet-brcm_b0
+	firmware-google-comet-brcm_b1
+	firmware-google-comet-modem
+	firmware-google-comet-aoc
+	firmware-google-comet-audio
+	alsa-ucm-conf-zumapro
+	linux-firmware-arm
+	linux-firmware-cirrus
+	soc-google
+	soc-google-gbootctl
+	neard
+	postmarketos-base
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+e11f74d9284c31f0f7e8cc3dd3abbd76f4110efaee37841ac12a2c0f27c558b24f8f7ceb70e09641b6f8b985eed96737663f678e3bed620ea2462ba0dc04681b  deviceinfo
+6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
+"
