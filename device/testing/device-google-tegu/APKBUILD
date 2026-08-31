@@ -1,0 +1,41 @@
+maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
+pkgname=device-google-tegu
+pkgdesc="Google Pixel 9a"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools
+	linux-postmarketos-zumapro
+	firmware-google-tegu-brcm_a3
+	firmware-google-tegu-modem
+	firmware-google-tegu-aoc
+	alsa-ucm-conf-zumapro
+	linux-firmware-arm
+	linux-firmware-cirrus
+	soc-google
+	soc-google-gbootctl
+	neard
+	postmarketos-base
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+6be8bbddb3d0534a1da8a67310e77ca3bdb47d73df4cd8a8e867912b595e56faa4fe53c8b56270254d0bbbd5629d9f67d639a57b35c11156d593c235452b12bb  deviceinfo
+6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
+"
