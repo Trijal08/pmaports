@@ -21,6 +21,8 @@ depends="
 	linux-firmware-cirrus
 	soc-google
 	soc-google-gbootctl
+	exynos-modem
+	modemmanager-samsung-sit
 	neard
 	postmarketos-base
 "
