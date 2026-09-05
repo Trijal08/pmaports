@@ -1,0 +1,76 @@
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index af1cc1f..4de4296 100644
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -1,6 +1,10 @@
+ /* SPDX-License-Identifier: GPL-2.0-or-later */
+ /* Copyright (C) 2026 The ModemManager authors */
+ 
++#include <errno.h>
++
++#include <glib/gstdio.h>
++
+ #include <ModemManager.h>
+ #define _LIBMM_INSIDE_MM
+ #include <libmm-glib.h>
+@@ -1485,6 +1489,51 @@ carrier_manifest_ready (MMSitClient *client,
+     g_object_unref (task);
+ }
+ 
++
++/*
++ * Where the CP's property reads are answered from, one file per property name.
++ *
++ * The CP asks the AP for a handful of Android system properties over the
++ * oem/GEMS channel, and the one that matters here arrives right after the
++ * carrier config is announced: `vendor.ril.modem.cfg.carrier_id<stack>`, which
++ * downstream answers with the cfg.db carrier id (captured from this modem's own
++ * Android: 1404 for ca_telus, 2417 for ca_fizz). ModemManager is what resolves
++ * that id, so it is what has to publish it; exynos-modem serves the read.
++ */
++#define SIT_MODEM_PROPERTY_DIR "/run/exynos-modem/properties"
++
++static void
++publish_carrier_id (MMBroadbandModemSamsungSit *self,
++                    guint                       carrier_id)
++{
++    g_autofree gchar *name = NULL;
++    g_autofree gchar *path = NULL;
++    g_autofree gchar *value = NULL;
++    g_autoptr(GError) error = NULL;
++
++    /* The property is indexed by logical stack, so without one there is no
++     * name to publish under. */
++    if (self->priv->logical_stack < 0) {
++        mm_obj_dbg (self, "no logical stack; not publishing the carrier id");
++        return;
++    }
++
++    if (g_mkdir_with_parents (SIT_MODEM_PROPERTY_DIR, 0755) != 0) {
++        mm_obj_dbg (self, "couldn't create %s: %s",
++                    SIT_MODEM_PROPERTY_DIR, g_strerror (errno));
++        return;
++    }
++    name = g_strdup_printf ("vendor.ril.modem.cfg.carrier_id%d",
++                            self->priv->logical_stack);
++    path = g_build_filename (SIT_MODEM_PROPERTY_DIR, name, NULL);
++    value = g_strdup_printf ("%u", carrier_id);
++    if (!g_file_set_contents (path, value, -1, &error)) {
++        mm_obj_dbg (self, "couldn't publish %s: %s", name, error->message);
++        return;
++    }
++    mm_obj_dbg (self, "published %s = %s", name, value);
++}
++
+ static void
+ setup_carrier_config (MMIfaceModem        *iface,
+                       const gchar         *imsi,
+@@ -1549,6 +1598,8 @@ setup_carrier_config (MMIfaceModem        *iface,
+ 
+     g_free (self->priv->carrier_config_imsi);
+     self->priv->carrier_config_imsi = g_strdup (imsi);
++    /* Before the announce: the CP asks for this within a second of it. */
++    publish_carrier_id (self, config->carrier_id);
+     directory = g_path_get_dirname (carrier_config_database);
+     ctx = g_new0 (CarrierManifestContext, 1);
+     ctx->config = config;

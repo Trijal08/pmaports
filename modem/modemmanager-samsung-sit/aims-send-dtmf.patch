@@ -1,0 +1,270 @@
+diff -ruN modemmanager.before/src/plugins/samsung-sit/mm-call-samsung-sit.c modemmanager/src/plugins/samsung-sit/mm-call-samsung-sit.c
+--- modemmanager.before/src/plugins/samsung-sit/mm-call-samsung-sit.c	2026-10-06 19:29:00.895765694 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-call-samsung-sit.c	2026-10-06 19:29:29.164769420 -0400
+@@ -33,6 +33,9 @@
+ 
+ struct _MMCallSamsungSitPrivate {
+     MMBaseModem *modem;
++    /* The key currently held down, so the matching release names the same
++     * digit.  0 when no key is down. */
++    gchar        dtmf_pressed;
+ };
+ 
+ /*****************************************************************************/
+@@ -247,6 +250,21 @@
+     mm_sit_client_answer (client, NULL, (GAsyncReadyCallback) answer_ready, task);
+ }
+ 
++/*
++ * The CP's id for this call.  ModemManager indices are the CP's ids shifted by
++ * one (0 means "no index assigned" there, but is a valid id here), so shift
++ * back.  A call dialled but not yet seen in a call list still has index 0;
++ * fall back to id 0, the first call, and let the CP reject it if that is
++ * wrong.
++ */
++static guint8
++call_cp_id (MMBaseCall *self)
++{
++    guint index = mm_base_call_get_index (self);
++
++    return (guint8) (index ? index - 1 : 0);
++}
++
+ /*****************************************************************************/
+ /* Hang up the call */
+ 
+@@ -293,13 +311,8 @@
+         return;
+     }
+ 
+-    /* HANGUP takes the CP's call id.  ModemManager indices are the CP's ids
+-     * shifted by one (0 means "no index assigned" there, but is a valid id
+-     * here), so shift back.  A call dialled but not yet seen in a call list
+-     * still has index 0; fall back to id 0, the first call, and let the CP
+-     * reject it if that is wrong. */
+     index = mm_base_call_get_index (_self);
+-    call_id = index ? index - 1 : 0;
++    call_id = call_cp_id (_self);
+ 
+     if (call_is_ims (self)) {
+         mm_obj_dbg (self, "hanging up IMS call %u (MM index %u)", call_id, index);
+@@ -315,6 +328,134 @@
+ }
+ 
+ /*****************************************************************************/
++/* DTMF */
++
++/*
++ * AIMS carries a key press as two requests -- down, then up -- naming the same
++ * digit, and holds the tone in between.  That is the shape ModemManager's base
++ * call class already drives: it calls send_dtmf, waits the call's configured
++ * tone duration, then calls stop_dtmf, and sequences a multi-character string
++ * itself.  So each of these sends exactly one request for one key.
++ *
++ * Only the IMS half is implemented.  The CS group has DTMF messages too, but
++ * their payloads are not decoded, and a call that is up on one stack cannot be
++ * served by the other.
++ */
++
++static MMSitIms *
++peek_ims_for_dtmf (MMCallSamsungSit  *self,
++                   GError           **error)
++{
++    if (!call_is_ims (self)) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
++                     "DTMF is only supported on IMS calls");
++        return NULL;
++    }
++    return mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem));
++}
++
++static gssize
++call_send_dtmf_finish (MMBaseCall    *self,
++                       GAsyncResult  *res,
++                       GError       **error)
++{
++    return g_task_propagate_int (G_TASK (res), error);
++}
++
++static void
++ims_send_dtmf_ready (MMSitIms     *ims,
++                     GAsyncResult *res,
++                     GTask        *task)
++{
++    GError *error = NULL;
++
++    if (!mm_sit_ims_send_dtmf_finish (ims, res, &error))
++        g_task_return_error (task, error);
++    else
++        /* One key per request; the base class advances the string by this. */
++        g_task_return_int (task, 1);
++    g_object_unref (task);
++}
++
++static void
++call_send_dtmf (MMBaseCall          *_self,
++                const gchar         *dtmf,
++                GAsyncReadyCallback  callback,
++                gpointer             user_data)
++{
++    MMCallSamsungSit *self = MM_CALL_SAMSUNG_SIT (_self);
++    MMSitIms         *ims;
++    GTask            *task;
++    GError           *error = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++
++    if (!dtmf || !dtmf[0]) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                                 "No DTMF tone to send");
++        g_object_unref (task);
++        return;
++    }
++
++    ims = peek_ims_for_dtmf (self, &error);
++    if (!ims) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    self->priv->dtmf_pressed = dtmf[0];
++    mm_obj_dbg (self, "pressing DTMF key '%c' on IMS call %u",
++                dtmf[0], call_cp_id (_self));
++    mm_sit_ims_send_dtmf (ims, call_cp_id (_self), MM_SIT_IMS_DTMF_START, dtmf[0],
++                          (GAsyncReadyCallback) ims_send_dtmf_ready, task);
++}
++
++static gboolean
++call_stop_dtmf_finish (MMBaseCall    *self,
++                       GAsyncResult  *res,
++                       GError       **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++call_stop_dtmf (MMBaseCall          *_self,
++                GAsyncReadyCallback  callback,
++                gpointer             user_data)
++{
++    MMCallSamsungSit *self = MM_CALL_SAMSUNG_SIT (_self);
++    MMSitIms         *ims;
++    GTask            *task;
++    GError           *error = NULL;
++    gchar             digit;
++
++    task = g_task_new (self, NULL, callback, user_data);
++
++    /* Releasing a key that was never pressed would name a digit the CP is not
++     * holding, so treat it as already done. */
++    digit = self->priv->dtmf_pressed;
++    if (!digit) {
++        g_task_return_boolean (task, TRUE);
++        g_object_unref (task);
++        return;
++    }
++    self->priv->dtmf_pressed = 0;
++
++    ims = peek_ims_for_dtmf (self, &error);
++    if (!ims) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    mm_obj_dbg (self, "releasing DTMF key '%c' on IMS call %u",
++                digit, call_cp_id (_self));
++    mm_sit_ims_send_dtmf (ims, call_cp_id (_self), MM_SIT_IMS_DTMF_STOP, digit,
++                          (GAsyncReadyCallback) ims_simple_ready, task);
++}
++
++/*****************************************************************************/
+ 
+ MMBaseCall *
+ mm_call_samsung_sit_new (MMBaseModem     *modem,
+@@ -440,7 +581,8 @@
+     base_call_class->accept_finish = call_accept_finish;
+     base_call_class->hangup        = call_hangup;
+     base_call_class->hangup_finish = call_hangup_finish;
+-    /* DTMF is left unimplemented: SIT has the messages but their payloads
+-     * are not decoded yet, and the base class reports "unsupported" for a
+-     * NULL vfunc. */
++    base_call_class->send_dtmf        = call_send_dtmf;
++    base_call_class->send_dtmf_finish = call_send_dtmf_finish;
++    base_call_class->stop_dtmf        = call_stop_dtmf;
++    base_call_class->stop_dtmf_finish = call_stop_dtmf_finish;
+ }
+diff -ruN modemmanager.before/src/plugins/samsung-sit/mm-sit-ims.c modemmanager/src/plugins/samsung-sit/mm-sit-ims.c
+--- modemmanager.before/src/plugins/samsung-sit/mm-sit-ims.c	2026-10-06 19:29:00.896056616 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-sit-ims.c	2026-10-06 19:29:29.164707510 -0400
+@@ -943,6 +943,35 @@
+     return g_task_propagate_boolean (G_TASK (res), error);
+ }
+ 
++void
++mm_sit_ims_send_dtmf (MMSitIms            *self,
++                      guint8               call_id,
++                      guint8               kind,
++                      gchar                digit,
++                      GAsyncReadyCallback  callback,
++                      gpointer             user_data)
++{
++    guint8          *frame = NULL;
++    gsize            len = 0;
++    SamsungSitStatus status;
++
++    g_return_if_fail (MM_IS_SIT_IMS (self));
++
++    /* The digit goes on the wire as its character, not its value -- the
++     * vendor's field is a Java char written as one byte. */
++    status = samsung_aims_build_send_dtmf (mm_sit_client_next_token (self->priv->client),
++                                           call_id, kind, (guint8) digit, &frame, &len);
++    send_simple (self, frame, len, status, "send dtmf", NULL, callback, user_data);
++}
++
++gboolean
++mm_sit_ims_send_dtmf_finish (MMSitIms      *self,
++                             GAsyncResult  *res,
++                             GError       **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
+ GList *
+ mm_sit_ims_get_call_list (MMSitIms *self)
+ {
+diff -ruN modemmanager.before/src/plugins/samsung-sit/mm-sit-ims.h modemmanager/src/plugins/samsung-sit/mm-sit-ims.h
+--- modemmanager.before/src/plugins/samsung-sit/mm-sit-ims.h	2026-10-06 19:29:00.896086486 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-sit-ims.h	2026-10-06 19:29:29.164627649 -0400
+@@ -160,6 +160,30 @@
+                                    GAsyncResult        *res,
+                                    GError             **error);
+ 
++/*
++ * DTMF on an established IMS call.
++ *
++ * The CP times nothing on the start/stop pair: the key is held down from
++ * MM_SIT_IMS_DTMF_START until MM_SIT_IMS_DTMF_STOP names the same digit
++ * again.  That is how Android drives its keypad -- the capture has the two
++ * about 60 ms apart -- and it is what ModemManager's base call class already
++ * sequences, so the tone duration stays the interface's to choose.
++ * MM_SIT_IMS_DTMF_BURST is the CP's own self-timed tone, unused here.
++ */
++#define MM_SIT_IMS_DTMF_BURST 0
++#define MM_SIT_IMS_DTMF_START 1
++#define MM_SIT_IMS_DTMF_STOP  2
++
++void     mm_sit_ims_send_dtmf        (MMSitIms            *self,
++                                      guint8               call_id,
++                                      guint8               kind,
++                                      gchar                digit,
++                                      GAsyncReadyCallback  callback,
++                                      gpointer             user_data);
++gboolean mm_sit_ims_send_dtmf_finish (MMSitIms            *self,
++                                      GAsyncResult        *res,
++                                      GError             **error);
++
+ /* Stop the stack and drop the PDN; used on radio-off and at dispose. */
+ void mm_sit_ims_stop (MMSitIms *self);
+ 

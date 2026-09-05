@@ -1,0 +1,36 @@
+Honour send-lf on wwan AT ports instead of forcing the LF.
+
+MM terminates AT commands with CRLF on every non-TTY subsystem, unconditionally.
+The s5400's umts_router channel wants a bare CR: sent "AT\r\n" it echoes "AT\r"
+and then never completes the command, because the LF is left sitting in its
+parser and swallows the front of the next one. MM's probe therefore sends "AT"
+five times, gets nothing back, concludes the port is not AT-capable, and the
+plugin cannot grab it -- which leaves the modem with only a SIT port and MM
+gives up with "modem is unusable".
+
+Worse, one CRLF poisons the channel until the driver is unbound and rebound, so
+this is not merely a probe-time nuisance.
+
+send_lf defaults to FALSE, so wwan AT ports now get a bare CR like the CP wants.
+
+diff --git a/src/mm-port-serial-at.c b/src/mm-port-serial-at.c
+index ca2cc540..2af17ba5 100644
+--- a/src/mm-port-serial-at.c
++++ b/src/mm-port-serial-at.c
+@@ -354,15 +354,13 @@ mm_port_serial_at_command (MMPortSerialAt *self,
+     g_return_if_fail (self != NULL);
+     g_return_if_fail (MM_IS_PORT_SERIAL_AT (self));
+     g_return_if_fail (command != NULL);
+ 
+     buf = at_command_to_byte_array (command,
+                                     is_raw,
+-                                    (mm_port_get_subsys (MM_PORT (self)) == MM_PORT_SUBSYS_TTY ?
+-                                     self->priv->send_lf :
+-                                     TRUE));
++                                    self->priv->send_lf);
+     g_return_if_fail (buf != NULL);
+ 
+     task = g_task_new (self, NULL, callback, user_data);
+ 
+     mm_port_serial_command (MM_PORT_SERIAL (self),
+                             buf,

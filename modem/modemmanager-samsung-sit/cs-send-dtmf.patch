@@ -1,0 +1,262 @@
+diff -ruN -x _b modemmanager.before/src/plugins/samsung-sit/mm-call-samsung-sit.c modemmanager/src/plugins/samsung-sit/mm-call-samsung-sit.c
+--- modemmanager.before/src/plugins/samsung-sit/mm-call-samsung-sit.c	2026-10-07 19:50:52.721655338 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-call-samsung-sit.c	2026-10-07 19:51:08.166021360 -0400
+@@ -331,29 +331,25 @@
+ /* DTMF */
+ 
+ /*
+- * AIMS carries a key press as two requests -- down, then up -- naming the same
+- * digit, and holds the tone in between.  That is the shape ModemManager's base
+- * call class already drives: it calls send_dtmf, waits the call's configured
+- * tone duration, then calls stop_dtmf, and sequences a multi-character string
+- * itself.  So each of these sends exactly one request for one key.
++ * The two stacks spell a key press differently, so a call is served by the one
++ * it started on.
+  *
+- * Only the IMS half is implemented.  The CS group has DTMF messages too, but
+- * their payloads are not decoded, and a call that is up on one stack cannot be
+- * served by the other.
++ * AIMS carries it as two requests -- down, then up -- naming the same digit,
++ * and holds the tone in between.  That is the shape ModemManager's base call
++ * class already drives: send_dtmf, wait the call's configured tone duration,
++ * stop_dtmf, and it sequences a multi-character string itself.
++ *
++ * CS has no such pair.  Its DTMF (0x0003) is a self-timed burst: the CP is
++ * handed the digits and times each tone itself, so there is nothing to release
++ * and stop_dtmf has nothing to do.  The group does define DTMF_START (0x0005)
++ * and DTMF_STOP (0x0006), but the vendor builder for START writes a boolean
++ * nothing in any available library sets, so what it selects is unknown and
++ * using it would put an undefined byte on the wire.
++ *
++ * Either way one call here is one key, so these return 1 and let the base class
++ * advance the string.
+  */
+ 
+-static MMSitIms *
+-peek_ims_for_dtmf (MMCallSamsungSit  *self,
+-                   GError           **error)
+-{
+-    if (!call_is_ims (self)) {
+-        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+-                     "DTMF is only supported on IMS calls");
+-        return NULL;
+-    }
+-    return mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem));
+-}
+-
+ static gssize
+ call_send_dtmf_finish (MMBaseCall    *self,
+                        GAsyncResult  *res,
+@@ -378,15 +374,30 @@
+ }
+ 
+ static void
++cs_send_dtmf_ready (MMSitClient  *client,
++                    GAsyncResult *res,
++                    GTask        *task)
++{
++    GError *error = NULL;
++
++    if (!mm_sit_client_send_dtmf_finish (client, res, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_int (task, 1);
++    g_object_unref (task);
++}
++
++static void
+ call_send_dtmf (MMBaseCall          *_self,
+                 const gchar         *dtmf,
+                 GAsyncReadyCallback  callback,
+                 gpointer             user_data)
+ {
+     MMCallSamsungSit *self = MM_CALL_SAMSUNG_SIT (_self);
+-    MMSitIms         *ims;
++    MMSitClient      *client;
+     GTask            *task;
+     GError           *error = NULL;
++    gchar             key[2];
+ 
+     task = g_task_new (self, NULL, callback, user_data);
+ 
+@@ -397,18 +408,39 @@
+         return;
+     }
+ 
+-    ims = peek_ims_for_dtmf (self, &error);
+-    if (!ims) {
++    if (call_is_ims (self)) {
++        MMSitIms *ims = mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem));
++
++        if (!ims) {
++            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                     "No IMS stack to send DTMF on");
++            g_object_unref (task);
++            return;
++        }
++
++        /* Remember the key so the release names the same digit. */
++        self->priv->dtmf_pressed = dtmf[0];
++        mm_obj_dbg (self, "pressing DTMF key '%c' on IMS call %u",
++                    dtmf[0], call_cp_id (_self));
++        mm_sit_ims_send_dtmf (ims, call_cp_id (_self), MM_SIT_IMS_DTMF_START, dtmf[0],
++                              (GAsyncReadyCallback) ims_send_dtmf_ready, task);
++        return;
++    }
++
++    client = peek_client (self, &error);
++    if (!client) {
+         g_task_return_error (task, error);
+         g_object_unref (task);
+         return;
+     }
+ 
+-    self->priv->dtmf_pressed = dtmf[0];
+-    mm_obj_dbg (self, "pressing DTMF key '%c' on IMS call %u",
+-                dtmf[0], call_cp_id (_self));
+-    mm_sit_ims_send_dtmf (ims, call_cp_id (_self), MM_SIT_IMS_DTMF_START, dtmf[0],
+-                          (GAsyncReadyCallback) ims_send_dtmf_ready, task);
++    /* A burst needs no release, so leave dtmf_pressed clear. */
++    self->priv->dtmf_pressed = 0;
++    key[0] = dtmf[0];
++    key[1] = '\0';
++    mm_obj_dbg (self, "sending DTMF key '%c' on CS call %u", key[0], call_cp_id (_self));
++    mm_sit_client_send_dtmf (client, key, NULL,
++                             (GAsyncReadyCallback) cs_send_dtmf_ready, task);
+ }
+ 
+ static gboolean
+@@ -427,13 +459,12 @@
+     MMCallSamsungSit *self = MM_CALL_SAMSUNG_SIT (_self);
+     MMSitIms         *ims;
+     GTask            *task;
+-    GError           *error = NULL;
+     gchar             digit;
+ 
+     task = g_task_new (self, NULL, callback, user_data);
+ 
+-    /* Releasing a key that was never pressed would name a digit the CP is not
+-     * holding, so treat it as already done. */
++    /* Nothing is being held: either the key was never pressed, or this is a CS
++     * burst the CP has already timed for us. */
+     digit = self->priv->dtmf_pressed;
+     if (!digit) {
+         g_task_return_boolean (task, TRUE);
+@@ -442,9 +473,12 @@
+     }
+     self->priv->dtmf_pressed = 0;
+ 
+-    ims = peek_ims_for_dtmf (self, &error);
++    ims = self->priv->modem
++        ? mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem))
++        : NULL;
+     if (!ims) {
+-        g_task_return_error (task, error);
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                 "No IMS stack to release DTMF on");
+         g_object_unref (task);
+         return;
+     }
+diff -ruN -x _b modemmanager.before/src/plugins/samsung-sit/mm-sit-client.c modemmanager/src/plugins/samsung-sit/mm-sit-client.c
+--- modemmanager.before/src/plugins/samsung-sit/mm-sit-client.c	2026-10-07 19:50:52.715620334 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-sit-client.c	2026-10-07 19:51:08.165964290 -0400
+@@ -2147,6 +2147,38 @@
+ }
+ 
+ void
++mm_sit_client_send_dtmf (MMSitClient        *self,
++                         const gchar        *digits,
++                         GCancellable       *cancellable,
++                         GAsyncReadyCallback callback,
++                         gpointer            user_data)
++{
++    g_autoptr(GByteArray) request = NULL;
++    GError               *error = NULL;
++
++    request = mm_sit_request_new_dtmf (mm_sit_client_next_token (self), digits, &error);
++    if (!request) {
++        GTask *task;
++
++        task = g_task_new (self, cancellable, callback, user_data);
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    run_checked_command (self, request, 10, cancellable, callback, user_data);
++}
++
++gboolean
++mm_sit_client_send_dtmf_finish (MMSitClient  *self,
++                                GAsyncResult *res,
++                                GError      **error)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), FALSE);
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++void
+ mm_sit_client_hangup (MMSitClient        *self,
+                       guint32             call_id,
+                       GCancellable       *cancellable,
+diff -ruN -x _b modemmanager.before/src/plugins/samsung-sit/mm-sit-client.h modemmanager/src/plugins/samsung-sit/mm-sit-client.h
+--- modemmanager.before/src/plugins/samsung-sit/mm-sit-client.h	2026-10-07 19:50:52.715700045 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-sit-client.h	2026-10-07 19:51:08.165741767 -0400
+@@ -408,6 +408,19 @@
+                                              GAsyncResult       *res,
+                                              GError            **error);
+ 
++/*
++ * DTMF on a CS call, as the self-timed burst the CP implements: it carries the
++ * digits and times each tone itself, so there is no release to pair with this.
++ */
++void     mm_sit_client_send_dtmf            (MMSitClient        *self,
++                                             const gchar        *digits,
++                                             GCancellable       *cancellable,
++                                             GAsyncReadyCallback callback,
++                                             gpointer            user_data);
++gboolean mm_sit_client_send_dtmf_finish     (MMSitClient        *self,
++                                             GAsyncResult       *res,
++                                             GError            **error);
++
+ void     mm_sit_client_hangup               (MMSitClient        *self,
+                                              guint32             call_id,
+                                              GCancellable       *cancellable,
+diff -ruN -x _b modemmanager.before/src/plugins/samsung-sit/mm-sit-protocol.c modemmanager/src/plugins/samsung-sit/mm-sit-protocol.c
+--- modemmanager.before/src/plugins/samsung-sit/mm-sit-protocol.c	2026-09-12 17:42:47.000000000 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-sit-protocol.c	2026-10-07 19:51:08.165670027 -0400
+@@ -634,6 +634,21 @@
+ }
+ 
+ GByteArray *
++mm_sit_request_new_dtmf (guint16       token,
++                         const gchar  *digits,
++                         GError      **error)
++{
++    guint8          *buffer = NULL;
++    gsize            len = 0;
++    SamsungSitStatus status;
++
++    g_return_val_if_fail (digits != NULL, NULL);
++
++    status = samsung_sit_build_dtmf (token, digits, &buffer, &len);
++    return finish_build (status, buffer, len, error);
++}
++
++GByteArray *
+ mm_sit_request_new_hangup (guint16 token,
+                            guint32 call_id)
+ {
+diff -ruN -x _b modemmanager.before/src/plugins/samsung-sit/mm-sit-protocol.h modemmanager/src/plugins/samsung-sit/mm-sit-protocol.h
+--- modemmanager.before/src/plugins/samsung-sit/mm-sit-protocol.h	2026-09-12 17:42:47.000000000 -0400
++++ modemmanager/src/plugins/samsung-sit/mm-sit-protocol.h	2026-10-07 19:51:08.165546995 -0400
+@@ -604,6 +604,9 @@
+ GByteArray *mm_sit_request_new_dial                   (guint16                token,
+                                                        const gchar           *number,
+                                                        GError               **error);
++GByteArray *mm_sit_request_new_dtmf                   (guint16                token,
++                                                       const gchar           *digits,
++                                                       GError               **error);
+ GByteArray *mm_sit_request_new_answer                 (guint16                token);
+ GByteArray *mm_sit_request_new_hangup                 (guint16                token,
+                                                        guint32                call_id);
