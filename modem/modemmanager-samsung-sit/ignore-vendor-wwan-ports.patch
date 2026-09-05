@@ -1,0 +1,58 @@
+diff --git a/src/mm-port-probe.c b/src/mm-port-probe.c
+index 206560f5..926c7c77 100644
+--- a/src/mm-port-probe.c
++++ b/src/mm-port-probe.c
+@@ -2301,6 +2301,18 @@ initialize_port_type_hints (MMPortProbe *self)
+             } else if (!g_strcmp0 (type, "FASTBOOT")) {
+                 mm_obj_dbg (self, "port may be FASTBOOT based on the wwan type attribute");
+                 auto_ignored = TRUE;
++            } else if (!g_strcmp0 (type, "OEM") ||
++                       !g_strcmp0 (type, "RFS") ||
++                       !g_strcmp0 (type, "GNSS")) {
++                /* Vendor control channels carrying their own framing (protobuf
++                 * on the Samsung OEM ports, a file-server protocol on RFS, a
++                 * firmware boot conversation on GNSS -- not NMEA, which the
++                 * kernel exports through the gnss subsystem instead). Without a
++                 * hint these fall through to generic AT probing, which writes
++                 * 'AT<CR>' into them and leaves the port UNKNOWN so it cannot
++                 * be grabbed at all. */
++                mm_obj_dbg (self, "port is ignored based on the wwan type attribute: %s", type);
++                auto_ignored = TRUE;
+             }
+         }
+         /* Linux 5.13 does not have 'type' attribute yet, match kernel name instead */
+diff --git a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
+index 59282f29..dc3cbc80 100644
+--- a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
+@@ -72,7 +72,11 @@ create_modem (MMPlugin      *self,
+  * than leave it usable. Doing it here and not only in a udev rule makes it a
+  * property of the plugin: nothing about this modem needs an AT port, on any
+  * system, whatever the packaging ships. peek_client already skips ignored
+- * ports, and MMBaseModem tolerates a modem whose only control port is SIT. */
++ * ports, and MMBaseModem tolerates a modem whose only control port is SIT.
++ *
++ * The same applies to the CP's other channels (OEM, RFS, GNSS boot). Those
++ * carry their own framing and mm-port-probe.c ignores them on the wwan type
++ * attribute, but a driver that does not set one would land them here. */
+ static gboolean
+ grab_port (MMPlugin     *self,
+            MMBaseModem  *modem,
+@@ -85,8 +89,15 @@ grab_port (MMPlugin     *self,
+     ptype  = mm_port_probe_get_port_type  (probe);
+     pgroup = mm_port_probe_get_port_group (probe);
+ 
+-    if (ptype == MM_PORT_TYPE_AT && pgroup != MM_PORT_GROUP_IGNORED) {
+-        mm_obj_dbg (self, "ignoring AT port %s: this modem is driven over SIT",
++    /* SIT drives every interface and the net port carries the data call; a port
++     * that is neither is of no use to us. Test the type rather than AT alone so
++     * that a port whose probing was inconclusive -- an AT probe that timed out
++     * leaves MM_PORT_TYPE_UNKNOWN -- is ignored too, instead of being offered
++     * to mm_base_modem_grab_port() which rejects it as an unhandled type and
++     * fails the whole modem with "Couldn't get primary port". */
++    if (ptype != MM_PORT_TYPE_SIT && ptype != MM_PORT_TYPE_NET &&
++        pgroup != MM_PORT_GROUP_IGNORED) {
++        mm_obj_dbg (self, "ignoring port %s: this modem is driven over SIT",
+                     mm_port_probe_get_port_name (probe));
+         pgroup = MM_PORT_GROUP_IGNORED;
+     }

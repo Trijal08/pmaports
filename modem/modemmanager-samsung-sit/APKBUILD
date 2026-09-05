@@ -1,0 +1,187 @@
+# Fork of Alpine's community/modemmanager with Samsung SIT support.
+maintainer="Steffen Deusch <steffen@deusch.me>"
+pkgname=modemmanager-samsung-sit
+pkgver=1.25.95_git20260829
+pkgrel=1
+pkgdesc="ModemManager with Samsung SIT modem support"
+url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
+arch="all"
+license="GPL-2.0-or-later AND LGPL-2.1-or-later"
+provides="modemmanager=$pkgver-r$pkgrel"
+replaces="modemmanager"
+provider_priority=100
+depends="
+	dbus
+	libmm-glib
+	mobile-broadband-provider-info
+	polkit
+"
+depends_dev="libmm-glib"
+makedepends="
+	bash-completion-dev
+	dbus-dev
+	elogind-dev
+	gobject-introspection-dev
+	gtk-doc
+	libgudev-dev
+	libsamsung-sit-ffi
+	linux-headers
+	meson
+	polkit-dev
+	sqlite-dev
+	vala
+"
+checkdepends="dbus glib-dev py3-gobject3 py3-dbus"
+subpackages="
+	$pkgname-lang
+	$pkgname-doc
+	libmm-glib:libmm
+	$pkgname-dbg
+	$pkgname-dev
+	$pkgname-openrc
+	$pkgname-bash-completion:bashcomp
+	$pkgname-systemd
+	$pkgname-udev
+"
+
+_commit="bb0686ddd6a2b69a1e78728f1807c326e440816b"
+source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
+	modemmanager.rules
+	modemmanager.initd
+	zz-debug.conf
+
+	0001-intel-XMM7360-fix-big-endian-handling-of-ASN-integer.patch
+	wwan-at-honour-send-lf.patch
+	ignore-vendor-wwan-ports.patch
+	promote-s5400-camped-state.patch
+	query-carrier-sim-info.patch
+	fixb-attach-apn.patch
+	trust-radio-state-only-when-accepted.patch
+	sit-ims-data-profile.patch
+	sit-tool-map-every-logical-stack.patch
+	aims-media-state-ind.patch
+	aims-send-dtmf.patch
+	cs-send-dtmf.patch
+	apn-list-from-carrier-db.patch
+	ims-decline-reason.patch
+	ims-hold-ims-across-dsds-gaps.patch
+	report-5g-from-endc-offer.patch
+	publish-carrier-id.patch
+"
+builddir="$srcdir/modemmanager"
+
+build() {
+	abuild-meson \
+		-Db_lto=true \
+		-Dsystemdsystemunitdir=/usr/lib/systemd/system \
+		-Ddbus_policy_dir=/usr/share/dbus-1/system.d \
+		-Dgtk_doc=false \
+		-Dplugin_samsung_sit=enabled \
+		-Dqmi=false \
+		-Dmbim=false \
+		-Dqrtr=false \
+		-Dplugin_foxconn=disabled \
+		-Dplugin_qcom_soc=disabled \
+		-Dpolkit=permissive \
+		-Dsystemd_journal=false \
+		-Dsystemd_suspend_resume=true \
+		-Dvapi=true \
+		. output
+	meson compile -C output
+}
+
+check() {
+	meson test --print-errorlogs -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+	install -m644 -D "$srcdir/modemmanager.rules" \
+		"$pkgdir/usr/share/polkit-1/rules.d/01-org.freedesktop.ModemManager.rules"
+	install -m755 -D "$srcdir/modemmanager.initd" \
+		"$pkgdir/etc/init.d/modemmanager"
+	install -m644 -D "$srcdir/zz-debug.conf" \
+		"$pkgdir/usr/lib/systemd/system/ModemManager.service.d/zz-debug.conf"
+
+	mkdir -p "$pkgdir/usr/share/doc/modemmanager"
+	cat > "$pkgdir/usr/share/doc/modemmanager/README.alpine" <<- EOF
+	If your USB modem shows up as a Flash drive when you plug it in:
+
+	install 'usb-modeswitch' to automatically switch to USB modem mode whenever you plug it in.
+	To control your modem without the root password: add your user account to the 'plugdev' group.
+	EOF
+}
+
+libmm() {
+	depends=""
+	amove usr/lib/girepository-1.0
+	amove usr/lib/libmm-glib.so*
+}
+
+lang() {
+	default_lang
+	provides="modemmanager-lang=$pkgver-r$pkgrel"
+	replaces="modemmanager-lang"
+}
+
+doc() {
+	default_doc
+	provides="modemmanager-doc=$pkgver-r$pkgrel"
+	replaces="modemmanager-doc"
+}
+
+dev() {
+	default_dev
+	provides="modemmanager-dev=$pkgver-r$pkgrel"
+	replaces="modemmanager-dev"
+}
+
+openrc() {
+	default_openrc
+	provides="modemmanager-openrc=$pkgver-r$pkgrel"
+	replaces="modemmanager-openrc"
+}
+
+bashcomp() {
+	default_bashcomp
+	provides="modemmanager-bash-completion=$pkgver-r$pkgrel"
+	replaces="modemmanager-bash-completion"
+}
+
+systemd() {
+	default_systemd
+	provides="modemmanager-systemd=$pkgver-r$pkgrel"
+	replaces="modemmanager-systemd"
+}
+
+udev() {
+	default_udev
+	provides="modemmanager-udev=$pkgver-r$pkgrel"
+	replaces="modemmanager-udev"
+}
+
+
+
+sha512sums="
+257a4431169652088c6e8ec5587d9f6369ae7f1883091c73225940ada0f1b0dc7646825fbcb71c37555002cbffbee6a1a50d2840bdaacaafc0eed1c5b1293ff4  modemmanager-bb0686ddd6a2b69a1e78728f1807c326e440816b.tar.gz
+6fab86c27502b29be0c6610d835a3249a4a81993eb986cff2c3ea9393fadd3f693ba4bb0532ae0e50a83d359559511859dd05f7ea2f0cb52839f535a7e49f8a0  modemmanager.rules
+6e234cebcdec6d1afbca164ee5c13c96f7132ef31231d5c043cc5750ebe99e362a384d0463874b3c1c30799b433e0d3286add03af13c97fa406b4b5d2b78880c  modemmanager.initd
+2aa8283c545504be77a64085045717d706549f3971dd5170a6cc5b441c34cd899e84aff31201cd7afbfcdf093e6971e70af724b3e9792f8e24ec8b1f1b408a0a  zz-debug.conf
+f06e9b89acab5b61c5965658d62551b0f168066384674f7c4dd56feb6f811c82c640470e634e32d8c4ef62290588cf974aa5f213e5c67e797a06d33e61fa24ec  0001-intel-XMM7360-fix-big-endian-handling-of-ASN-integer.patch
+51e0e13d9d117210f2b40567aced22a09469238adbaa87bc67c6cdd75cc3eb196ec5214fce4a9ce8f748d0d2717e97a0ca90ebf591386f8004e5178960441a27  wwan-at-honour-send-lf.patch
+38a39e6cc3574f1a789aafe23f19507896c318698461160c2d0e6e310f8a97ee6d02ad709b47c93ec428225e1da0a271fe865ada4fb88fcd8c0a7361c7ecf512  ignore-vendor-wwan-ports.patch
+5d4de71e0333b0989c91356e7a07a34608d95b5c9482a87d089dd2c13c24e895e32f835751b1fb4072c084df15ef06482a2704dc30f10affd652c5b79e9d6820  promote-s5400-camped-state.patch
+b440faa28328b13651e099f2c4548aa804daedbbdf37d95b4fc811eb0ee3d58a4b4787580e2de2853ee7875da5e91c640e683fcd7d3ad57aae6a5690d537cf6f  query-carrier-sim-info.patch
+d0ea24c09de00d57cea36d7ddcfd16a9788cd73961d200f2eea89f9053626db939d28cdb5788d04d04ac9289c4756dab192ead5f8fd8f87c2ef02f2d11a75686  fixb-attach-apn.patch
+ca79618b745fc538f09a359a7df2eee3b2fdfce9bc7a82db6194c28265366b22d98172d7a29b94d9fbb81480d1fa4516141db934c1ae0b1ab4fb8204e00c3657  trust-radio-state-only-when-accepted.patch
+10e987b1d025a41a10b3dd26bc65367abec5ca7fd3c118a2f4a07397412618c95fbeb277335d9d0bfe908785896916944cc6d879ff46c3450a42b81887dca971  sit-ims-data-profile.patch
+69f4fd4f415db2a0f60137d3106865ce0aa16f0b69b292df9c240ec3d9d3fc66e23c889a612324aa8dcbbc75482d6e95d93bea12169ffcc910ac0502b55af89c  sit-tool-map-every-logical-stack.patch
+ee64bdcf676f3801ae1bdb0ecea1c073f0d102fa998b4133dbbf9faf0c82be50a9ae710c572f0440e24bd1a5639ba1098c104f654b86bf9dd631b159438319e4  aims-media-state-ind.patch
+fc6fdc38cad7c3efe8d9261fa516652e463ac59a867f7cd5814d8dac0ee0b0c306a048ad911535dfe4513895cc0d91dbbbc962b195984ad2b04d72e2dbd2abed  aims-send-dtmf.patch
+868fb1793a92c9ea7b0d4aaa3b781b0702525c5460adb5b171752a570feb375ef3f6cd2b98220c8c8c8bab2dbd8099cc87c2873ebef1cdbcda55101c1eb0c51a  cs-send-dtmf.patch
+f1bd33475c77f8230cbfc2aa9e432000cf91123f0393372e316fd2bd716fc1231b02f29d5c5c216c28ef0f9ef5d102d6aa76fb3df5a874cfbeac1d260455cf89  apn-list-from-carrier-db.patch
+b7caf504fa0fa65bcd727ab8d1fc743b7c9b74392574508f528e553f0c18ff5ea82f313b1371160e64c3047351fafab72fe763561da793afa2037fb8f4df066d  ims-decline-reason.patch
+091fbd616b89ac1ff9d8381383be2a3fbea62701518d2fb8ba62246a37c9dfdfcd628fd7b7b5ae7406bbb90724cc91bb58479627d5c40cd0476b3df6988c0776  ims-hold-ims-across-dsds-gaps.patch
+4c6105e762dab953e909d7fcb78102c1b2bf89bdc8c70ff800960bed33f0ef7e66fc0b3a3094d9afcc8cf28a6ca36375ac3a8873c62b5466ea3b3e7d597e333f  report-5g-from-endc-offer.patch
+ce8f21bb87774680bc5a1e5751796b8848c5abeb303ba107caea2edfd19819f5181a55de8908b509b4d12122afae11e458b4626815a823d10c36d06613a590cd  publish-carrier-id.patch
+"
