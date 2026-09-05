@@ -1,0 +1,17 @@
+The plugin was written against the Pixel 9a, whose platform driver is named
+s5300-modem. The s5400 in caiman is driven by the same in-tree driver under the
+name s5xxx-modem (it covers both variants since "net: wwan: s5xxx_modem: support
+both the s5300 and the s5400"), so MM filtered the device out before it ever
+probed wwan0sit0 and reported no modems.
+
+--- a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
+@@ -58,7 +58,7 @@ MM_PLUGIN_NAMED_CREATOR_SCOPE MMPlugin *
+ mm_plugin_create_samsung_sit (void)
+ {
+     static const gchar *subsystems[] = { "wwan", "net", NULL };
+-    static const gchar *drivers[] = { "s5300-modem", NULL };
++    static const gchar *drivers[] = { "s5300-modem", "s5xxx-modem", NULL };
+
+     return MM_PLUGIN (
+         g_object_new (MM_TYPE_PLUGIN_SAMSUNG_SIT,

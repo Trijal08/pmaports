@@ -1,0 +1,26 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index d14f8ec6..d5dd1846 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -1161,6 +1161,11 @@ mm_sit_client_set_logical_slot_mapping_finish (MMSitClient  *self,
+  * response as registered -- the camped state that lets the connect
+  * sequence do the real work.  Meaningful non-registered states (searching,
+  * denied, ...) are preserved.
++ *
++ * The s5400 firmware reports the camped state as 20, not 0 (confirmed on
++ * device 2026-08-30: stable state=20 rat=14 while camped on the home PLMN
++ * 24202 at ~-97 dBm, no reject indication), where state 0 instead means "no
++ * serving cell" (empty PLMN).  Promote both camped values.
+  */
+ static void
+ get_registration_operator_ready (MMSitClient *self,
+@@ -1180,7 +1185,8 @@ get_registration_operator_ready (MMSitClient *self,
+                     registration->registered ? "yes" : "no",
+                     registration->radio_technology,
+                     operator_info.plmn);
+-        if (operator_info.plmn[0] != '\0' && registration->state == 0) {
++        if (operator_info.plmn[0] != '\0' &&
++            (registration->state == 0 || registration->state == 20)) {
+             mm_obj_dbg (self->priv->port, "registration check: promoting camped PLMN to registered");
+             registration->registered = TRUE;
+             registration->state = 1;

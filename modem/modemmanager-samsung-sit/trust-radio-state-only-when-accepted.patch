@@ -1,0 +1,423 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -63,6 +63,10 @@
+      * change while the CP is up, and three loaders want it. */
+     MMSitNetworkGenerations  radio_capability;
+     gboolean                 radio_capability_valid;
++    /* Watchdog for a CP that took the radio-on but never started searching,
++     * and how many radio cycles it has spent trying to shake it loose. */
++    guint        search_watchdog_id;
++    guint        search_retries;
+ };
+ 
+ typedef struct {
+@@ -2571,6 +2575,9 @@
+ }
+ 
+ static void power_up_radio (GTask *task);
++static void power_up_boot_config_ready (MMSitClient  *client,
++                                        GAsyncResult *res,
++                                        GTask        *task);
+ 
+ static void
+ default_attach_apn_ready (MMSitClient  *client,
+@@ -2600,6 +2607,175 @@
+     g_object_unref (task);
+ }
+ 
++/* The CP refuses the radio-on until its own init finishes; retry the chain
++ * until it accepts. Never through OFF: taking the radio down inside that
++ * window leaves the CP not searching at all, and it does not recover. */
++#define POWER_UP_RETRY_ATTEMPTS 5
++#define POWER_UP_RETRY_SECS     3
++
++/*
++ * A CP that comes up with the AP already talking to it takes the radio-on
++ * (status 0) and then does nothing with it: GET_DATA_REGISTRATION reads
++ * state 0 with rat 0 -- not even a radio technology, so it is not searching.
++ * It stays that way indefinitely; only a radio cycle once its own init is
++ * done makes it camp (rat 14, then a serving PLMN a few seconds later).
++ * That cycle is safe here and only here: it happens a good while after the
++ * power-up, not inside the startup window where an OFF wedges the CP.
++ */
++#define SEARCH_WATCHDOG_SECS    20
++#define SEARCH_WATCHDOG_RETRIES 2
++
++static void power_up_chain_start (GTask *task);
++static void arm_search_watchdog  (MMBroadbandModemSamsungSit *self);
++
++static void
++search_watchdog_radio_off_ready (MMSitClient  *client,
++                                 GAsyncResult *res,
++                                 GTask        *task)
++{
++    MMBroadbandModemSamsungSit *self;
++    g_autoptr(GError)           error = NULL;
++
++    self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
++    if (!mm_sit_client_set_radio_state_finish (client, res, &error))
++        mm_obj_dbg (self, "couldn't take the radio down before re-sending the bring-up: %s",
++                    error->message);
++    power_up_chain_start (task);
++}
++
++static void
++search_watchdog_registration_ready (MMSitClient                *client,
++                                    GAsyncResult               *res,
++                                    MMBroadbandModemSamsungSit *self)
++{
++    MMSitRegistration  registration = { 0 };
++    g_autoptr(GError)  error = NULL;
++    GTask             *task;
++
++    if (!mm_sit_client_get_registration_finish (client, res, &registration, &error)) {
++        mm_obj_dbg (self, "couldn't check whether the CP is searching: %s", error->message);
++        goto out;
++    }
++    /* Anything but "no radio technology at all" means the CP is doing
++     * something; leave it alone and let registration take its time. */
++    if (registration.registered || registration.radio_technology) {
++        mm_obj_dbg (self, "CP is searching (rat %u); no radio cycle needed",
++                    registration.radio_technology);
++        self->priv->search_retries = 0;
++        goto out;
++    }
++
++    self->priv->search_retries++;
++    mm_obj_msg (self, "CP took the radio-on but never started searching; cycling the radio (%u/%u)",
++                self->priv->search_retries, SEARCH_WATCHDOG_RETRIES);
++    task = g_task_new (self, NULL, NULL, NULL);
++    mm_sit_client_set_radio_state (client, MM_SIT_RADIO_STATE_OFF, NULL,
++                                   (GAsyncReadyCallback) search_watchdog_radio_off_ready,
++                                   task);
++
++out:
++    g_object_unref (self);
++}
++
++static gboolean
++search_watchdog_expired (MMBroadbandModemSamsungSit *self)
++{
++    MMSitClient *client;
++
++    self->priv->search_watchdog_id = 0;
++    client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
++    if (!client)
++        return G_SOURCE_REMOVE;
++
++    mm_sit_client_get_registration (client, NULL,
++                                    (GAsyncReadyCallback) search_watchdog_registration_ready,
++                                    g_object_ref (self));
++    return G_SOURCE_REMOVE;
++}
++
++static void
++arm_search_watchdog (MMBroadbandModemSamsungSit *self)
++{
++    if (self->priv->search_watchdog_id)
++        g_source_remove (self->priv->search_watchdog_id);
++    if (self->priv->search_retries >= SEARCH_WATCHDOG_RETRIES) {
++        self->priv->search_watchdog_id = 0;
++        return;
++    }
++    self->priv->search_watchdog_id = g_timeout_add_seconds (SEARCH_WATCHDOG_SECS,
++                                                            (GSourceFunc) search_watchdog_expired,
++                                                            self);
++}
++
++/*
++ * A CP that is still coming up refuses SET_RADIO_POWER and keeps reporting the
++ * radio as already "on", so the bring-up chain above runs against a CP that
++ * took none of it: it attaches with no APN and every SETUP_DATA_CALL then fails
++ * with cause 133.  A refusal leaves the state untrusted (see mm-sit-client.c),
++ * which is the signal to re-send the whole chain a moment later.
++ */
++static gboolean
++power_up_retry_chain (GTask *task)
++{
++    power_up_chain_start (task);
++    return G_SOURCE_REMOVE;
++}
++
++static void
++modem_power_up_ready (MMSitClient  *client,
++                      GAsyncResult *res,
++                      GTask        *task)
++{
++    MMBroadbandModemSamsungSit *self;
++    GError                     *error = NULL;
++    guint                       attempts;
++
++    if (!mm_sit_client_set_radio_state_finish (client, res, &error)) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
++    attempts = GPOINTER_TO_UINT (g_task_get_task_data (task));
++    if (!mm_sit_client_radio_state_trusted (client) &&
++        attempts + 1 < POWER_UP_RETRY_ATTEMPTS) {
++        g_task_set_task_data (task, GUINT_TO_POINTER (attempts + 1), NULL);
++        mm_obj_dbg (self, "CP refused the radio-on; re-sending the bring-up in %us (attempt %u)",
++                    POWER_UP_RETRY_SECS, attempts + 2);
++        g_timeout_add_seconds (POWER_UP_RETRY_SECS, (GSourceFunc) power_up_retry_chain, task);
++        return;
++    }
++
++    if (!mm_sit_client_radio_state_trusted (client)) {
++        mm_obj_warn (self, "CP kept refusing the radio-on; taking its reported state at face value");
++        mm_sit_client_assume_radio_state (client);
++    }
++
++    arm_search_watchdog (self);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++power_up_chain_start (GTask *task)
++{
++    MMBroadbandModemSamsungSit *self;
++    MMSitClient                *client;
++    GError                     *error = NULL;
++
++    self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
++    client = mm_broadband_modem_samsung_sit_peek_client (self, &error);
++    if (!client) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    mm_sit_client_send_boot_config (client, NULL,
++                                    (GAsyncReadyCallback) power_up_boot_config_ready,
++                                    task);
++}
++
+ static void
+ power_up_radio (GTask *task)
+ {
+@@ -2615,7 +2791,7 @@
+         return;
+     }
+     mm_sit_client_set_radio_state (client, MM_SIT_RADIO_STATE_ON, NULL,
+-                                   (GAsyncReadyCallback) modem_set_power_ready,
++                                   (GAsyncReadyCallback) modem_power_up_ready,
+                                    task);
+ }
+ 
+@@ -2629,9 +2805,11 @@
+     g_autoptr(GError)             error = NULL;
+     MMSitClient                  *client;
+ 
+-    if (!mm_broadband_modem_samsung_sit_ensure_carrier_config_finish (self, res, &error))
++    if (!mm_broadband_modem_samsung_sit_ensure_carrier_config_finish (self, res, &error)) {
+         mm_obj_warn (self, "couldn't provision carrier configuration before radio-on: %s",
+                      error->message);
++        g_clear_error (&error);
++    }
+ 
+     /*
+      * The CP needs *an* attach APN or it never attaches, and it will not ask the
+@@ -2723,9 +2901,7 @@
+      * and carrier manifest (radio reports "on" but never searches), so
+      * mirror the downstream bring-up order before requesting the radio. */
+     if (state == MM_SIT_RADIO_STATE_ON) {
+-        mm_sit_client_send_boot_config (client, NULL,
+-                                        (GAsyncReadyCallback) power_up_boot_config_ready,
+-                                        task);
++        power_up_chain_start (task);
+         return;
+     }
+     mm_sit_client_set_radio_state (client, state, NULL,
+@@ -5205,6 +5381,10 @@
+         g_source_remove (self->priv->reject_retry_id);
+         self->priv->reject_retry_id = 0;
+     }
++    if (self->priv->search_watchdog_id) {
++        g_source_remove (self->priv->search_watchdog_id);
++        self->priv->search_watchdog_id = 0;
++    }
+     g_clear_object (&self->priv->initial_eps_bearer_settings);
+     g_clear_object (&self->priv->ims);
+     self->priv->client = NULL;
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -357,6 +357,17 @@
+     return self->priv->radio_state_trusted;
+ }
+ 
++/* The distrust only exists to force the bring-up chain to run once. Once it
++ * has, the CP's report is all there is, and keeping it distrusted would pin
++ * the core's power state at "low" forever -- every later power-down then
++ * becomes a no-op and the radio can never be cycled at all. */
++void
++mm_sit_client_assume_radio_state (MMSitClient *self)
++{
++    g_return_if_fail (MM_IS_SIT_CLIENT (self));
++    self->priv->radio_state_trusted = TRUE;
++}
++
+ static void
+ port_command_ready (MMPortSerialSit *port,
+                     GAsyncResult    *res,
+@@ -487,6 +498,7 @@
+     MMSitRadioState state;
+     guint           poll_attempts;
+     guint           retry_id;
++    gboolean        request_accepted;
+ } SetRadioContext;
+ 
+ static void set_radio_poll (GTask *task);
+@@ -525,7 +537,13 @@
+         return;
+     }
+     if (state == ctx->state) {
+-        self->priv->radio_state_trusted = TRUE;
++        /* Only a transition the CP accepted proves the state is real. A fresh
++         * CP refuses the request and still reports the target state, and
++         * trusting that hollow answer defeats the guard in load_power_state --
++         * the core then never re-runs the power-up chain, so the CP attaches
++         * with no APN and every SETUP_DATA_CALL fails with cause 133. */
++        if (ctx->request_accepted)
++            self->priv->radio_state_trusted = TRUE;
+         g_task_return_boolean (task, TRUE);
+         g_object_unref (task);
+         return;
+@@ -555,9 +573,13 @@
+      * the resulting state either way, so note the refusal and carry on; a state
+      * that genuinely never arrives still fails there.
+      */
++    SetRadioContext *ctx = g_task_get_task_data (task);
++
+     if (!g_task_propagate_boolean (G_TASK (res), &error))
+         mm_obj_dbg (self->priv->port, "radio power request refused (%s); polling the state anyway",
+                     error->message);
++    else
++        ctx->request_accepted = TRUE;
+ 
+     set_radio_poll (task);
+ }
+--- a/src/plugins/samsung-sit/mm-sit-client.h
++++ b/src/plugins/samsung-sit/mm-sit-client.h
+@@ -70,6 +70,7 @@
+                                                                   GAsyncResult  *res,
+                                                                   GError       **error);
+ gboolean mm_sit_client_radio_state_trusted  (MMSitClient         *self);
++void     mm_sit_client_assume_radio_state   (MMSitClient         *self);
+ 
+ /* The next request token. Public because AIMS frames are built outside this
+  * client -- by a different codec -- but must share its token sequence, since
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -1973,6 +1973,48 @@
+     return NULL;
+ }
+ 
++/* Same exchange, but the CP refuses the SET (12-byte reply, status 2 at @10)
++ * and still reports the target state -- a fresh, parked CP. */
++static gpointer
++client_radio_refused_test_peer (ClientTestContext *ctx)
++{
++    static const guint16 expected_ids[] = {
++        MM_SIT_MESSAGE_SET_RADIO_POWER,
++        MM_SIT_MESSAGE_GET_RADIO_POWER,
++    };
++    guint i;
++
++    for (i = 0; i < G_N_ELEMENTS (expected_ids); i++) {
++        guint8  header[MM_SIT_HEADER_SIZE];
++        guint8  response[16] = { 0 };
++        guint16 request_len;
++        guint16 response_len;
++
++        g_assert_true (read_all (ctx->peer_fd, header, sizeof (header)));
++        request_len = header[4] | (((guint16) header[5]) << 8);
++        g_assert_cmpuint (header[2] | (((guint16) header[3]) << 8), ==, expected_ids[i]);
++        if (request_len > MM_SIT_HEADER_SIZE) {
++            g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
++
++            g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
++        }
++
++        response_len = (expected_ids[i] == MM_SIT_MESSAGE_GET_RADIO_POWER) ? 16 : 12;
++        response[0] = MM_SIT_MESSAGE_TYPE_RESPONSE;
++        response[2] = header[2];
++        response[3] = header[3];
++        response[4] = response_len;
++        response[6] = header[6];
++        response[7] = header[7];
++        if (response_len == 16)
++            response[12] = MM_SIT_RADIO_STATE_ON;
++        else
++            response[10] = 2;
++        g_assert_true (write_all (ctx->peer_fd, response, response_len));
++    }
++    return NULL;
++}
++
+ static void
+ client_radio_test_ready (MMSitClient       *client,
+                          GAsyncResult      *res,
+@@ -2028,6 +2070,53 @@
+     g_main_loop_unref (ctx.loop);
+ }
+ 
++/* A refused SET must not make the polled state trustworthy: the core has to be
++ * able to see through the parked CP's "on" and run the power-up chain again. */
++static void
++test_client_radio_transition_refused (void)
++{
++    ClientTestContext          ctx = { 0 };
++    gint                       sockets[2];
++    guint                      timeout_id;
++    g_autoptr(GError)          error = NULL;
++    g_autoptr(MMPortSerialSit) port = NULL;
++    g_autoptr(MMSitClient)     client = NULL;
++    GThread                   *peer;
++
++    g_assert_cmpint (socketpair (AF_UNIX, SOCK_STREAM, 0, sockets), ==, 0);
++    ctx.peer_fd = sockets[1];
++    ctx.loop = g_main_loop_new (NULL, FALSE);
++    port = MM_PORT_SERIAL_SIT (g_object_new (MM_TYPE_PORT_SERIAL_SIT,
++                                             MM_PORT_DEVICE, "test-sit-radio-refused",
++                                             MM_PORT_SUBSYS, MM_PORT_SUBSYS_WWAN,
++                                             MM_PORT_TYPE, MM_PORT_TYPE_SIT,
++                                             MM_PORT_SERIAL_FD, sockets[0],
++                                             NULL));
++    client = mm_sit_client_new_from_port (port);
++    g_assert_true (mm_sit_client_open (client, &error));
++    g_assert_no_error (error);
++
++    peer = g_thread_new ("sit-radio-refused-test-peer",
++                         (GThreadFunc) client_radio_refused_test_peer, &ctx);
++    mm_sit_client_set_radio_state (client, MM_SIT_RADIO_STATE_ON, NULL,
++                                   (GAsyncReadyCallback) client_radio_test_ready, &ctx);
++    timeout_id = g_timeout_add_seconds (5, (GSourceFunc) client_test_timeout, &ctx);
++    g_main_loop_run (ctx.loop);
++
++    if (!ctx.timed_out)
++        g_source_remove (timeout_id);
++    g_thread_join (g_steal_pointer (&peer));
++
++    g_assert_false (ctx.timed_out);
++    g_assert_no_error (ctx.error);
++    g_assert_true (ctx.completed);
++    g_assert_false (mm_sit_client_radio_state_trusted (client));
++
++    mm_sit_client_close (client);
++    close (ctx.peer_fd);
++    g_main_loop_unref (ctx.loop);
++}
++
+ static gpointer
+ client_boot_config_test_peer (ClientTestContext *ctx)
+ {
+@@ -2469,6 +2558,7 @@
+     g_test_add_func ("/MM/sit/ims/config-carrier-overrides", test_ims_config_carrier_overrides_replace);
+     g_test_add_func ("/MM/sit/ims/config-user-agent", test_ims_config_user_agent);
+     g_test_add_func ("/MM/sit/client/radio-transition", test_client_radio_transition);
++    g_test_add_func ("/MM/sit/client/radio-transition-refused", test_client_radio_transition_refused);
+     g_test_add_func ("/MM/sit/client/boot-config", test_client_boot_config);
+     g_test_add_func ("/MM/sit/decode/registration-failed", test_parse_registration_failed);
+ 
