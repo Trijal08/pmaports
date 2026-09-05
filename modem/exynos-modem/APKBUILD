@@ -1,0 +1,110 @@
+# Maintainer: Steffen Deusch <steffen@deusch.me>
+pkgname="exynos-modem"
+pkgver=0.1.0_git20260731
+pkgrel=1
+pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
+url="https://git.deusch.me/pixel-mainline/exynos-modem"
+arch="aarch64"
+license="GPL-2.0-or-later"
+makedepends="cargo cargo-auditable"
+depends="
+	android-tools
+	e2fsprogs
+	jq
+	tar
+	util-linux
+"
+subpackages="
+	libsamsung-sit-ffi:libsamsung_sit_ffi
+"
+options="net"
+
+_commit="3a333898041239d943f396a40552801542ef3ae8"
+source="
+	$pkgname-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz
+	gipc-serve-uecap-fetch.patch
+	gipc-uecap-type2-and-wrapper.patch
+	gipc-serve-requested-block.patch
+	gipc-pace-bulk-serve.patch
+	caimito-modem-setup.sh
+	pixel-modem-stage.service
+	exynos-modem.service
+	sit-proxy.service
+	99-google-komodo-modem.rules
+"
+builddir="$srcdir/$pkgname"
+
+prepare() {
+	default_prepare
+
+	# Remove workspace config pinning the static-musl target so cargo uses CTARGET
+	rm -f .cargo/config.toml
+	RUSTC_WRAPPER= cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	# Compile the full workspace so both daemons and the static library are produced
+	RUSTC_WRAPPER= cargo auditable build --release --frozen
+}
+
+package() {
+	# Main package: install the userspace daemons
+	install -Dm755 target/release/exynos-modem \
+		-t "$pkgdir/usr/sbin"
+	install -Dm755 target/release/sit-proxy \
+		-t "$pkgdir/usr/sbin"
+
+	# Install staging helper script
+	install -Dm755 "$srcdir"/caimito-modem-setup.sh \
+		"$pkgdir/usr/libexec/caimito-modem-setup"
+
+	# Install systemd service units
+	install -Dm644 "$srcdir"/pixel-modem-stage.service \
+		"$pkgdir/usr/lib/systemd/system/pixel-modem-stage.service"
+	install -Dm644 "$srcdir"/exynos-modem.service \
+		"$pkgdir/usr/lib/systemd/system/exynos-modem.service"
+	install -Dm644 "$srcdir"/sit-proxy.service \
+		"$pkgdir/usr/lib/systemd/system/sit-proxy.service"
+
+	# Points ModemManager's samsung-sit plugin at the carrier config and routes
+	# it through sit-proxy; see the file for why it must match every SIT port.
+	install -Dm644 "$srcdir"/99-google-komodo-modem.rules \
+		"$pkgdir/usr/lib/udev/rules.d/99-google-komodo-modem.rules"
+
+	# Enable service by default in systemd multi-user target
+	install -dm755 "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s "../exynos-modem.service" \
+		"$pkgdir/usr/lib/systemd/system/multi-user.target.wants/exynos-modem.service"
+	ln -s "../sit-proxy.service" \
+		"$pkgdir/usr/lib/systemd/system/multi-user.target.wants/sit-proxy.service"
+}
+
+libsamsung_sit_ffi() {
+	pkgdesc="C ABI for the samsung-sit SIT (Exynos RIL) wire codec"
+
+	local _lib
+	_lib=$(find "$builddir"/target -name 'libsamsung_sit_ffi.a' -path '*/release/*' -not -path '*/deps/*' -print -quit)
+	[ -n "$_lib" ] || return 1
+
+	install -Dm644 "$_lib" "$subpkgdir/usr/lib/libsamsung_sit_ffi.a"
+	install -Dm644 "$builddir"/crates/samsung-sit-ffi/include/samsung_sit_ffi.h \
+		"$subpkgdir/usr/include/samsung_sit_ffi.h"
+
+	install -dm755 "$subpkgdir/usr/lib/pkgconfig"
+	sed -e "s|@prefix@|/usr|" \
+		-e "s|@version@|${pkgver%%_*}|" \
+		"$builddir"/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in \
+		> "$subpkgdir/usr/lib/pkgconfig/samsung-sit-ffi.pc"
+}
+sha512sums="
+227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-3a333898041239d943f396a40552801542ef3ae8.tar.gz
+f6e7ea677e08d47cbb10155ebb45ffbe064a9303bdac687b091f451df876b221ac7a80314cf1ca0086ec91f30c27fb9469a07ef989c1b93b2284e1bd9710943e  gipc-serve-uecap-fetch.patch
+7e28d42a2895902225774e8a90527493470d7760690078119c7aa2beab18f5cb8d144219f0d70cc7050db5e26ece4e067189035e3b2136242a111f2eae976fbc  gipc-uecap-type2-and-wrapper.patch
+e3e25178dd5b8d8667218ad74d4d58bdd4825b9b54f96b7edc6d15592851b6fa77678a1fca378b51b5fd1a0884a9d6dcb68ad682711bc9689aa861c90d33a462  gipc-serve-requested-block.patch
+f949893085e0fc90215e956e580250467c62eb3602448a36ded48de459632ff6545239737cbadc264947870e9b2c892773d9195ac82873cd2431666de93c314f  gipc-pace-bulk-serve.patch
+f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
+582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
+2567c643be561149c49526234f7538a6757659daac1b7ab853306cef60cb9ee41be50d20eb168b46be23de3b9e0b4e8aae65a08461fa0126ef9d5f5db29572e4  exynos-modem.service
+afdba8af1f0e3bb4634c229e5ce51d796468a42f7d032347eef074b9a2ef8b86ceda18dd8b6b4b87f795e6f340c6ba2256bddf084b6ef6d4fb9faa5fae11dc61  sit-proxy.service
+e501aad6278922796e53d6477148ce97885fa233433bfcfb8d9f28ece02034c841569748a25e93672926ad9f1bb327924017b38f19b04d7a7261d51135d609f4  99-google-komodo-modem.rules
+"

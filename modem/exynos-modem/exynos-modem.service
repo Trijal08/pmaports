@@ -1,0 +1,26 @@
+[Unit]
+Description=Exynos s5400 modem userspace services
+Requires=pixel-modem-stage.service
+After=pixel-modem-stage.service network.target
+Before=ModemManager.service
+
+[Service]
+Type=simple
+# The mainline driver names its channels wwan0*; the daemon's defaults are the
+# downstream umts_* nodes, which do not exist here. With the wrong paths nothing
+# services RFS or GIPC and the CP stalls every SIT request it is given.
+#
+# --boot-dev none: the in-kernel driver has already booted the CP.
+ExecStart=/usr/sbin/exynos-modem --boot-dev none \
+	--oem-gems-dev /dev/wwan0oem1 \
+	--oem-radioext-dev /dev/wwan0oem0 \
+	--oem-gipc-dev /dev/wwan0oem2 \
+	--rfs-dev /dev/wwan0rfs0 \
+	--uecap-dir /lib/firmware/google/s5400/uecapconfig \
+	--state-dir /var/lib/exynos-modem
+StateDirectory=exynos-modem
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

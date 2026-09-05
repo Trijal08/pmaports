@@ -1,0 +1,178 @@
+diff --git a/crates/exynos-modem/src/chan.rs b/crates/exynos-modem/src/chan.rs
+index 8a469e0..6bef182 100644
+--- a/crates/exynos-modem/src/chan.rs
++++ b/crates/exynos-modem/src/chan.rs
+@@ -80,3 +80,8 @@ pub fn hex(bytes: &[u8]) -> String {
+     }
+     s
+ }
++
++/// Untruncated hex, for the frames whose wire format we are still decoding.
++pub fn hex_all(bytes: &[u8]) -> String {
++    bytes.iter().map(|b| format!("{:02x}", b)).collect()
++}
+diff --git a/crates/exynos-modem/src/gipc.rs b/crates/exynos-modem/src/gipc.rs
+index 075ed1b..cdf2225 100644
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -20,7 +20,10 @@ use prost::Message;
+ 
+ use crate::chan::{self, Handler};
+ use crate::pb::gipc::{GipcMessage, ModemTemperatureSetRequest};
+-use crate::pb::{UecapFileMessageResult, UecapFileReadRequest, UecapFileReadResponse};
++use crate::pb::{
++    uecap_file_message, UecapFileMessage, UecapFileMessageResult, UecapFileReadRequest,
++    UecapFileReadResponse,
++};
+ 
+ /// `service` of gems.gtemperature, whose payload we decode for the log line.
+ const SVC_GTEMPERATURE: u32 = 0x4b10_e343;
+@@ -30,6 +33,12 @@ const SVC_GTEMPERATURE: u32 = 0x4b10_e343;
+ /// (seq climbing) and the PDN setup is refused (cause 133/2253), so the modem
+ /// registers but no data call gets an address.
+ const SVC_UECAP_FILE: u32 = 0xe62d_33e2;
++/// The CP's plain-text log stream, sent as type-2 frames: payload is
++/// `{1: level, 2: string}`. Decoded 2026-08-31 -- it carries the CP's own
++/// firmware log lines (the `[PowerThermal] [RFSD] ... DmMain.c` line the
++/// handoff first saw on ch 0x84), which is the only live view into what the
++/// CP thinks is wrong during a failed data call. Nothing to answer.
++const SVC_CP_LOG: u32 = 0x4e39_c4ae;
+ /// Every service the stock daemon dispatches, recovered by walking its GIPC
+ /// tables in /vendor/bin/shared_modem_platform (see
+ /// docs/subsystems/modem/reference/cpif-channels.md). The names are compiled
+@@ -155,13 +170,22 @@ impl Gipc {
+                 result: Some(UecapFileMessageResult::UfmSuccess as i32),
+                 last_block: last,
+             };
++            // The GEMS path wraps the response in UecapFileMessage (oem.rs
++            // uecap_chunk); the stock GIPC capture only has temperature
++            // traffic, so the wrapper here is inferred -- keep it for
++            // consistency with the one path we know the CP accepts.
++            let wrapped = UecapFileMessage {
++                uecap_file_operation: Some(uecap_file_message::UecapFileOperation::UecapFileReadResponse(
++                    resp,
++                )),
++            };
+             frames.push(
+                 GipcMessage {
+                     r#type: Some(TYPE_RESPONSE),
+                     endpoint: req.endpoint,
+                     service: req.service,
+                     method: req.method,
+-                    payload: Some(resp.encode_to_vec()),
++                    payload: Some(wrapped.encode_to_vec()),
+                     sequence: Some(base.wrapping_add(i)),
+                 }
+                 .encode_to_vec(),
+@@ -187,6 +211,10 @@ impl Gipc {
+         let req = match GipcMessage::decode(frame) {
+             Ok(m) => m,
+             Err(e) => {
++                // Undecodable frames are the detection path for a new CP
++                // protocol on this channel: dump the raw bytes once so a
++                // changed wire format cannot be invisible (the 2026-08-31
++                // cause-133-after-reconnect case).
+                 eprintln!(
+                     "gipc: decode failed ({} bytes): {} [{}]",
+                     frame.len(),
+@@ -197,25 +225,42 @@ impl Gipc {
+             }
+         };
+ 
+-        // Anything already carrying type 1 is an answer to something we sent;
+-        // we send nothing, so it is unexpected. Never ack an ack.
++        // The uecap/carrier file fetch needs a real answer (the file bytes),
++        // not the empty ack the other services get. The CP also sends these as
++        // type 2 (response) frames -- seq 97/98/99 on the 2026-08-31 boot, one
++        // per file, after the fetch loop -- so the type check below would
++        // drop them before the handler. Match on service only: the handler
++        // reads the request fields either way, and a type-2 request is
++        // still a request for the file.
++        if req.service == Some(SVC_UECAP_FILE) {
++            self.log(&req);
++            return self.serve_uecap_file(&req);
++        }
++
++        // Anything not a request is an answer to something we sent; we send
++        // nothing, so it is unexpected. Never ack an ack. Dump the raw bytes
++        // once: if the CP ever starts sending us requests we cannot decode,
++        // the raw frame is the only way to see the new protocol.
++        if req.service == Some(SVC_CP_LOG) {
++            let p = req.payload.as_deref().unwrap_or(&[]);
++            match cp_log_text(p) {
++                Some(t) => eprintln!("cp log: {}", t.trim_end()),
++                None => eprintln!("cp log: undecodable [{}]", chan::hex(p)),
++            }
++            return Vec::new();
++        }
++
+         if req.r#type != Some(TYPE_REQUEST) {
+             eprintln!(
+-                "gipc: unexpected type {:?} from service {:#010x} seq {:?}",
++                "gipc: unexpected type {:?} from service {:#010x} seq {:?} [{}]",
+                 req.r#type,
+                 req.service.unwrap_or(0),
+-                req.sequence
++                req.sequence,
++                chan::hex_all(frame)
+             );
+             return Vec::new();
+         }
+ 
+-        // The uecap/carrier file fetch needs a real answer (the file bytes),
+-        // not the empty ack the other services get.
+-        if req.service == Some(SVC_UECAP_FILE) {
+-            self.log(&req);
+-            return self.serve_uecap_file(&req);
+-        }
+-
+         self.log(&req);
+ 
+         vec![GipcMessage {
+@@ -348,3 +393,46 @@ mod tests {
+             .is_empty());
+     }
+ }
++
++/// Field 2 of the CP log payload, a bare protobuf string. Hand-decoded rather
++/// than given a schema: the message has no other field we use, and an
++/// unparseable frame must still be dumpable as hex.
++fn cp_log_text(payload: &[u8]) -> Option<String> {
++    let mut i = 0;
++    while i < payload.len() {
++        let (key, n) = varint(payload, i)?;
++        i = n;
++        match (key >> 3, key & 7) {
++            (2, 2) => {
++                let (len, n) = varint(payload, i)?;
++                let end = n.checked_add(len as usize)?;
++                return String::from_utf8(payload.get(n..end)?.to_vec()).ok();
++            }
++            (_, 0) => i = varint(payload, i)?.1,
++            (_, 2) => {
++                let (len, n) = varint(payload, i)?;
++                i = n.checked_add(len as usize)?;
++            }
++            (_, 5) => i += 4,
++            (_, 1) => i += 8,
++            _ => return None,
++        }
++    }
++    None
++}
++
++fn varint(b: &[u8], mut i: usize) -> Option<(u64, usize)> {
++    let (mut v, mut shift) = (0u64, 0);
++    loop {
++        let c = *b.get(i)?;
++        i += 1;
++        v |= ((c & 0x7f) as u64) << shift;
++        if c & 0x80 == 0 {
++            return Some((v, i));
++        }
++        shift += 7;
++        if shift > 63 {
++            return None;
++        }
++    }
++}

@@ -1,0 +1,23 @@
+# Tag the CP's channels for systemd so units can order against their .device
+# jobs; without this the nodes exist in /dev but the jobs wait out the boot
+# timeout.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*", TAG+="systemd"
+
+# ID_MM_SIT_PROXY routes the samsung-sit plugin through sit-proxy's socket
+# instead of owning the node, so mm-sit-tool can be used while ModemManager is
+# running. If the proxy is not answering the plugin warns and takes the node.
+#
+# The carrier-config directory must be set on *every* SIT port, not just
+# wwan0sit0: mm_plugin_samsung_sit's create_modem reads the property from the
+# first SIT probe in an unordered list and stops there, so with two ports a
+# rule naming only one is a coin flip -- and losing it means no carrier config,
+# no ims.db, and every bearer failing instantly.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
+  ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", \
+  ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/lib/firmware/google/s5400/carrierconfig"
+
+# The CP's AT service is a veneer over the control plane the plugin already
+# speaks, and a call-waiting query through it knocks the CP off its serving
+# network. The plugin grabs it as ignored anyway; this stops ModemManager
+# probing it at all and leaves it free for manual use.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ENV{ID_MM_PORT_IGNORE}="1"
