@@ -1,0 +1,332 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Fri, 7 Nov 2026 00:00:00 +0000
+Subject: [PATCH] ims-config: split the hidden menu the way stock does
+
+Stock does not send its IMS configuration as one message. Every stack in
+all five 2026-11-06 captures gets three, and the split is identical each
+time:
+
+    1492B   identity and SIP timers, then the whole carrier block, then
+            the video capability descriptor (tag 771)
+      14B   the identity extras -- 777, 782, 783, and 778 for a card with
+            an ISIM, which makes it 51B
+     448B   the carrier block on its own, the same 63 records again
+
+`ImsConfig::group()` returns those three sets, and the FFI exposes them as
+`samsung_ims_config_group()`. The full entry list is unchanged, so a caller
+that wants one message still gets exactly what it got before.
+
+This is not tidiness. Measured with the rings instrument at 20 Hz across a
+real stall, the CP does not emit its registration indication while the link
+is idle -- `fmt rx undrained` was 0 in all 115 samples of the window, so
+nothing was queued and no notification had been lost -- and the AP's next
+write is what frees it. Stock's grant-to-registration is 0.7-2.5 s on all
+ten stack-boots because its three pushes keep writing; our single push left
+the stack silent for twelve seconds and registration waited for whatever
+polled next.
+
+Tag 778 also moves ahead of the empty pair so the identity push reads
+777, 778, 782, 783 as stock's does.
+diff -ruN '--exclude=target' '--exclude=.git' em29/crates/samsung-ims-config/src/lib.rs em/crates/samsung-ims-config/src/lib.rs
+--- a/crates/samsung-ims-config/src/lib.rs	2026-11-06 23:46:55.076513861 -0500
++++ b/crates/samsung-ims-config/src/lib.rs	2026-11-06 23:43:05.243288926 -0500
+@@ -99,9 +99,73 @@
+     /// Whose overrides were applied, for logging. "default" if none matched.
+     pub carrier: String,
+     pub user_agent: String,
++    /// Every entry, in the order it should reach the CP.
+     pub entries: Vec<(u16, Value)>,
+ }
+ 
++/// Which of the vendor's three `HIDDEN_MENU` pushes an entry belongs to.
++///
++/// Stock does not send its configuration as one message. Every stack in the
++/// five 2026-11-06 captures gets three, and the split is the same each time:
++///
++/// ```text
++///   1492B   the device identity and SIP timers, then the whole carrier
++///           block, then the video capability descriptor (tag 771)
++///     14B   the identity extras: 777, 782, 783, and 778 for a card with
++///           an ISIM -- 51B when that one is present
++///    448B   the carrier block on its own, the same 63 records again
++/// ```
++///
++/// Reproducing that matters for more than tidiness. The CP does not emit its
++/// registration indication while the link is idle, and the AP's next write is
++/// what frees it -- so stock's three writes, arriving a second or two apart,
++/// are why its grant-to-registration is 0.7-2.5 s where our single write left
++/// the link silent for 12 s. See the note on the grant-to-registration gap.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Group {
++    /// Everything: identity, timers and the carrier block.
++    Full,
++    /// The identity extras alone.
++    Identity,
++    /// The carrier block alone.
++    Carrier,
++}
++
++/// The tags stock puts in its identity-extras push.
++const IDENTITY_EXTRAS: &[u16] =
++    &[tag::UA_IMS_CLIENT_VERSION, tag::IMS_HOME_DOMAIN, tag::UA_EXTRA_1, tag::UA_EXTRA_2];
++
++/// The tags stock keeps out of its carrier-only push: the device identity,
++/// the five SIP timers it hardcodes, and the geolocation flags.
++const IDENTITY_AND_TIMERS: &[u16] = &[
++    tag::USER_AGENT,
++    tag::SIP_TIMER_TA_MS, tag::SIP_TIMER_TE_MS, tag::SIP_TIMER_TG_MS,
++    tag::SIP_TIMER_TI_MS, tag::SIP_TIMER_TK_MS,
++    tag::UA_MANUFACTURER, tag::UA_MODEL, tag::UA_SOFTWARE_VERSION,
++    tag::UA_PRODUCT_LINE, tag::UA_OS_VERSION,
++    tag::GEOLOCATION_VOWIFI_EMERGENCY, tag::GEOLOCATION_VOLTE_EMERGENCY,
++];
++
++impl ImsConfig {
++    /// The entries belonging to one of the vendor's three pushes.
++    ///
++    /// `Full` is everything bar the identity extras, which stock carries in
++    /// its own message rather than in the big one.
++    pub fn group(&self, group: Group) -> Vec<(u16, Value)> {
++        self.entries
++            .iter()
++            .filter(|(t, _)| match group {
++                Group::Full => !IDENTITY_EXTRAS.contains(t),
++                Group::Identity => IDENTITY_EXTRAS.contains(t),
++                Group::Carrier => {
++                    !IDENTITY_EXTRAS.contains(t) && !IDENTITY_AND_TIMERS.contains(t)
++                }
++            })
++            .cloned()
++            .collect()
++    }
++}
++
+ #[derive(Debug, Clone)]
+ pub struct Apn {
+     pub name: String,
+@@ -411,9 +475,8 @@
+     set(&mut entries, tag::UA_PRODUCT_LINE, Value::Str("SH000000".to_string()));
+     set(&mut entries, tag::UA_OS_VERSION, Value::Str(device.os_version.clone()));
+ 
+-    for tag in COMPILED_IN_EMPTY {
+-        set(&mut entries, *tag, Value::Str(String::new()));
+-    }
++    // Order matters: stock's identity push is 777, 778, 782, 783, so the
++    // domain goes in before the empty pair rather than after it.
+     // Only for a card that has an ISIM; see CarrierIdentity::has_isim.
+     if identity.has_isim {
+         let domain = if identity.isim_domain.is_empty() {
+@@ -425,6 +488,9 @@
+             set(&mut entries, tag::IMS_HOME_DOMAIN, Value::Str(domain));
+         }
+     }
++    for tag in COMPILED_IN_EMPTY {
++        set(&mut entries, *tag, Value::Str(String::new()));
++    }
+ 
+     let user_agent = expand_user_agent(
+         template.as_deref().unwrap_or(DEFAULT_USER_AGENT),
+@@ -694,6 +760,40 @@
+         assert_eq!(int(&cfg, tag::UA_IMS_CLIENT_VERSION), 1);
+     }
+ 
++    /// Stock sends its configuration as three pushes, not one, and the split
++    /// is the same on every stack of every capture. Counts here are against
++    /// the fixture, not the shipped database; what is asserted is the
++    /// membership rule, which is what has to hold for any carrier.
++    #[test]
++    fn the_three_pushes_partition_the_entries() {
++        let (_dir, path) = fixture();
++        let id = CarrierIdentity { has_isim: true, mccmnc: "26203".into(), ..Default::default() };
++        let cfg = resolve(&path, &DEVICE(), &id).expect("resolve");
++
++        let full: Vec<u16> = cfg.group(Group::Full).iter().map(|(t, _)| *t).collect();
++        let ident: Vec<u16> = cfg.group(Group::Identity).iter().map(|(t, _)| *t).collect();
++        let carrier: Vec<u16> = cfg.group(Group::Carrier).iter().map(|(t, _)| *t).collect();
++
++        // The identity extras travel alone, and 778 only with an ISIM.
++        assert_eq!(ident, vec![tag::UA_IMS_CLIENT_VERSION, tag::IMS_HOME_DOMAIN,
++                               tag::UA_EXTRA_1, tag::UA_EXTRA_2]);
++        let plain = CarrierIdentity { mccmnc: "26203".into(), ..Default::default() };
++        let cfg2 = resolve(&path, &DEVICE(), &plain).expect("resolve");
++        assert_eq!(cfg2.group(Group::Identity).len(), 3);
++
++        // Full is everything else, and Carrier drops the identity and timers.
++        assert!(full.iter().all(|t| !ident.contains(t)));
++        assert_eq!(full.len() + ident.len(), cfg.entries.len());
++        assert!(carrier.iter().all(|t| full.contains(t)));
++        for t in [tag::USER_AGENT, tag::UA_MODEL, tag::SIP_TIMER_TA_MS,
++                  tag::GEOLOCATION_VOLTE_EMERGENCY] {
++            assert!(full.contains(&t), "Full should carry {t}");
++            assert!(!carrier.contains(&t), "Carrier should not carry {t}");
++        }
++        // The carrier block still has the carrier's own values in it.
++        assert!(carrier.contains(&1028));
++    }
++
+     /// Carriers that ship no APNs are a normal outcome; another carrier's
+     /// APNs would be worse than none, so there is no default to fall back on.
+     #[test]
+diff -ruN '--exclude=target' '--exclude=.git' em29/crates/samsung-sit-ffi/include/samsung_sit_ffi.h em/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-06 23:46:55.076590551 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-06 23:43:27.882904225 -0500
+@@ -211,6 +211,28 @@
+ } SamsungSitDeactReason;
+ 
+ /*
++ Which of the vendor's three `HIDDEN_MENU` pushes to take.
++
++ Stock sends its configuration as three messages, not one, and the CP does
++ not emit its registration indication while the link is idle -- so the
++ three writes are part of the behaviour, not a detail of packaging.
++ */
++typedef enum {
++    /*
++     Everything but the identity extras: identity, timers, carrier block.
++     */
++    SAMSUNG_IMS_CONFIG_GROUP_FULL = 0,
++    /*
++     The identity extras alone (777, 778 with an ISIM, 782, 783).
++     */
++    SAMSUNG_IMS_CONFIG_GROUP_IDENTITY = 1,
++    /*
++     The carrier block alone.
++     */
++    SAMSUNG_IMS_CONFIG_GROUP_CARRIER = 2,
++} SamsungImsConfigGroup;
++
++/*
+  How the CP is choosing a network: the CP's own numbering.
+  */
+ typedef enum {
+@@ -1473,6 +1495,18 @@
+                                                          size_t *out_n_entries);
+ 
+ /*
++ The entries of one of the vendor's three pushes, in the order they should
++ reach the CP. Owned by `config`; null with `*out_n` zero if `config` is
++ null or `group` is out of range.
++
++ # Safety
++ As [`samsung_ims_config_entries`].
++ */
++const SamsungAimsConfigEntry *samsung_ims_config_group(const SamsungImsConfig *config,
++                                                       SamsungImsConfigGroup group,
++                                                       size_t *out_n_entries);
++
++/*
+  Which carrier's overrides were applied, for logging. "default" if none.
+ 
+  # Safety
+diff -ruN '--exclude=target' '--exclude=.git' em29/crates/samsung-sit-ffi/src/ims_config.rs em/crates/samsung-sit-ffi/src/ims_config.rs
+--- a/crates/samsung-sit-ffi/src/ims_config.rs	2026-11-06 23:46:55.076653492 -0500
++++ b/crates/samsung-sit-ffi/src/ims_config.rs	2026-11-06 23:43:27.699349013 -0500
+@@ -54,10 +54,26 @@
+     pub roaming: u8,
+ }
+ 
++/// Which of the vendor's three `HIDDEN_MENU` pushes to take.
++///
++/// Stock sends its configuration as three messages, not one, and the CP does
++/// not emit its registration indication while the link is idle -- so the
++/// three writes are part of the behaviour, not a detail of packaging.
++#[repr(C)]
++pub enum SamsungImsConfigGroup {
++    /// Everything but the identity extras: identity, timers, carrier block.
++    Full = 0,
++    /// The identity extras alone (777, 778 with an ISIM, 782, 783).
++    Identity = 1,
++    /// The carrier block alone.
++    Carrier = 2,
++}
++
+ /// A resolved configuration. Opaque: it owns the strings and blobs the entries
+ /// point at. Freed with [`samsung_ims_config_free`].
+ pub struct SamsungImsConfig {
+     entries: Vec<SamsungAimsConfigEntry>,
++    groups: [Vec<SamsungAimsConfigEntry>; 3],
+     carrier: CString,
+     user_agent: CString,
+     /// Keeps every string and blob an entry borrows alive for the handle's
+@@ -176,6 +192,11 @@
+         }
+     };
+ 
++    let resolved_groups = [
++        resolved.group(cfg::Group::Full),
++        resolved.group(cfg::Group::Identity),
++        resolved.group(cfg::Group::Carrier),
++    ];
+     let mut owned: Vec<OwnedValue> = Vec::with_capacity(resolved.entries.len() + 2);
+     let mut entries = Vec::with_capacity(resolved.entries.len());
+     for (tag, value) in resolved.entries {
+@@ -226,8 +247,32 @@
+         entries.push(entry);
+     }
+ 
++    // The same entries again, partitioned the way stock splits its pushes.
++    // They borrow the strings `owned` already holds, so no second copy.
++    let mut groups: [Vec<SamsungAimsConfigEntry>; 3] = [Vec::new(), Vec::new(), Vec::new()];
++    for (slot, group) in [cfg::Group::Full, cfg::Group::Identity, cfg::Group::Carrier]
++        .into_iter()
++        .enumerate()
++    {
++        let want: Vec<u16> = resolved_groups[slot].iter().map(|(t, _)| *t).collect();
++        let _ = group;
++        for tag in want {
++            if let Some(e) = entries.iter().find(|e| e.tag == tag) {
++                groups[slot].push(SamsungAimsConfigEntry {
++                    tag: e.tag,
++                    value_type: e.value_type,
++                    int_value: e.int_value,
++                    str_value: e.str_value,
++                    bytes_value: e.bytes_value,
++                    bytes_len: e.bytes_len,
++                });
++            }
++        }
++    }
++
+     let handle = Box::new(SamsungImsConfig {
+         entries,
++        groups,
+         carrier: CString::new(resolved.carrier).unwrap_or_default(),
+         user_agent: CString::new(resolved.user_agent).unwrap_or_default(),
+         _owned: owned,
+@@ -259,6 +304,36 @@
+     config.entries.as_ptr()
+ }
+ 
++/// The entries of one of the vendor's three pushes, in the order they should
++/// reach the CP. Owned by `config`; null with `*out_n` zero if `config` is
++/// null or `group` is out of range.
++///
++/// # Safety
++/// As [`samsung_ims_config_entries`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_group(
++    config: *const SamsungImsConfig,
++    group: SamsungImsConfigGroup,
++    out_n_entries: *mut usize,
++) -> *const SamsungAimsConfigEntry {
++    let slot = match group {
++        SamsungImsConfigGroup::Full => 0usize,
++        SamsungImsConfigGroup::Identity => 1,
++        SamsungImsConfigGroup::Carrier => 2,
++    };
++    if config.is_null() {
++        if !out_n_entries.is_null() {
++            out_n_entries.write(0);
++        }
++        return core::ptr::null();
++    }
++    let g = &(*config).groups[slot];
++    if !out_n_entries.is_null() {
++        out_n_entries.write(g.len());
++    }
++    g.as_ptr()
++}
++
+ /// Which carrier's overrides were applied, for logging. "default" if none.
+ ///
+ /// # Safety

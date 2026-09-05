@@ -1,0 +1,7 @@
+# Start the GNSS daemon when the KEPLER receiver's CHPP node appears, which is
+# also the only moment it can do anything: the node exists once gnss-kepler has
+# bound to its SPI device, and the receiver has been codeloaded by the modem
+# driver before that. Activating from udev rather than an enabled unit keeps the
+# daemon off boards that have no receiver.
+ACTION=="add", SUBSYSTEM=="gnss", KERNEL=="gnss0", TAG+="systemd", \
+	ENV{SYSTEMD_WANTS}+="kepler-gnssd.service"

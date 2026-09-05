@@ -1,0 +1,160 @@
+diff --git a/crates/carrier-settings/src/db.rs b/crates/carrier-settings/src/db.rs
+index 8a99081..827fbc6 100644
+--- a/crates/carrier-settings/src/db.rs
++++ b/crates/carrier-settings/src/db.rs
+@@ -204,6 +204,26 @@ CREATE TABLE carrier_id (
+     iccid     TEXT
+ );
+ CREATE INDEX carrier_id_mccmnc ON carrier_id(mccmnc);
++-- The carrier's APN list, exactly as CarrierSettings ships it, with the
++-- vendor's enums already converted to what the CP is handed -- the same
++-- division of labour as `setting` below.
++--
++-- The whole list matters, not just the one APN a context wants: the CP will not
++-- match a URSP rule for any APN it has not been given a data profile for, and
++-- answers MATCH_ALL_RULE_NOT_ALLOWED (2253) instead. Registering the list and
++-- then attaching on the entry marked IA is what Android does, confirmed on the
++-- wire -- see docs/subsystems/modem/voice.md.
++CREATE TABLE apn (
++    carrier   INTEGER NOT NULL REFERENCES carrier(id),
++    seq       INTEGER NOT NULL,   -- the vendor's own order, which is significant
++    name      TEXT,
++    apn       TEXT NOT NULL,
++    types     INTEGER NOT NULL,   -- ApnSetting bitmask: IMS = 0x40, IA = 0x100
++    bearers   INTEGER NOT NULL,   -- 1 << (radio tech - 1); 0 means any
++    protocol  INTEGER NOT NULL,   -- SIT PdpType: 1 = IPv4, 2 = IPv6, 3 = IPv4v6
++    roaming   INTEGER NOT NULL,
++    PRIMARY KEY (carrier, seq)
++) WITHOUT ROWID;
+ -- Merged and already transformed: `value` is what the CP is handed.
+ CREATE TABLE setting (
+     carrier INTEGER NOT NULL REFERENCES carrier(id),
+@@ -217,10 +237,60 @@ CREATE TABLE setting (
+ ) WITHOUT ROWID;
+ ";
+ 
++/// One APN of a carrier's list, with the vendor's enums already mapped to the
++/// values the CP expects.
++pub struct ApnRow {
++    pub name: String,
++    pub apn: String,
++    pub types: u32,
++    pub bearers: u32,
++    pub protocol: u8,
++    pub roaming: u8,
++}
++
++/// `ApnItem.type` and `bearer_bitmask` are 1-based enum lists; AOSP turns each
++/// into `1 << (n - 1)`.
++fn bitmask<I: IntoIterator<Item = i32>>(values: I) -> u32 {
++    values
++        .into_iter()
++        .filter(|&v| (1..=32).contains(&v))
++        .fold(0u32, |m, v| m | 1 << (v - 1))
++}
++
++/// `ApnItem.Protocol` is IP = 0, IPV6 = 1, IPV4V6 = 2; SIT numbers the same
++/// three from one. Absent means IPv4, which is the vendor's own default.
++fn sit_pdp(protocol: Option<i32>) -> u8 {
++    (protocol.unwrap_or(0) + 1) as u8
++}
++
++/// Convert a carrier's APN list for the database.
++pub fn apn_rows(apns: &[crate::ApnItem]) -> Vec<ApnRow> {
++    apns.iter()
++        .filter_map(|a| {
++            // An entry with no APN names no DNN, so there is nothing to
++            // register and nothing to attach with.
++            let apn = a.apn.clone().filter(|s| !s.is_empty())?;
++            let bearers = a
++                .bearer_bitmask
++                .as_deref()
++                .map(|b| bitmask(b.split('|').filter_map(|t| t.trim().parse().ok())))
++                .unwrap_or(0);
++            Some(ApnRow {
++                name: a.name.clone().unwrap_or_default(),
++                apn,
++                types: bitmask(a.r#type.iter().copied()),
++                bearers,
++                protocol: sit_pdp(a.protocol),
++                roaming: sit_pdp(a.roaming_protocol.or(a.protocol)),
++            })
++        })
++        .collect()
++}
++
+ /// Write the database. Overwrites any existing file.
+ pub fn write(
+     path: &Path,
+-    carriers: &[(String, i64, Vec<Row>)],
++    carriers: &[(String, i64, Vec<Row>, Vec<ApnRow>)],
+     index: &CarrierIndex,
+ ) -> Result<(), rusqlite::Error> {
+     let _ = std::fs::remove_file(path);
+@@ -236,10 +306,27 @@ pub fn write(
+              (carrier, tag, kind, int_value, text_value, blob_value, key)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         )?;
+-        for (name, version, rows) in carriers {
++        let mut ins_apn = tx.prepare(
++            "INSERT INTO apn
++             (carrier, seq, name, apn, types, bearers, protocol, roaming)
++             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
++        )?;
++        for (name, version, rows, apns) in carriers {
+             ins_carrier.execute(rusqlite::params![name, version])?;
+             let id = tx.last_insert_rowid();
+             ids.insert(name.as_str(), id);
++            for (seq, a) in apns.iter().enumerate() {
++                ins_apn.execute(rusqlite::params![
++                    id,
++                    seq as i64,
++                    if a.name.is_empty() { None } else { Some(&a.name) },
++                    a.apn,
++                    a.types,
++                    a.bearers,
++                    a.protocol,
++                    a.roaming,
++                ])?;
++            }
+             for r in rows {
+                 ins_setting.execute(rusqlite::params![
+                     id,
+diff --git a/crates/carrier-settings/src/main.rs b/crates/carrier-settings/src/main.rs
+index 5c87dda..43df42f 100644
+--- a/crates/carrier-settings/src/main.rs
++++ b/crates/carrier-settings/src/main.rs
+@@ -133,6 +133,9 @@ fn run() -> Result<(), String> {
+                     settings: Default::default(),
+                     apns: Vec::new(),
+                 })),
++                // The fallback layer has no APNs of its own: an unrecognised
++                // SIM has no carrier APN list to register either.
++                Vec::new(),
+             )];
+             let mut entries = std::fs::read_dir(&dir)
+                 .map_err(|e| format!("{}: {e}", dir.display()))?
+@@ -147,13 +150,20 @@ fn run() -> Result<(), String> {
+             for name in entries {
+                 let c = read(&dir, &name)?;
+                 let merged = db::merge(&aosp, &defaults, &c);
+-                carriers.push((c.canonical_name.clone(), c.version, db::rows_for(&merged)));
++                carriers.push((
++                    c.canonical_name.clone(),
++                    c.version,
++                    db::rows_for(&merged),
++                    db::apn_rows(&c.apns),
++                ));
+             }
+-            let total: usize = carriers.iter().map(|(_, _, r)| r.len()).sum();
++            let total: usize = carriers.iter().map(|(_, _, r, _)| r.len()).sum();
++            let apns: usize = carriers.iter().map(|(_, _, _, a)| a.len()).sum();
+             eprintln!(
+-                "# {} carriers, {} settings, {} identities -> {out}",
++                "# {} carriers, {} settings, {} APNs, {} identities -> {out}",
+                 carriers.len(),
+                 total,
++                apns,
+                 index.entries.len()
+             );
+             db::write(std::path::Path::new(&out), &carriers, &index)

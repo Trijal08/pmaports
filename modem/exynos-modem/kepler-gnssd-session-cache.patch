@@ -1,0 +1,437 @@
+diff --git a/crates/gnss-betp/src/lib.rs b/crates/gnss-betp/src/lib.rs
+index 5796bcf..d10bf93 100644
+--- a/crates/gnss-betp/src/lib.rs
++++ b/crates/gnss-betp/src/lib.rs
+@@ -707,6 +707,27 @@ pub const SESSION_OPEN: [(u16, &[u8]); 5] = [
+     (0x12de, &[]),
+ ];
+ 
++/// The session-open records, with `POS_REQ` set to `tbf_ms`.
++///
++/// Returned as records rather than an encoded datagram so a caller can keep
++/// the set it actually used -- see `kepler-gnssd`'s session cache, which
++/// persists the batch that produced a fix and replays that instead of this
++/// table on later runs.
++pub fn session_open_records(tbf_ms: u32) -> Vec<(u16, u16, Vec<u8>)> {
++    let pos = pos_req_bytes(tbf_ms);
++    SESSION_OPEN
++        .iter()
++        .map(|&(midsid, data)| {
++            let d = if midsid == MIDSID_POS_REQ {
++                pos.to_vec()
++            } else {
++                data.to_vec()
++            };
++            (midsid, 2u16, d)
++        })
++        .collect()
++}
++
+ /// The session-open datagram, with `POS_REQ` set to `tbf_ms`.
+ pub fn session_open_batch(tbf_ms: u32) -> Vec<u8> {
+     let pos = pos_req_bytes(tbf_ms);
+diff --git a/crates/kepler-gnssd/src/main.rs b/crates/kepler-gnssd/src/main.rs
+index 66cf8a3..88bb087 100644
+--- a/crates/kepler-gnssd/src/main.rs
++++ b/crates/kepler-gnssd/src/main.rs
+@@ -12,7 +12,7 @@ mod mems;
+ mod protocol;
+ 
+ use gnss_betp::{dump_message_name, ChppDecoder, DumpDecoder};
+-use protocol::{parse_prologue, Event, Output, Protocol};
++use protocol::{encode_prologue, parse_prologue, Event, Output, Protocol};
+ use std::collections::{BTreeMap, VecDeque};
+ use std::ffi::{CStr, CString};
+ use std::fs::{File, OpenOptions};
+@@ -31,6 +31,10 @@ const DEFAULT_CHPP: &str = "/dev/gnss0";
+ const DEFAULT_DUMP: &str = "/dev/gnss_dump0";
+ const DEFAULT_SOCKET: &str = "/run/gnss-share.sock";
+ const DEFAULT_PROLOGUE: &str = "/etc/kepler-gnssd/session-prologue.bin";
++/// Where the session-open batch that last produced a fix is kept.  State the
++/// daemon writes about this board, not configuration someone installs, so it
++/// lives under /var/lib rather than /etc.
++const DEFAULT_SESSION_CACHE: &str = "/var/lib/kepler-gnssd/session-open.bin";
+ const DEFAULT_GROUP: &str = "geoclue";
+ /// gpsd drops privileges to nobody:dialout, and grantpt leaves a slave owned
+ /// by root alone, so a device it cannot open is no use to it.
+@@ -50,6 +54,13 @@ Options:
+       --dump-device PATH     SHMIPC diagnostic device (default: /dev/gnss_dump0)
+       --prologue PATH        Board session profile (default:
+                              /etc/kepler-gnssd/session-prologue.bin)
++      --session-cache PATH   Where to keep the session-open batch that last
++                             produced a fix, and replay it on later runs
++                             (default: /var/lib/kepler-gnssd/session-open.bin).
++                             Written only once a session has actually fixed, so
++                             a batch that does not work is never persisted
++      --no-session-cache     Always open with the batch compiled in, and do not
++                             record one
+       --socket PATH          NMEA stream socket (default: /run/gnss-share.sock)
+       --socket-group GROUP   Socket group (default: geoclue)
+       --no-socket-group      Keep the daemon's effective group
+@@ -81,6 +92,7 @@ struct Args {
+     chpp: PathBuf,
+     dump: PathBuf,
+     prologue: PathBuf,
++    session_cache: Option<PathBuf>,
+     socket: PathBuf,
+     socket_group: Option<String>,
+     socket_mode: u32,
+@@ -102,6 +114,7 @@ fn parse_args() -> Result<Args, String> {
+         chpp: DEFAULT_CHPP.into(),
+         dump: DEFAULT_DUMP.into(),
+         prologue: DEFAULT_PROLOGUE.into(),
++        session_cache: Some(DEFAULT_SESSION_CACHE.into()),
+         socket: DEFAULT_SOCKET.into(),
+         socket_group: Some(DEFAULT_GROUP.into()),
+         socket_mode: 0o660,
+@@ -121,6 +134,10 @@ fn parse_args() -> Result<Args, String> {
+             Long("device") => args.chpp = parser.value().map_err(|e| e.to_string())?.into(),
+             Long("dump-device") => args.dump = parser.value().map_err(|e| e.to_string())?.into(),
+             Long("prologue") => args.prologue = parser.value().map_err(|e| e.to_string())?.into(),
++            Long("session-cache") => {
++                args.session_cache = Some(parser.value().map_err(|e| e.to_string())?.into())
++            }
++            Long("no-session-cache") => args.session_cache = None,
+             Long("socket") => args.socket = parser.value().map_err(|e| e.to_string())?.into(),
+             Long("socket-group") => {
+                 args.socket_group = Some(
+@@ -473,6 +490,44 @@ fn write_chpp(dev: &mut File, writes: Vec<Vec<u8>>) -> io::Result<()> {
+     Ok(())
+ }
+ 
++/// Keep the session-open batch that just produced a fix, so the next run opens
++/// with what is known to work on this board rather than the table compiled in.
++///
++/// Written through a temporary and renamed, so a run that dies mid-write
++/// cannot leave a half-written batch behind. Failures are reported and
++/// otherwise ignored: a cache that cannot be written costs nothing but the
++/// bootstrap, and is no reason to stop serving positions.
++fn save_session_cache(path: &Path, records: &[protocol::PrologueRecord]) {
++    if records.is_empty() {
++        return;
++    }
++    let encoded = encode_prologue(records);
++    if let Ok(existing) = std::fs::read(path) {
++        if existing == encoded {
++            return;
++        }
++    }
++    if let Some(dir) = path.parent() {
++        if let Err(e) = std::fs::create_dir_all(dir) {
++            eprintln!("kepler-gnssd: session cache {}: {e}", dir.display());
++            return;
++        }
++    }
++    let tmp = path.with_extension("tmp");
++    let write = std::fs::write(&tmp, &encoded).and_then(|()| std::fs::rename(&tmp, path));
++    match write {
++        Ok(()) => eprintln!(
++            "kepler-gnssd: recorded {} session-open records to {}",
++            records.len(),
++            path.display()
++        ),
++        Err(e) => {
++            let _ = std::fs::remove_file(&tmp);
++            eprintln!("kepler-gnssd: session cache {}: {e}", path.display());
++        }
++    }
++}
++
+ fn handle_output(
+     output: Output,
+     dev: &mut File,
+@@ -764,10 +819,18 @@ fn run_loop(
+     let mut sensors: Option<mems::Mems> = None;
+     let mut mems_failed = false;
+     let mut mems_sent: u64 = 0;
++    let mut cache_saved = false;
+     while !STOP.load(Ordering::Acquire) {
+         dump_drain.check()?;
+         let now = Instant::now();
+         handle_output(protocol.tick(now), chpp, peers, args.verbose)?;
++        // A fix proves the batch this session opened with. Keep it once.
++        if !cache_saved && protocol.has_fixed() {
++            if let Some(path) = args.session_cache.as_deref() {
++                save_session_cache(path, protocol.session_open_used());
++            }
++            cache_saved = true;
++        }
+         if args.mems {
+             if sensors.is_none() && !mems_failed && protocol.is_streaming() {
+                 match mems::Mems::open(args.mems_hz, mems::boottime_ns()) {
+@@ -934,6 +997,19 @@ fn run(args: Args) -> io::Result<()> {
+         }
+         Err(e) => return Err(e),
+     };
++    /*
++     * The session-open batch a previous run proved on this board.  Absent on a
++     * fresh install, in which case the batch compiled in opens the session and
++     * -- if that session fixes -- gets written here for next time.
++     */
++    let session_open = match args.session_cache.as_ref().map(std::fs::read) {
++        Some(Ok(raw)) => parse_prologue(&raw).unwrap_or_else(|e| {
++            eprintln!("kepler-gnssd: ignoring unreadable session cache: {e}");
++            Vec::new()
++        }),
++        _ => Vec::new(),
++    };
++
+     let (listener, _socket_guard) = bind_socket(&args)?;
+     let mut pty_guard = None;
+     let mut initial_peers: Vec<Peer> = Vec::new();
+@@ -965,7 +1041,14 @@ fn run(args: Args) -> io::Result<()> {
+             args.prologue.display().to_string()
+         }
+     );
+-    let mut protocol = Protocol::new(prologue, args.interval_ms);
++    if !session_open.is_empty() {
++        eprintln!(
++            "kepler-gnssd: opening with the {} cached session-open records",
++            session_open.len()
++        );
++    }
++    let mut protocol =
++        Protocol::with_session_open(prologue, session_open, args.interval_ms);
+     let mut chpp_decoder = ChppDecoder::new();
+     let mut peers: Vec<Peer> = initial_peers;
+     handle_output(protocol.begin(), &mut chpp, &mut peers, args.verbose)?;
+diff --git a/crates/kepler-gnssd/src/protocol.rs b/crates/kepler-gnssd/src/protocol.rs
+index 5697c6b..813b424 100644
+--- a/crates/kepler-gnssd/src/protocol.rs
++++ b/crates/kepler-gnssd/src/protocol.rs
+@@ -10,7 +10,7 @@
+ use gnss_betp::link::{self, Action, Link, State};
+ use gnss_betp::{
+     app_header, app_request, betp_encode_tx, betp_records, chpp_frames, pos_req_bytes,
+-    session_open_batch, ChppOwnedFrame, Geodetic, BETP_CMD_RX, BETP_HANDLE,
++    session_open_records, ChppOwnedFrame, Geodetic, BETP_CMD_RX, BETP_HANDLE,
+     CHPP_DISCOVERY_DISCOVER_ALL, CHPP_HANDLE_DISCOVERY, CHPP_HANDLE_TIMESYNC, CHPP_SERVICE_OPEN,
+     CHPP_TIMESYNC_GET_TIME, MIDSID_GEODETIC, MIDSID_POS_REQ,
+ };
+@@ -23,6 +23,19 @@ pub struct PrologueRecord {
+     pub data: Vec<u8>,
+ }
+ 
++/// Serialise records back into the same framing `parse_prologue` reads, so a
++/// session that worked can be written out and replayed later.
++pub fn encode_prologue(records: &[PrologueRecord]) -> Vec<u8> {
++    let mut out = Vec::new();
++    for r in records {
++        out.extend_from_slice(&r.midsid.to_le_bytes());
++        out.extend_from_slice(&r.proto.to_le_bytes());
++        out.extend_from_slice(&(r.data.len() as u16).to_le_bytes());
++        out.extend_from_slice(&r.data);
++    }
++    out
++}
++
+ /// Parse the board profile's captured prologue:
+ /// `midsid u16le, proto u16le, length u16le, body`.
+ pub fn parse_prologue(raw: &[u8]) -> Result<Vec<PrologueRecord>, String> {
+@@ -113,6 +126,14 @@ pub struct Protocol {
+     link: Link,
+     phase: Phase,
+     prologue: Vec<PrologueRecord>,
++    /// The session-open batch to use. Empty means the table compiled into
++    /// gnss-betp; otherwise a set a previous session proved on this board.
++    session_open: Vec<PrologueRecord>,
++    /// What the live session actually sent, for the cache to persist.
++    session_open_used: Vec<PrologueRecord>,
++    /// Whether this session has produced a position. Only then is the batch
++    /// above worth keeping.
++    fixed_once: bool,
+     due: Option<Instant>,
+     wanted: bool,
+     streaming: bool,
+@@ -122,11 +143,18 @@ pub struct Protocol {
+ }
+ 
+ impl Protocol {
+-    pub fn new(prologue: Vec<PrologueRecord>, interval_ms: u32) -> Self {
++    pub fn with_session_open(
++        prologue: Vec<PrologueRecord>,
++        session_open: Vec<PrologueRecord>,
++        interval_ms: u32,
++    ) -> Self {
+         Self {
+             link: Link::new(),
+             phase: Phase::LinkReset,
+             prologue,
++            session_open,
++            session_open_used: Vec::new(),
++            fixed_once: false,
+             due: None,
+             wanted: false,
+             streaming: false,
+@@ -274,6 +302,17 @@ impl Protocol {
+         out
+     }
+ 
++    /// Whether a position has been decoded in this session.
++    pub fn has_fixed(&self) -> bool {
++        self.fixed_once
++    }
++
++    /// The session-open batch this session sent, once navigation has started.
++    /// Empty before that. The caller persists it after a fix.
++    pub fn session_open_used(&self) -> &[PrologueRecord] {
++        &self.session_open_used
++    }
++
+     /// Best-effort navigation stop used for the last subscriber and shutdown.
+     pub fn stop(&mut self, now: Instant) -> Output {
+         self.wanted = false;
+@@ -318,7 +357,42 @@ impl Protocol {
+                 let pos = pos_req_bytes(self.interval_ms);
+                 betp_encode_tx(&[(MIDSID_POS_REQ, 2, &pos)])
+             } else {
+-                session_open_batch(self.interval_ms)
++                /*
++                 * Opening a session: send the batch a previous session proved
++                 * on this board if one was handed to us, otherwise the table
++                 * compiled in. POS_REQ carries the live period either way, so
++                 * a cached batch does not pin the rate it was recorded at.
++                 * Keep what went out, so a fix can persist it.
++                 */
++                let records: Vec<(u16, u16, Vec<u8>)> = if self.session_open.is_empty() {
++                    session_open_records(self.interval_ms)
++                } else {
++                    let pos = pos_req_bytes(self.interval_ms);
++                    self.session_open
++                        .iter()
++                        .map(|r| {
++                            let data = if r.midsid == MIDSID_POS_REQ {
++                                pos.to_vec()
++                            } else {
++                                r.data.clone()
++                            };
++                            (r.midsid, r.proto, data)
++                        })
++                        .collect()
++                };
++                self.session_open_used = records
++                    .iter()
++                    .map(|(midsid, proto, data)| PrologueRecord {
++                        midsid: *midsid,
++                        proto: *proto,
++                        data: data.clone(),
++                    })
++                    .collect();
++                let batch: Vec<(u16, u16, &[u8])> = records
++                    .iter()
++                    .map(|(m, p, d)| (*m, *p, d.as_slice()))
++                    .collect();
++                betp_encode_tx(&batch)
+             };
+             if let Some(bytes) = self.send_app(datagram) {
+                 self.started_once = true;
+@@ -390,6 +464,7 @@ impl Protocol {
+             for record in betp_records(inner) {
+                 if record.midsid == MIDSID_GEODETIC {
+                     if let Some(position) = Geodetic::parse(record.data) {
++                        self.fixed_once = true;
+                         out.events.push(Event::Position(position));
+                     }
+                 }
+@@ -451,6 +526,74 @@ mod tests {
+         (app, inner.to_vec())
+     }
+ 
++    #[test]
++    fn a_cached_batch_opens_the_session_and_carries_the_live_period() {
++        // What a previous run recorded, with a stale period baked into POS_REQ.
++        let cached = vec![
++            PrologueRecord {
++                midsid: 0xff84,
++                proto: 2,
++                data: vec![0x00],
++            },
++            PrologueRecord {
++                midsid: MIDSID_POS_REQ,
++                proto: 2,
++                data: pos_req_bytes(9999).to_vec(),
++            },
++        ];
++        let now = Instant::now();
++        let mut p = Protocol::with_session_open(Vec::new(), cached.clone(), 1000);
++        p.set_wanted(true, now);
++        p.begin();
++        p.on_frame(&owned(0, 1, link::ATTR_RESET_ACK, vec![]), now);
++        for seq in 1..=2 {
++            p.on_frame(
++                &owned(
++                    seq,
++                    seq + 1,
++                    0,
++                    response(CHPP_HANDLE_DISCOVERY, CHPP_DISCOVERY_DISCOVER_ALL),
++                ),
++                now,
++            );
++        }
++        p.on_frame(
++            &owned(
++                3,
++                4,
++                0,
++                response(CHPP_HANDLE_TIMESYNC, CHPP_TIMESYNC_GET_TIME),
++            ),
++            now,
++        );
++        p.on_frame(&owned(4, 5, 0, response(BETP_HANDLE, CHPP_SERVICE_OPEN)), now);
++
++        let sent = p.session_open_used();
++        assert!(!sent.is_empty(), "the session should have opened");
++        assert_eq!(
++            sent.iter().map(|r| r.midsid).collect::<Vec<_>>(),
++            cached.iter().map(|r| r.midsid).collect::<Vec<_>>(),
++            "the cached records are what gets sent, not the built-in table"
++        );
++        let pos = sent.iter().find(|r| r.midsid == MIDSID_POS_REQ).unwrap();
++        assert_eq!(
++            pos.data,
++            pos_req_bytes(1000).to_vec(),
++            "POS_REQ must carry the live period, not the recorded one"
++        );
++        assert!(
++            !p.has_fixed(),
++            "nothing is worth caching until a position arrives"
++        );
++    }
++
++    #[test]
++    fn an_encoded_batch_reads_back_identically() {
++        let records = prologue();
++        assert_eq!(parse_prologue(&encode_prologue(&records)).unwrap(), records);
++        assert!(encode_prologue(&[]).is_empty());
++    }
++
+     #[test]
+     fn parser_round_trips_a_profile_and_rejects_a_malformed_one() {
+         let mut raw = Vec::new();
+@@ -495,7 +638,7 @@ mod tests {
+     #[test]
+     fn setup_error_responses_do_not_advance_the_session() {
+         let now = Instant::now();
+-        let mut protocol = Protocol::new(prologue(), 1_000);
++        let mut protocol = Protocol::with_session_open(prologue(), Vec::new(), 1_000);
+         let mut out = Output::default();
+ 
+         protocol.phase = Phase::Discovery {
+@@ -523,7 +666,7 @@ mod tests {
+     #[test]
+     fn setup_then_first_last_and_next_subscriber_use_the_right_messages() {
+         let now = Instant::now();
+-        let mut protocol = Protocol::new(prologue(), 1_000);
++        let mut protocol = Protocol::with_session_open(prologue(), Vec::new(), 1_000);
+         let begin = protocol.begin();
+         assert_eq!(
+             link::attr(chpp_frames(&begin.writes[0]).next().unwrap().packet_code),
+@@ -627,7 +770,7 @@ mod tests {
+ 
+     #[test]
+     fn receiver_reset_clears_application_state_but_keeps_demand() {
+-        let mut protocol = Protocol::new(prologue(), 1_000);
++        let mut protocol = Protocol::with_session_open(prologue(), Vec::new(), 1_000);
+         protocol.wanted = true;
+         protocol.streaming = true;
+         protocol.started_once = true;

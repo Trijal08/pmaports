@@ -1,0 +1,162 @@
+diff -ruN -x target -x .cargo exynos-modem.before/crates/samsung-sit/src/call.rs exynos-modem/crates/samsung-sit/src/call.rs
+--- exynos-modem.before/crates/samsung-sit/src/call.rs	2026-09-09 04:18:39.000000000 -0400
++++ exynos-modem/crates/samsung-sit/src/call.rs	2026-10-07 19:50:06.620094192 -0400
+@@ -111,6 +111,56 @@
+     frame_header(msg_id::HANGUP, token, &body)
+ }
+ 
++/// The `DTMF` digit field is a fixed 64-byte slot (frame 0x0d..0x4d), and the
++/// builder clamps the count to it.
++const DTMF_CAP: usize = 64;
++
++/// The sixteen keys a DTMF keypad can send: RFC 4733's digits, letters and the
++/// two symbols. The CP has no encoding for anything else.
++fn is_dtmf_digit(digit: char) -> bool {
++    digit.is_ascii_digit() || matches!(digit, 'A'..='D' | '*' | '#')
++}
++
++/// Build a `DTMF` (0x0003) request: 77 bytes.
++///
++/// This is the self-timed burst form -- it carries the whole run of digits and
++/// the CP times each tone itself, so there is no release to pair with it.
++///
++/// Layout from `ProtocolCallBuilder::BuildDtmf(int, char *)`, which calls
++/// `InitRequestHeader(..., 3, 77)` and then writes `min(count, 64)` as one byte
++/// at frame 0x0c before copying the digits to frame 0x0d. Digits go on the wire
++/// as their ASCII characters -- the vendor's parameter is a `char *` -- so '2'
++/// is 0x32, not 2.
++///
++/// The other two ids in this group are deliberately not built. `DTMF_START`
++/// (0x0005, 15 bytes) is `ProtocolCallBuilder::BuildDtmfStart(bool, unsigned
++/// short)`, which writes that bool at frame 0x0c, a constant 1 at 0x0d and the
++/// digit at 0x0e; nothing in any library we have calls it, so what the bool
++/// selects is unknown and guessing it would put an undefined byte on the wire.
++/// `DTMF_STOP` (0x0006) is header-only and would be meaningless after a burst
++/// that is already finished.
++pub fn build_dtmf(token: u16, digits: &str) -> Result<Vec<u8>, SitError> {
++    if digits.is_empty() {
++        return Err(SitError::Malformed("DTMF with no digits"));
++    }
++    if digits.len() > DTMF_CAP {
++        return Err(SitError::ArgTooLong("DTMF digits"));
++    }
++
++    let mut body = [0u8; 4 + 1 + DTMF_CAP];
++    let mut n = 0;
++    for d in digits.chars() {
++        let d = d.to_ascii_uppercase();
++        if !is_dtmf_digit(d) {
++            return Err(SitError::Malformed("not a DTMF digit"));
++        }
++        body[5 + n] = d as u8; // frame 0x0d onwards
++        n += 1;
++    }
++    body[4] = n as u8; // frame 0x0c
++    Ok(frame_header(msg_id::DTMF, token, &body))
++}
++
+ /// Build a `GET_CALL_LIST` (0x0000) request: header + reserved word, 12 bytes.
+ pub fn build_get_call_list(token: u16) -> Vec<u8> {
+     frame_header(msg_id::GET_CALL_LIST, token, &[0u8; 4])
+@@ -155,6 +205,26 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    /// A burst is 77 bytes with an ASCII digit field; the bug worth guarding is
++    /// sending 2 where the CP wants '2'.
++    #[test]
++    fn dtmf_is_a_counted_ascii_burst() {
++        let f = build_dtmf(1, "2012").unwrap();
++        assert_eq!(f.len(), 77);
++        assert_eq!(f[12], 4); // count
++        assert_eq!(&f[13..17], b"2012");
++        assert!(f[17..].iter().all(|&b| b == 0));
++
++        // Letter keys are the same keys either way.
++        let f = build_dtmf(1, "b#").unwrap();
++        assert_eq!(f[12], 2);
++        assert_eq!(&f[13..15], b"B#");
++
++        assert!(build_dtmf(1, "").is_err());
++        assert!(build_dtmf(1, &"9".repeat(65)).is_err());
++        assert!(build_dtmf(1, "1e3").is_err());
++    }
+     use crate::msg_type;
+ 
+     // Synthetic numbers only -- these tests pin wire *structure*, never PII.
+diff -ruN -x target -x .cargo exynos-modem.before/crates/samsung-sit/src/lib.rs exynos-modem/crates/samsung-sit/src/lib.rs
+--- exynos-modem.before/crates/samsung-sit/src/lib.rs	2026-10-07 19:49:49.796476303 -0400
++++ exynos-modem/crates/samsung-sit/src/lib.rs	2026-10-07 19:50:06.616996719 -0400
+@@ -49,7 +49,8 @@
+     PdpType, DEVICE_INFO_FIELD,
+ };
+ pub use call::{
+-    build_answer, build_dial, build_get_call_list, build_hangup, parse_call_list, Call, CallState,
++    build_answer, build_dial, build_dtmf, build_get_call_list, build_hangup, parse_call_list,
++    Call, CallState,
+ };
+ pub use cell_info::{
+     parse_cell_info, parse_cell_info_list, parse_cell_info_nr_list, CellInfoGsm, CellInfoList,
+@@ -130,7 +131,10 @@
+     pub const GET_CALL_LIST: u16 = 0x0000;
+     pub const DIAL: u16 = 0x0001;
+     pub const LAST_CALL_FAIL_CAUSE: u16 = 0x0002;
++    pub const DTMF: u16 = 0x0003;
+     pub const ANSWER: u16 = 0x0004;
++    pub const DTMF_START: u16 = 0x0005;
++    pub const DTMF_STOP: u16 = 0x0006;
+     pub const HANGUP: u16 = 0x0008;
+     pub const CALL_STATE_CHANGED: u16 = 0x0009;
+     pub const SEND_SMS: u16 = 0x0100;
+diff -ruN -x target -x .cargo exynos-modem.before/crates/samsung-sit-ffi/include/samsung_sit_ffi.h exynos-modem/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- exynos-modem.before/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-10-07 19:49:49.808576306 -0400
++++ exynos-modem/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-10-07 19:50:12.976513624 -0400
+@@ -1097,6 +1097,18 @@
+ SamsungSitStatus samsung_sit_build_answer(uint16_t token, uint8_t **out, size_t *out_len);
+ 
+ /*
++ Build a `DTMF` (0x0003) request carrying a run of keypad digits.
++
++ The self-timed burst form: the CP times each tone itself, so there is no
++ release to pair with it. `digits` are the keys' ASCII characters -- pass
++ "2012", not the values -- and at most 64 of them.
++ */
++SamsungSitStatus samsung_sit_build_dtmf(uint16_t token,
++                                        const char *digits,
++                                        uint8_t **out,
++                                        size_t *out_len);
++
++/*
+  Build a `HANGUP` (0x0008) request for one call id.
+  */
+ SamsungSitStatus samsung_sit_build_hangup(uint16_t token,
+diff -ruN -x target -x .cargo exynos-modem.before/crates/samsung-sit-ffi/src/builders.rs exynos-modem/crates/samsung-sit-ffi/src/builders.rs
+--- exynos-modem.before/crates/samsung-sit-ffi/src/builders.rs	2026-09-09 04:18:39.000000000 -0400
++++ exynos-modem/crates/samsung-sit-ffi/src/builders.rs	2026-10-07 19:50:06.620149813 -0400
+@@ -507,6 +507,25 @@
+     emit_bytes(sit::build_answer(token), out, out_len)
+ }
+ 
++/// Build a `DTMF` (0x0003) request carrying a run of keypad digits.
++///
++/// The self-timed burst form: the CP times each tone itself, so there is no
++/// release to pair with it. `digits` are the keys' ASCII characters -- pass
++/// "2012", not the values -- and at most 64 of them.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_build_dtmf(
++    token: u16,
++    digits: *const c_char,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let digits = match cstr(digits) {
++        Ok(s) => s,
++        Err(s) => return s,
++    };
++    emit_result(sit::build_dtmf(token, digits), out, out_len)
++}
++
+ /// Build a `HANGUP` (0x0008) request for one call id.
+ #[no_mangle]
+ pub unsafe extern "C" fn samsung_sit_build_hangup(

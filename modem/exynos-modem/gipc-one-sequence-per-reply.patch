@@ -1,0 +1,101 @@
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -151,10 +151,17 @@
+     /// arrives as 1, not UECAP_PATH=3, over this channel); the filename is
+     /// whitelisted to uecap `.binarypb` regardless.
+     ///
+-    /// ponytail: response wrapping is inferred, not captured -- bare
+-    /// UecapFileReadResponse in the payload, sequence incrementing per block
+-    /// from the request's. If the CP keeps retrying, the alternatives to try
+-    /// are a UecapFileMessage wrapper and/or a fixed sequence.
++    /// Every block of one reply carries the **request's** sequence, unchanged.
++    ///
++    /// Captured from stock answering a multi-block read: all 31 blocks of
++    /// lte_2160127815.binarypb go out with sequence 6, the sequence of the
++    /// request they answer. Incrementing per block -- which this did -- walks
++    /// into the sequence numbers the CP's *next* requests will use, so a reply
++    /// cannot be matched to the request that asked for it, and the CP asks
++    /// again. That is the whole re-read storm: 68 reads of
++    /// ap_plmn_mapping.binarypb in 413s against stock's one, with the frame
++    /// size, the payload shape, the block size, the closing envelope and the
++    /// file's own bytes all already byte-identical to stock.
+     fn serve_uecap_file(&self, req: &GipcMessage) -> Vec<Vec<u8>> {
+         let payload = req.payload.as_deref().unwrap_or(&[]);
+         let rr = match UecapFileReadRequest::decode(payload) {
+@@ -182,10 +189,8 @@
+         // returns, pace the serve instead of resizing the block.
+         let block = (rr.block_size as usize).max(1);
+         let n = data.len();
+-        let base = req.sequence.unwrap_or(0);
+         let mut frames = Vec::new();
+         let mut offset = 0usize;
+-        let mut i = 0u32;
+         loop {
+             let remaining = n - offset;
+             let len = remaining.min(block);
+@@ -197,12 +202,11 @@
+                     service: req.service,
+                     method: req.method,
+                     payload: Some(uecap_read_payload(&data[offset..offset + len])),
+-                    sequence: Some(base.wrapping_add(i)),
++                    sequence: req.sequence,
+                 }
+                 .encode_to_vec(),
+             );
+             offset += len;
+-            i += 1;
+             if last {
+                 break;
+             }
+@@ -441,6 +445,51 @@
+         assert_eq!(p, vec![0x0a, 0x03, 1, 2, 3]);
+     }
+ 
++    /// Every block of one reply carries the request's sequence, and the reply
++    /// ends with a bare envelope on the same sequence. Stock sends all 31
++    /// blocks of its multi-block read with sequence 6; incrementing per block
++    /// walks into the sequences the CP's next requests use, and the CP then
++    /// re-asks for ever.
++    #[test]
++    fn every_block_carries_the_requests_sequence() {
++        let dir = std::env::temp_dir().join(format!("gipc-seq-{}", std::process::id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        let name = "seqtest.binarypb";
++        std::fs::write(dir.join(name), vec![7u8; 9000]).unwrap();
++
++        let req = GipcMessage {
++            r#type: Some(TYPE_REQUEST),
++            endpoint: Some(132),
++            service: Some(SVC_UECAP_FILE),
++            method: Some(0x5b78_66da),
++            payload: Some(
++                UecapFileReadRequest {
++                    size: 20000,
++                    block_size: 4000,
++                    file_dir: 1,
++                    file_name: name.to_string(),
++                }
++                .encode_to_vec(),
++            ),
++            sequence: Some(6),
++        };
++        let out = Gipc::new(dir.clone(), false).serve_uecap_file(&req);
++        std::fs::remove_dir_all(&dir).ok();
++
++        /* 9000 bytes at 4000 per block is 3 blocks, plus the closing envelope. */
++        assert_eq!(out.len(), 4);
++        for (n, frame) in out.iter().enumerate() {
++            let m = GipcMessage::decode(frame.as_slice()).unwrap();
++            assert_eq!(m.sequence, Some(6), "frame {} changed the sequence", n);
++            assert_eq!(m.service, Some(SVC_UECAP_FILE));
++        }
++        /* The first three carry data; the last closes with no payload. */
++        for frame in &out[..3] {
++            assert!(GipcMessage::decode(frame.as_slice()).unwrap().payload.is_some());
++        }
++        assert!(GipcMessage::decode(out[3].as_slice()).unwrap().payload.is_none());
++    }
++
+     #[test]
+     fn garbage_is_dropped_not_answered() {
+         assert!(Gipc::new(PathBuf::from("/nonexistent"), false)

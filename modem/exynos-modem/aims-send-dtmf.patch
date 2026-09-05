@@ -1,0 +1,151 @@
+diff -ruN exynos-modem.before/crates/samsung-aims/src/call.rs exynos-modem/crates/samsung-aims/src/call.rs
+--- exynos-modem.before/crates/samsung-aims/src/call.rs	2026-09-09 04:18:39.000000000 -0400
++++ exynos-modem/crates/samsung-aims/src/call.rs	2026-10-06 19:27:23.698426565 -0400
+@@ -140,6 +140,56 @@
+     )
+ }
+ 
++/// Which half of a key press `SEND_DTMF` carries, in the CP's own numbering.
++///
++/// `ImsCall` picks between them: `sendDtmf` sends [`DtmfType::Burst`] and lets
++/// the CP time the tone, while the dialler's key handler sends
++/// [`DtmfType::Start`] on key-down and [`DtmfType::Stop`] on key-up. The
++/// captured call uses the second pair, about 60 ms apart.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[repr(u8)]
++pub enum DtmfType {
++    /// One complete tone, the CP choosing how long to hold it.
++    Burst = 0,
++    /// Key down. The tone runs until a [`DtmfType::Stop`] arrives.
++    Start = 1,
++    /// Key up.
++    Stop = 2,
++}
++
++/// The sixteen keys a DTMF keypad can send: RFC 4733's digits, letters and
++/// the two symbols. Anything else is not a tone and the CP has no encoding
++/// for it.
++fn is_dtmf_digit(digit: char) -> bool {
++    digit.is_ascii_digit() || matches!(digit, 'A'..='D' | '*' | '#')
++}
++
++/// `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
++///
++/// Layout from `RilReqSendDtmf.getBytes()` in `ShannonIms.apk`: call id, type
++/// and digit, one byte each. The digit field is a Java `char` written with
++/// `writeByte`, so it goes out as its *ASCII* value -- `'2'` is 0x32, not 2.
++/// The captured call confirms it: the keys typed into a voicemail prompt were
++/// logged as their characters, and the prompt acted on them.
++pub fn build_send_dtmf(
++    token: u16,
++    call_id: u8,
++    kind: DtmfType,
++    digit: char,
++) -> Result<Vec<u8>, SitError> {
++    // A/B/C/D are the same keys either way, and the interface above does not
++    // normalise them.
++    let digit = digit.to_ascii_uppercase();
++    if !is_dtmf_digit(digit) {
++        return Err(SitError::Malformed("not a DTMF digit"));
++    }
++    Ok(frame(
++        msg_id::SEND_DTMF,
++        token,
++        &[call_id, kind as u8, digit as u8],
++    ))
++}
++
+ /// An incoming call, from `CALL_RING` (0x0d01).
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct CallRing {
+@@ -310,6 +360,27 @@
+         assert!(build_dial(1, &"9".repeat(514), Clir::default()).is_err());
+     }
+ 
++    /// A key press is three bytes, and the digit is ASCII -- the bug worth
++    /// guarding is sending 2 where the CP wants '2'.
++    #[test]
++    fn dtmf_sends_the_digit_as_ascii() {
++        let f = build_send_dtmf(7, 0, DtmfType::Start, '2').unwrap();
++        assert_eq!(f.len(), 15);
++        assert_eq!(&f[12..], &[0x00, 0x01, 0x32]);
++
++        // Key up carries the same digit, so the CP knows which tone ended.
++        let f = build_send_dtmf(8, 3, DtmfType::Stop, '#').unwrap();
++        assert_eq!(&f[12..], &[0x03, 0x02, b'#']);
++
++        // Lower-case letter keys are the same keys.
++        let f = build_send_dtmf(9, 0, DtmfType::Burst, 'b').unwrap();
++        assert_eq!(&f[12..], &[0x00, 0x00, b'B']);
++
++        for bad in ['e', ' ', '+', 'Z'] {
++            assert!(build_send_dtmf(1, 0, DtmfType::Start, bad).is_err());
++        }
++    }
++
+     /// Answer and hang up are the two small ones, and both were captured whole.
+     #[test]
+     fn answer_and_hangup_match_the_captured_frames() {
+diff -ruN exynos-modem.before/crates/samsung-sit-ffi/include/samsung_sit_ffi.h exynos-modem/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- exynos-modem.before/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-10-06 19:26:46.196026122 -0400
++++ exynos-modem/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-10-06 19:27:23.698546516 -0400
+@@ -833,6 +833,20 @@
+                                            size_t *out_len);
+ 
+ /*
++ `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
++
++ `kind` is 0 for one self-timed tone, 1 for key down and 2 for key up.
++ `digit` is the key's ASCII character, not its value: pass `'2'`, not 2.
++ Both are rejected rather than guessed at when out of range.
++ */
++SamsungSitStatus samsung_aims_build_send_dtmf(uint16_t token,
++                                              uint8_t call_id,
++                                              uint8_t kind,
++                                              uint8_t digit,
++                                              uint8_t **out,
++                                              size_t *out_len);
++
++/*
+  `MEDIA_STATE_IND` (0x0d30) -- tell the CP what a call's media is doing.
+ 
+  An indication, not a request: the CP sends no response, and it dispatches
+diff -ruN exynos-modem.before/crates/samsung-sit-ffi/src/aims.rs exynos-modem/crates/samsung-sit-ffi/src/aims.rs
+--- exynos-modem.before/crates/samsung-sit-ffi/src/aims.rs	2026-10-06 19:26:46.196067262 -0400
++++ exynos-modem/crates/samsung-sit-ffi/src/aims.rs	2026-10-06 19:27:23.698475666 -0400
+@@ -396,6 +396,35 @@
+     )
+ }
+ 
++/// `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
++///
++/// `kind` is 0 for one self-timed tone, 1 for key down and 2 for key up.
++/// `digit` is the key's ASCII character, not its value: pass `'2'`, not 2.
++/// Both are rejected rather than guessed at when out of range.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_send_dtmf(
++    token: u16,
++    call_id: u8,
++    kind: u8,
++    digit: u8,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    use aims::call::DtmfType;
++
++    let kind = match kind {
++        0 => DtmfType::Burst,
++        1 => DtmfType::Start,
++        2 => DtmfType::Stop,
++        _ => return status_from_err(&SitError::Malformed("dtmf type")),
++    };
++    emit_result(
++        aims::call::build_send_dtmf(token, call_id, kind, digit as char),
++        out,
++        out_len,
++    )
++}
++
+ /// `MEDIA_STATE_IND` (0x0d30) -- tell the CP what a call's media is doing.
+ ///
+ /// An indication, not a request: the CP sends no response, and it dispatches
