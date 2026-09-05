@@ -1,0 +1,754 @@
+diff --git a/crates/gnss-betp/examples/chpp_probe.rs b/crates/gnss-betp/examples/chpp_probe.rs
+index 8a9c594..4f80a98 100644
+--- a/crates/gnss-betp/examples/chpp_probe.rs
++++ b/crates/gnss-betp/examples/chpp_probe.rs
+@@ -224,12 +224,14 @@ fn load_stock_prologue(path: &str) -> Vec<ReplayRecord> {
+     {
+         records.remove(5);
+     }
+-    let ids: Vec<_> = records.iter().map(|r| r.midsid).collect();
+-    assert_eq!(
+-        ids,
+-        [0x00e4, 0x0edd, 0x08ad, 0x0d46, 0x7304, 0x09d3],
+-        "prologue is not the captured six-record stock sequence"
+-    );
++    // Which records a board sends is board data, not protocol: a Tegu sends
++    // 00e4 0edd 08ad 0d46 7304 09d3, a komodo sends 00e4 08ad 7304 0d46 17d3.
++    // Report what the file holds and replay it.
++    let ids: Vec<String> = records
++        .iter()
++        .map(|r| format!("{:#06x}", r.midsid))
++        .collect();
++    eprintln!("prologue: {} records {}", records.len(), ids.join(" "));
+     records
+ }
+ 
+@@ -484,16 +486,13 @@ fn main() {
+             let due = replay_due.get_or_insert(now);
+             if now >= *due {
+                 if let Some(records) = &replay {
+-                    const STEPS: [(usize, usize, u64); 5] = [
+-                        (0, 1, 189),  // 0x00e4
+-                        (1, 3, 63),   // 0x0edd + 0x08ad, one batch
+-                        (3, 4, 3857), // 0x0d46
+-                        (4, 5, 9863), // 0x7304
+-                        // Stock waited about 75 s here while other work ran.
+-                        // 750 ms is intentionally shortened for the probe.
+-                        (5, 6, 750),
+-                    ];
+-                    if let Some(&(first, end, delay_ms)) = STEPS.get(replay_step) {
++                    // One record per datagram, however many the board has:
++                    // the Tegu batching this used to hardcode indexed past a
++                    // komodo profile, which has five records rather than six.
++                    const REPLAY_GAP_MS: u64 = 250;
++                    if replay_step < records.len() {
++                        let (first, end, delay_ms) =
++                            (replay_step, replay_step + 1, REPLAY_GAP_MS);
+                         let batch: Vec<_> = records[first..end]
+                             .iter()
+                             .map(|r| (r.midsid, r.proto, r.data.as_slice()))
+diff --git a/crates/gnss-betp/examples/extract_prologue.rs b/crates/gnss-betp/examples/extract_prologue.rs
+new file mode 100644
+index 0000000..a06cebe
+--- /dev/null
++++ b/crates/gnss-betp/examples/extract_prologue.rs
+@@ -0,0 +1,98 @@
++//! Build a `session-prologue.bin` out of a `/proc/gnssdump` capture.
++//!
++//! The board profile `kepler-gnssd` replays is the six BETP records the stock
++//! daemon sends host->device once the BETP service opens. Nothing on the vendor
++//! partition holds them -- `gnssd` rebuilds them from `/vendor/etc/gnss/gps.cfg`
++//! at every session open -- so the only way to obtain a board's own set is to
++//! capture one stock session and pull them out.
++//!
++//!   extract_prologue gnssdump.bin > /etc/kepler-gnssd/session-prologue.bin
++//!
++//! The capture's records are the /proc/sitdump layout:
++//!
++//!     u64 ts_ns ; u16 len ; u8 dir (0 = host->device) ; u8 ch (0 = ipc) ; body
++//!
++//! Only the host->device CHPP channel is read; everything else is skipped.
++use gnss_betp::{
++    app_header, betp_records_tx, chpp_datagrams, BETP_CMD_TX, BETP_HANDLE, SESSION_OPEN,
++};
++use std::io::Write;
++
++/// Which records are the prologue is not a fixed list: it is everything the
++/// host sends before it opens the session, and that differs per board. A Tegu
++/// sends `00e4 0edd 08ad 0d46 7304 09d3`; a komodo sends `00e4 08ad 7304 0d46
++/// 17d3` with no `0edd` at all and `09d3` only after session open. So the
++/// boundary is found rather than assumed: the first datagram carrying a
++/// session-open record ends the prologue.
++fn opens_session(ids: &[u16]) -> bool {
++    ids.iter()
++        .any(|id| SESSION_OPEN.iter().any(|(open, _)| open == id))
++}
++
++fn main() {
++    let path = std::env::args()
++        .nth(1)
++        .expect("usage: extract_prologue <gnssdump.bin>");
++    let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
++
++    // Reassemble the host->device CHPP byte stream in capture order.
++    let mut tx = Vec::new();
++    let mut off = 0usize;
++    let mut records = 0usize;
++    while off + 12 <= raw.len() {
++        let len = u16::from_le_bytes([raw[off + 8], raw[off + 9]]) as usize;
++        let dir = raw[off + 10];
++        let ch = raw[off + 11];
++        off += 12;
++        if off + len > raw.len() {
++            break;
++        }
++        if dir == 0 && ch == 0 {
++            tx.extend_from_slice(&raw[off..off + len]);
++        }
++        off += len;
++        records += 1;
++    }
++    eprintln!("{records} capture records, {} host->device bytes", tx.len());
++
++    // Every BETP record the host sent before it opened the session, in order
++    // and deduplicated by id: the transport retransmits, and a repeat of an id
++    // already seen is that rather than new configuration.
++    let mut seen: Vec<(u16, u16, Vec<u8>)> = Vec::new();
++    let mut all: Vec<u16> = Vec::new();
++    for datagram in chpp_datagrams(&tx) {
++        let Some((app, inner)) = app_header(&datagram) else {
++            continue;
++        };
++        if app.handle != BETP_HANDLE || app.command != BETP_CMD_TX {
++            continue;
++        }
++        let records = betp_records_tx(inner);
++        let ids: Vec<u16> = records.iter().map(|r| r.midsid).collect();
++        all.extend_from_slice(&ids);
++        if opens_session(&ids) {
++            break;
++        }
++        for r in records {
++            if !seen.iter().any(|(id, _, _)| *id == r.midsid) {
++                seen.push((r.midsid, r.proto, r.data.to_vec()));
++            }
++        }
++    }
++    eprintln!("host-sent records up to session open: {all:04x?}");
++    if seen.is_empty() {
++        eprintln!("no prologue records: the capture has no session open in it");
++        std::process::exit(1);
++    }
++
++    let mut out = Vec::new();
++    for (midsid, proto, data) in &seen {
++        out.extend_from_slice(&midsid.to_le_bytes());
++        out.extend_from_slice(&proto.to_le_bytes());
++        out.extend_from_slice(&(data.len() as u16).to_le_bytes());
++        out.extend_from_slice(data);
++        eprintln!("  {midsid:#06x} proto {proto} len {}", data.len());
++    }
++    std::io::stdout().write_all(&out).expect("write prologue");
++    eprintln!("wrote {} bytes", out.len());
++}
+diff --git a/crates/kepler-gnssd/src/main.rs b/crates/kepler-gnssd/src/main.rs
+index ff22ed4..a57803c 100644
+--- a/crates/kepler-gnssd/src/main.rs
++++ b/crates/kepler-gnssd/src/main.rs
+@@ -13,10 +13,10 @@ mod protocol;
+ use gnss_betp::{dump_message_name, ChppDecoder, DumpDecoder};
+ use protocol::{parse_prologue, Event, Output, Protocol};
+ use std::collections::{BTreeMap, VecDeque};
+-use std::ffi::CString;
++use std::ffi::{CStr, CString};
+ use std::fs::{File, OpenOptions};
+ use std::io::{self, Read, Write};
+-use std::os::fd::{AsRawFd, RawFd};
++use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+ use std::os::unix::net::{UnixListener, UnixStream};
+ use std::path::{Path, PathBuf};
+@@ -31,6 +31,9 @@ const DEFAULT_DUMP: &str = "/dev/gnss_dump0";
+ const DEFAULT_SOCKET: &str = "/run/gnss-share.sock";
+ const DEFAULT_PROLOGUE: &str = "/etc/kepler-gnssd/session-prologue.bin";
+ const DEFAULT_GROUP: &str = "geoclue";
++/// gpsd drops privileges to nobody:dialout, and grantpt leaves a slave owned
++/// by root alone, so a device it cannot open is no use to it.
++const DEFAULT_PTY_GROUP: &str = "dialout";
+ const MAX_CLIENT_BACKLOG: usize = 16 * 1024;
+ const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+ 
+@@ -53,6 +56,15 @@ Options:
+       --interval-ms MS       Position period (default: 1000)
+       --dump-capture PATH    Save raw dump-channel bytes for diagnosis
+       --dump-log             Print decoded KEPLER LOG_TEXT records
++      --pty PATH             Also serve NMEA on a pseudo-terminal linked at
++                             PATH, for consumers that need a device rather
++                             than a socket (gpsd takes a serial device or a
++                             tcp:// URL, never a unix socket). Navigation
++                             starts when something opens it, not merely
++                             because it exists.
++      --pty-group GROUP      Group for the pty (default: dialout, the group
++                             gpsd drops to)
++      --no-pty-group         Leave the pty owned as grantpt made it
+       --always-on            Stream without a socket client (device tests)
+   -v, --verbose              Log setup, clients, fixes and dump statistics
+   -h, --help                 Show this help
+@@ -70,6 +82,8 @@ struct Args {
+     dump_capture: Option<PathBuf>,
+     dump_log: bool,
+     always_on: bool,
++    pty: Option<PathBuf>,
++    pty_group: Option<String>,
+     verbose: bool,
+ }
+ 
+@@ -87,6 +101,8 @@ fn parse_args() -> Result<Args, String> {
+         dump_capture: None,
+         dump_log: false,
+         always_on: false,
++        pty: None,
++        pty_group: Some(DEFAULT_PTY_GROUP.into()),
+         verbose: false,
+     };
+     let mut parser = lexopt::Parser::from_env();
+@@ -136,6 +152,17 @@ fn parse_args() -> Result<Args, String> {
+             }
+             Long("dump-log") => args.dump_log = true,
+             Long("always-on") => args.always_on = true,
++            Long("pty") => args.pty = Some(parser.value().map_err(|e| e.to_string())?.into()),
++            Long("pty-group") => {
++                args.pty_group = Some(
++                    parser
++                        .value()
++                        .map_err(|e| e.to_string())?
++                        .into_string()
++                        .map_err(|_| "--pty-group is not valid UTF-8".to_string())?,
++                )
++            }
++            Long("no-pty-group") => args.pty_group = None,
+             Short('v') | Long("verbose") => args.verbose = true,
+             Short('h') | Long("help") => {
+                 print!("{USAGE}");
+@@ -246,6 +273,17 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+     Ok(())
+ }
+ 
++/// Whether anything is actually listening for fixes. A socket client counts
++/// from the moment it connects; a pseudo-terminal counts only while something
++/// has its other end open, so leaving the device present costs nothing until a
++/// reader such as gpsd arrives.
++fn has_subscriber(args: &Args, peers: &[Peer]) -> bool {
++    args.always_on
++        || peers
++            .iter()
++            .any(|peer| if peer.persistent { peer.attached } else { true })
++}
++
+ fn pollfd(fd: RawFd, events: libc::c_short) -> libc::pollfd {
+     libc::pollfd {
+         fd,
+@@ -265,11 +303,71 @@ fn timeout_ms(deadline: Option<Instant>) -> i32 {
+     deadline.duration_since(now).as_millis().min(1_000) as i32
+ }
+ 
++
++/// A pseudo-terminal whose slave is linked at a stable path, so a consumer that
++/// needs a device rather than a socket can be pointed straight at it. gpsd
++/// takes a serial device or a tcp://, udp:// or gpsd:// URL and has no unix
++/// socket source at all, so without this it needs a socat bridge in between.
++struct PtyGuard {
++    path: PathBuf,
++}
++
++impl Drop for PtyGuard {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_file(&self.path);
++    }
++}
++
++fn open_pty(path: &Path, group: Option<&str>) -> io::Result<(File, PtyGuard)> {
++    let fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
++    if fd < 0 {
++        return Err(io::Error::last_os_error());
++    }
++    let master = unsafe { OwnedFd::from_raw_fd(fd) };
++    if unsafe { libc::grantpt(master.as_raw_fd()) } < 0
++        || unsafe { libc::unlockpt(master.as_raw_fd()) } < 0
++    {
++        return Err(io::Error::last_os_error());
++    }
++    let name = unsafe { libc::ptsname(master.as_raw_fd()) };
++    if name.is_null() {
++        return Err(io::Error::last_os_error());
++    }
++    let slave = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
++
++    // A consumer that stops reading must not be able to stall the daemon.
++    if unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
++        return Err(io::Error::last_os_error());
++    }
++    if let Some(name) = group {
++        let gid = group_gid(name)?;
++        chown_group(Path::new(&slave), gid)?;
++    }
++    std::fs::set_permissions(&slave, std::fs::Permissions::from_mode(0o660))?;
++
++    let _ = std::fs::remove_file(path);
++    std::os::unix::fs::symlink(&slave, path)?;
++    eprintln!(
++        "kepler-gnssd: NMEA device {} -> {slave}",
++        path.display()
++    );
++    Ok((File::from(master), PtyGuard { path: path.to_path_buf() }))
++}
++
+ struct Peer {
+-    stream: UnixStream,
++    io: File,
+     output: VecDeque<u8>,
+     read_open: bool,
+     doomed: bool,
++    /// A pseudo-terminal stays even with nothing on the other end: a master
++    /// with no slave open reports POLLHUP, and dropping it on that would take
++    /// the device away the moment gpsd restarted.
++    persistent: bool,
++    /// Whether anything currently has the other end open. A master with no
++    /// slave open reports POLLHUP, so this tracks a reader arriving and
++    /// leaving -- which is what makes a pty subscribe on demand like a socket
++    /// client rather than navigating for as long as the daemon lives.
++    attached: bool,
+ }
+ 
+ fn accept_all(listener: &UnixListener, peers: &mut Vec<Peer>, verbose: bool) -> io::Result<()> {
+@@ -278,10 +376,12 @@ fn accept_all(listener: &UnixListener, peers: &mut Vec<Peer>, verbose: bool) ->
+             Ok((stream, _)) => {
+                 stream.set_nonblocking(true)?;
+                 peers.push(Peer {
+-                    stream,
++                    io: File::from(OwnedFd::from(stream)),
+                     output: VecDeque::new(),
+                     read_open: true,
+                     doomed: false,
++                    persistent: false,
++                    attached: true,
+                 });
+                 if verbose {
+                     eprintln!(
+@@ -299,13 +399,13 @@ fn accept_all(listener: &UnixListener, peers: &mut Vec<Peer>, verbose: bool) ->
+ 
+ fn service_peer(peer: &mut Peer, revents: libc::c_short) {
+     if revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+-        peer.doomed = true;
++        peer.doomed = !peer.persistent;
+         return;
+     }
+     if peer.read_open && revents & libc::POLLIN != 0 {
+         let mut discard = [0u8; 128];
+         loop {
+-            match peer.stream.read(&mut discard) {
++            match peer.io.read(&mut discard) {
+                 Ok(0) => {
+                     // NMEA is a one-way stream. A client may close only its
+                     // write half (for example `socat` after stdin reaches EOF)
+@@ -325,7 +425,7 @@ fn service_peer(peer: &mut Peer, revents: libc::c_short) {
+     }
+     if revents & libc::POLLOUT != 0 && !peer.output.is_empty() {
+         let bytes = peer.output.make_contiguous();
+-        match peer.stream.write(bytes) {
++        match peer.io.write(bytes) {
+             Ok(0) => peer.doomed = true,
+             Ok(n) => {
+                 peer.output.drain(..n);
+@@ -335,8 +435,13 @@ fn service_peer(peer: &mut Peer, revents: libc::c_short) {
+             Err(_) => peer.doomed = true,
+         }
+     }
++    if peer.persistent {
++        // POLLHUP on a master means no slave is open; it clears when a reader
++        // such as gpsd opens the device.
++        peer.attached = revents & libc::POLLHUP == 0;
++    }
+     if revents & libc::POLLHUP != 0 {
+-        peer.doomed = true;
++        peer.doomed = !peer.persistent;
+     }
+ }
+ 
+@@ -361,7 +466,15 @@ fn handle_output(
+                 let nmea = format!("{}{}", position.to_gga(), position.to_rmc());
+                 for peer in peers.iter_mut() {
+                     if peer.output.len() + nmea.len() > MAX_CLIENT_BACKLOG {
+-                        peer.doomed = true;
++                        if peer.persistent {
++                            // Nothing has the device open: keep the newest
++                            // sentences and let the stale ones go.
++                            let drop_to = peer.output.len() / 2;
++                            peer.output.drain(..drop_to);
++                            peer.output.extend(nmea.bytes());
++                        } else {
++                            peer.doomed = true;
++                        }
+                     } else {
+                         peer.output.extend(nmea.bytes());
+                     }
+@@ -649,7 +762,11 @@ fn run_loop(
+         let mut fds = Vec::with_capacity(2 + peers.len());
+         fds.push(pollfd(chpp.as_raw_fd(), libc::POLLIN));
+         fds.push(pollfd(listener.as_raw_fd(), libc::POLLIN));
+-        for peer in peers.iter() {
++        let mut polled: Vec<usize> = Vec::with_capacity(peers.len());
++        for (index, peer) in peers.iter().enumerate() {
++            if peer.persistent && !peer.attached {
++                continue;
++            }
+             let mut events = 0;
+             if peer.read_open {
+                 events |= libc::POLLIN;
+@@ -657,9 +774,9 @@ fn run_loop(
+             if !peer.output.is_empty() {
+                 events |= libc::POLLOUT;
+             }
+-            fds.push(pollfd(peer.stream.as_raw_fd(), events));
++            fds.push(pollfd(peer.io.as_raw_fd(), events));
++            polled.push(index);
+         }
+-        let polled_peers = peers.len();
+         let deadline = [protocol.next_deadline(), setup_deadline]
+             .into_iter()
+             .flatten()
+@@ -688,12 +805,29 @@ fn run_loop(
+         if fds[0].revents & libc::POLLIN != 0 {
+             read_chpp(chpp, chpp_decoder, protocol, peers, args.verbose)?;
+         }
+-        let wanted_before = args.always_on || !peers.is_empty();
++        let wanted_before = has_subscriber(&args, &peers);
++
++        /*
++         * A pty master with no slave open reports POLLHUP, and POLLHUP comes
++         * back whatever events were asked for -- so polling an unattached
++         * device alongside everything else would return immediately, forever.
++         * Sample those separately with a zero timeout instead, which notices a
++         * reader arriving within one loop iteration.
++         *
++         * This has to run after wanted_before is taken: updating it earlier
++         * made the subscriber state change invisible to the comparison below,
++         * so navigation never started when gpsd opened the device.
++         */
++        for peer in peers.iter_mut().filter(|p| p.persistent) {
++            if let Ok(revents) = poll_revents(peer.io.as_raw_fd(), 0) {
++                peer.attached = revents & libc::POLLHUP == 0;
++            }
++        }
+         if fds[1].revents & libc::POLLIN != 0 {
+             accept_all(listener, peers, args.verbose)?;
+         }
+-        for i in 0..polled_peers {
+-            service_peer(&mut peers[i], fds[2 + i].revents);
++        for (slot, &index) in polled.iter().enumerate() {
++            service_peer(&mut peers[index], fds[2 + slot].revents);
+         }
+         let old_len = peers.len();
+         peers.retain(|peer| !peer.doomed);
+@@ -703,7 +837,7 @@ fn run_loop(
+                 peers.len()
+             );
+         }
+-        let wanted_after = args.always_on || !peers.is_empty();
++        let wanted_after = has_subscriber(&args, &peers);
+         if wanted_before != wanted_after {
+             handle_output(
+                 protocol.set_wanted(wanted_after, Instant::now()),
+@@ -717,14 +851,46 @@ fn run_loop(
+ }
+ 
+ fn run(args: Args) -> io::Result<()> {
+-    let raw = std::fs::read(&args.prologue)?;
+-    let prologue = parse_prologue(&raw).map_err(|e| {
+-        io::Error::new(
+-            io::ErrorKind::InvalidData,
+-            format!("{}: {e}", args.prologue.display()),
+-        )
+-    })?;
++    /*
++     * A board profile is optional. Stock rebuilds these records from gps.cfg at
++     * every session open, so they are configuration rather than state: a board
++     * that has none has simply not had them captured yet, and the receiver
++     * still opens its BETP service and streams without them. A file that *is*
++     * present has to be a valid one.
++     */
++    let prologue = match std::fs::read(&args.prologue) {
++        Ok(raw) => parse_prologue(&raw).map_err(|e| {
++            io::Error::new(
++                io::ErrorKind::InvalidData,
++                format!("{}: {e}", args.prologue.display()),
++            )
++        })?,
++        Err(e) if e.kind() == io::ErrorKind::NotFound => {
++            eprintln!(
++                "kepler-gnssd: no board profile at {}; continuing without one",
++                args.prologue.display()
++            );
++            Vec::new()
++        }
++        Err(e) => return Err(e),
++    };
+     let (listener, _socket_guard) = bind_socket(&args)?;
++    let mut pty_guard = None;
++    let mut initial_peers: Vec<Peer> = Vec::new();
++    if let Some(path) = args.pty.clone() {
++        let (io, guard) = open_pty(&path, args.pty_group.as_deref())?;
++        pty_guard = Some(guard);
++        initial_peers.push(Peer {
++            io,
++            output: VecDeque::new(),
++            read_open: false,
++            doomed: false,
++            persistent: true,
++            // Nothing has the device open yet, so it is not a subscriber.
++            attached: false,
++        });
++    }
++    let _ = &pty_guard;
+     let mut chpp = OpenOptions::new().read(true).write(true).open(&args.chpp)?;
+     let mut dump_drain = DumpDrain::start(&args)?;
+ 
+@@ -733,11 +899,15 @@ fn run(args: Args) -> io::Result<()> {
+         args.socket.display(),
+         args.chpp.display(),
+         args.dump.display(),
+-        args.prologue.display()
++        if prologue.is_empty() {
++            "none".into()
++        } else {
++            args.prologue.display().to_string()
++        }
+     );
+     let mut protocol = Protocol::new(prologue, args.interval_ms);
+     let mut chpp_decoder = ChppDecoder::new();
+-    let mut peers: Vec<Peer> = Vec::new();
++    let mut peers: Vec<Peer> = initial_peers;
+     handle_output(protocol.begin(), &mut chpp, &mut peers, args.verbose)?;
+     if args.always_on {
+         handle_output(
+@@ -819,14 +989,16 @@ mod tests {
+         let (mut client, server) = UnixStream::pair().unwrap();
+         server.set_nonblocking(true).unwrap();
+         let mut peer = Peer {
+-            stream: server,
++            io: File::from(OwnedFd::from(server)),
+             output: VecDeque::new(),
+             read_open: true,
+             doomed: false,
++            persistent: false,
++            attached: true,
+         };
+ 
+         client.shutdown(std::net::Shutdown::Write).unwrap();
+-        let revents = poll_revents(peer.stream.as_raw_fd(), 0).unwrap();
++        let revents = poll_revents(peer.io.as_raw_fd(), 0).unwrap();
+         assert_ne!(revents & libc::POLLIN, 0);
+         service_peer(&mut peer, revents);
+         assert!(!peer.doomed);
+@@ -838,4 +1010,25 @@ mod tests {
+         client.read_exact(&mut got).unwrap();
+         assert_eq!(&got, b"$GPRMC,test\r\n");
+     }
++
++    #[test]
++    fn a_persistent_peer_survives_hangup_and_errors() {
++        // A pty master with no slave open reports POLLHUP, and the device must
++        // not go away just because nothing has it open yet.
++        let (client, server) = UnixStream::pair().unwrap();
++        server.set_nonblocking(true).unwrap();
++        let mut peer = Peer {
++            io: File::from(OwnedFd::from(server)),
++            output: VecDeque::new(),
++            read_open: false,
++            doomed: false,
++            persistent: true,
++            attached: true,
++        };
++        drop(client);
++        service_peer(&mut peer, libc::POLLHUP);
++        assert!(!peer.doomed);
++        service_peer(&mut peer, libc::POLLERR);
++        assert!(!peer.doomed);
++    }
+ }
+diff --git a/crates/kepler-gnssd/src/protocol.rs b/crates/kepler-gnssd/src/protocol.rs
+index f64664a..ffbddf6 100644
+--- a/crates/kepler-gnssd/src/protocol.rs
++++ b/crates/kepler-gnssd/src/protocol.rs
+@@ -56,18 +56,20 @@ pub fn parse_prologue(raw: &[u8]) -> Result<Vec<PrologueRecord>, String> {
+         records.remove(5);
+     }
+ 
+-    let ids: Vec<_> = records.iter().map(|r| r.midsid).collect();
+-    const EXPECTED: [u16; 6] = [0x00e4, 0x0edd, 0x08ad, 0x0d46, 0x7304, 0x09d3];
+-    if ids != EXPECTED {
+-        return Err(format!(
+-            "wrong prologue record sequence: expected {EXPECTED:04x?}, got {ids:04x?}"
+-        ));
++    /*
++     * Which records a prologue holds is board data, not a constant: a Tegu
++     * sends 00e4 0edd 08ad 0d46 7304 09d3, while a komodo sends
++     * 00e4 08ad 7304 0d46 17d3 -- no 0edd at all, and 09d3 only after the
++     * session is open. So validate the shape and replay what the file says
++     * rather than insisting on one board's sequence.
++     */
++    if records.is_empty() {
++        return Err("no records".into());
+     }
+-    for (index, record) in records.iter().enumerate() {
+-        let expected = if index == 4 { 3 } else { 2 };
+-        if record.proto != expected {
++    for record in &records {
++        if record.proto != 2 && record.proto != 3 {
+             return Err(format!(
+-                "prologue {:#06x} has proto {}, expected {expected}",
++                "prologue {:#06x} has proto {}, expected 2 or 3",
+                 record.midsid, record.proto
+             ));
+         }
+@@ -247,24 +249,25 @@ impl Protocol {
+                     out.writes.push(bytes);
+                 }
+             }
+-            Phase::Prologue { step } if step < PROLOGUE_STEPS.len() => {
+-                let (first, end, delay_ms) = PROLOGUE_STEPS[step];
+-                let batch: Vec<_> = self.prologue[first..end]
+-                    .iter()
+-                    .map(|r| (r.midsid, r.proto, r.data.as_slice()))
+-                    .collect();
++            Phase::Prologue { step } if step < self.prologue.len() => {
++                let record = &self.prologue[step];
++                let batch = [(record.midsid, record.proto, record.data.as_slice())];
+                 if let Some(bytes) = self.send_app(betp_encode_tx(&batch)) {
+                     self.phase = Phase::Prologue { step: step + 1 };
+-                    self.due = Some(now + Duration::from_millis(delay_ms));
++                    self.due = Some(now + PROLOGUE_GAP);
+                     out.writes.push(bytes);
+                 }
+             }
+-            Phase::Prologue { step } if step == PROLOGUE_STEPS.len() => {
++            Phase::Prologue { step } if step >= self.prologue.len() => {
+                 self.phase = Phase::Ready;
+                 self.due = None;
+                 out.events.push(Event::State("BETP configured, idle"));
+                 out.append(self.navigation_transition(now));
+             }
++            Phase::Ready if self.prologue.is_empty() => {
++                self.due = None;
++                out.append(self.navigation_transition(now));
++            }
+             _ => {}
+         }
+         out
+@@ -348,7 +351,18 @@ impl Protocol {
+                     && app.command == CHPP_SERVICE_OPEN
+                     && app.error == 0 =>
+             {
+-                self.phase = Phase::Prologue { step: 0 };
++                /*
++                 * The prologue is a replay of what stock sends here, and stock
++                 * rebuilds it from gps.cfg every session -- nothing about it
++                 * persists, so a board without a captured file is not a board
++                 * that cannot run. Skip straight to navigation when there is
++                 * none; the receiver opens its service and streams either way.
++                 */
++                self.phase = if self.prologue.is_empty() {
++                    Phase::Ready
++                } else {
++                    Phase::Prologue { step: 0 }
++                };
+                 self.due = Some(now);
+                 out.events.push(Event::State("BETP service open"));
+             }
+@@ -367,16 +381,11 @@ impl Protocol {
+     }
+ }
+ 
+-/// Batches and shortened inter-batch waits that produced the hardware-validated
+-/// stream. The final 750 ms is the probe's deliberate replacement for stock's
+-/// unrelated long-running work between configuration and session open.
+-const PROLOGUE_STEPS: [(usize, usize, u64); 5] = [
+-    (0, 1, 189),
+-    (1, 3, 63),
+-    (3, 4, 3_857),
+-    (4, 5, 9_863),
+-    (5, 6, 750),
+-];
++/// Pause between prologue records. Stock's own gaps run from tens of
++/// milliseconds to seconds, but the long ones are it doing unrelated work
++/// rather than the receiver needing the time, so one modest gap per record is
++/// enough to keep them in separate datagrams and in order.
++const PROLOGUE_GAP: Duration = Duration::from_millis(250);
+ 
+ fn is_plain_ack(bytes: &[u8]) -> bool {
+     chpp_frames(bytes).next().is_some_and(|frame| {
+@@ -426,7 +435,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn parser_accepts_the_six_record_profile_and_rejects_the_wrong_order() {
++    fn parser_round_trips_a_profile_and_rejects_a_malformed_one() {
+         let mut raw = Vec::new();
+         for record in prologue() {
+             raw.extend_from_slice(&record.midsid.to_le_bytes());
+@@ -435,8 +444,35 @@ mod tests {
+             raw.extend_from_slice(&record.data);
+         }
+         assert_eq!(parse_prologue(&raw).unwrap(), prologue());
+-        raw[0] ^= 1;
+-        assert!(parse_prologue(&raw).unwrap_err().contains("wrong prologue"));
++
++        // A different board sends a different sequence, and that is data
++        // rather than an error: komodo has no 0x0edd and only five records.
++        let komodo: Vec<u8> = [
++            (0x00e4u16, 2u16, 4usize),
++            (0x08ad, 2, 3),
++            (0x7304, 3, 1),
++            (0x0d46, 2, 2),
++            (0x17d3, 2, 1),
++        ]
++        .iter()
++        .flat_map(|&(midsid, proto, len)| {
++            let mut r = Vec::new();
++            r.extend_from_slice(&midsid.to_le_bytes());
++            r.extend_from_slice(&proto.to_le_bytes());
++            r.extend_from_slice(&(len as u16).to_le_bytes());
++            r.extend(std::iter::repeat_n(0u8, len));
++            r
++        })
++        .collect();
++        assert_eq!(parse_prologue(&komodo).unwrap().len(), 5);
++
++        // Structure still has to hold.
++        assert!(parse_prologue(&raw[..raw.len() - 1])
++            .unwrap_err()
++            .contains("truncated"));
++        let mut bad_proto = raw.clone();
++        bad_proto[2] = 9;
++        assert!(parse_prologue(&bad_proto).unwrap_err().contains("proto"));
+     }
+ 
+     #[test]
+@@ -522,12 +558,13 @@ mod tests {
+             0x00e4
+         );
+ 
+-        // Advance each paced batch and then the final transition to Ready.
+-        let mut at = now + Duration::from_millis(189);
+-        for delay in [63, 3_857, 9_863, 750] {
++        // One datagram per record, then the transition to Ready. The first
++        // record went out above, so step the rest.
++        let mut at = now + PROLOGUE_GAP;
++        for _ in 1..prologue().len() {
+             let out = protocol.tick(at);
+             assert_eq!(out.writes.len(), 1);
+-            at += Duration::from_millis(delay);
++            at += PROLOGUE_GAP;
+         }
+         assert!(protocol.tick(at).writes.is_empty());
+         assert!(protocol.is_ready());

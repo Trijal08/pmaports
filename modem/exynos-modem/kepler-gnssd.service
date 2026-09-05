@@ -1,0 +1,39 @@
+[Unit]
+Description=Samsung KEPLER GNSS receiver (NMEA on /run/gnss-share.sock)
+Documentation=https://git.deusch.me/pixel-mainline/exynos-modem
+# The receiver is codeloaded by the modem driver as the CP comes up, and the
+# CHPP transport only exists once gnss-kepler has bound to its SPI node.
+# gpsd has no units in Alpine's package, so nothing would ever start it.
+Wants=gpsd.service
+Requires=dev-gnss0.device
+After=dev-gnss0.device
+# The diagnostic channel is a modem-driver port, and it can still be appearing
+# when udev announces the receiver: starting first costs a failed attempt and a
+# ten-second wait. Wants rather than Requires, so a board that never brings it
+# up still gets a daemon.
+Wants=dev-wwan0gnss1.device
+After=dev-wwan0gnss1.device
+# Keep retrying for as long as the receiver is there. The daemon exits when the
+# receiver stops answering -- it can stop asserting its SPI ready line, and only
+# a fresh codeload revives it -- so without this systemd would give up after the
+# default five starts and never try again.
+StartLimitIntervalSec=0
+
+[Service]
+# Recover a receiver that stopped asserting its SPI ready line: every CHPP
+# write then fails with -ETIMEDOUT until the image is staged and started again,
+# and only the modem driver can do that. Leading "-" so a kernel without the
+# trigger, or a CP that is not online yet, does not block the start -- the
+# restart loop covers both.
+ExecStartPre=-/bin/sh -c 'echo 1 > /sys/bus/platform/drivers/s5xxx-modem/*/gnss_codeload && sleep 1'
+ExecStart=/usr/sbin/kepler-gnssd \
+	--device /dev/gnss0 \
+	--dump-device /dev/wwan0gnss1 \
+	--socket /run/gnss-share.sock \
+	--socket-group geoclue \
+	--pty /dev/gnss-nmea
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

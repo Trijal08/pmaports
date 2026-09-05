@@ -1,0 +1,25 @@
+diff --git a/crates/exynos-modem/src/chan.rs b/crates/exynos-modem/src/chan.rs
+index 8a469e0..3ffcf28 100644
+--- a/crates/exynos-modem/src/chan.rs
++++ b/crates/exynos-modem/src/chan.rs
+@@ -47,8 +47,19 @@ fn serve(dev: &Path, handler: &dyn Handler) -> io::Result<()> {
+             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+             Err(e) => return Err(e),
+         };
+-        for out in handler.handle(&buf[..n]) {
++        let replies = handler.handle(&buf[..n]);
++        // ponytail: a bulk reply -- only the uecap file serve returns more than
++        // one frame -- fills the 4096-byte FMT ring at the CP's requested
++        // 4000-byte block and starves ModemManager's SIT control channel, so
++        // the data call dies (txq full: ch 0x84 ... space 47, cause 2253).
++        // Let the ring drain between blocks. Replace with real back-pressure
++        // if the driver ever reports FMT ring space.
++        let paced = replies.len() > 1;
++        for out in replies {
+             write_frame(&mut f, &out)?;
++            if paced {
++                std::thread::sleep(Duration::from_millis(3));
++            }
+         }
+     }
+ }

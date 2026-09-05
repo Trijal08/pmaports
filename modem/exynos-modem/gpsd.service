@@ -1,0 +1,20 @@
+[Unit]
+Description=GPS daemon serving the KEPLER receiver
+Documentation=man:gpsd(8)
+# The device is the pseudo-terminal kepler-gnssd creates, so there is nothing
+# to attach to before it is up and nothing to serve once it is gone. Alpine's
+# gpsd package ships OpenRC scripts only, so this unit is the systemd side.
+BindsTo=kepler-gnssd.service
+After=kepler-gnssd.service
+
+[Service]
+# Deliberately no -n: gpsd opens the device only while one of its own clients
+# is connected, and kepler-gnssd starts navigation only while something has
+# the device open. So an idle phone leaves the receiver alone, and a client
+# anywhere in the chain brings it up.
+ExecStart=/usr/sbin/gpsd -N /dev/gnss-nmea
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

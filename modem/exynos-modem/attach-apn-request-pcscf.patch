@@ -1,0 +1,41 @@
+diff --git a/crates/samsung-sit/src/builders.rs b/crates/samsung-sit/src/builders.rs
+index 68f84ab..6862fe5 100644
+--- a/crates/samsung-sit/src/builders.rs
++++ b/crates/samsung-sit/src/builders.rs
+@@ -324,6 +324,23 @@ struct SetInitialAttachApnRequest<'a> {
+ 
+ /// `pdp` fills both the attach protocol (`@0xda`) and its roaming counterpart
+ /// (`@0xf8`).
++///
++/// The attach asks for P-CSCF addresses even though the vendor's does not, and
++/// it is the only request that can: on this network the IMS PDN is created by
++/// the attach itself when the attach APN names it, so a later
++/// `SETUP_DATA_CALL` for the same DNN resolves to a context that already
++/// exists and returns the parameters it was created with.  Asking there is too
++/// late -- the PCO was sent without a P-CSCF request and the network answers
++/// with none, which is silent: an address and an MTU arrive, the proxy slots
++/// are zero, and the CP has nowhere to register.
++///
++/// HW-confirmed on an s5400 against Telus: with the attach request otherwise
++/// byte-identical, `PCSCF_REQUEST_NONE` yields a granted PDN whose P-CSCF
++/// region is zeroed, and `PCSCF_REQUEST_BOTH` yields
++/// `2001:568:fff2:300::e` and `2001:568:fff3:300::e`.
++///
++/// Asking costs nothing on an attach that is not IMS: the network returns no
++/// proxies and the slots stay zero, exactly as they do today.
+ pub fn build_set_initial_attach_apn(
+     token: u16,
+     apn: &str,
+@@ -354,10 +371,10 @@ pub fn build_set_initial_attach_apn_for_stack(
+         password: check_credential(auth.password, "APN password")?,
+         auth: auth.auth as u8,
+         pdp_type: pdp as u8,
+-        pcscf_request: PCSCF_REQUEST_NONE,
++        pcscf_request: PCSCF_REQUEST_BOTH,
+         _unmapped: [0u8; 28],
+         roaming_pdp_type: pdp as u8,
+-        roaming_pcscf_request: PCSCF_REQUEST_NONE,
++        roaming_pcscf_request: PCSCF_REQUEST_BOTH,
+         _reserved: 0,
+     };
+     Ok(frame_header(

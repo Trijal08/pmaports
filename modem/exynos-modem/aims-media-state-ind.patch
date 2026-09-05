@@ -1,0 +1,268 @@
+diff --git a/crates/samsung-aims/src/lib.rs b/crates/samsung-aims/src/lib.rs
+index 769fb34..4cdcf41 100644
+--- a/crates/samsung-aims/src/lib.rs
++++ b/crates/samsung-aims/src/lib.rs
+@@ -25,6 +25,7 @@ use samsung_sit::{frame_header, SitError};
+ 
+ pub mod call;
+ pub mod hidden_menu;
++pub mod media;
+ pub mod pdn;
+ pub mod registration;
+ 
+diff --git a/crates/samsung-aims/src/media.rs b/crates/samsung-aims/src/media.rs
+new file mode 100644
+index 0000000..8ac2459
+--- /dev/null
++++ b/crates/samsung-aims/src/media.rs
+@@ -0,0 +1,135 @@
++//! `MEDIA_STATE_IND` (0x0d30) -- tell the CP what a call's media is doing.
++//!
++//! This is an *indication* the AP raises at the CP, not a request: the CP
++//! sends no response, and dispatches on the header's type byte, so it has to
++//! go out as `msg_type::INDICATION`.
++//!
++//! Captured from komodo's own Android side across a VoLTE call (SIT frames
++//! tapped in the modem driver's FMT path; see the komodo-android-call-capture
++//! notes).  Every frame is 32 bytes -- the 8-byte header, the 4-byte word AIMS
++//! requests leave zeroed, then 20 zero bytes:
++//!
++//! ```text
++//!   02 00 30 0d 20 00 00 00  00 01 02 00   just after dial
++//!   02 00 30 0d 20 00 00 00  00 01 04 00
++//!   02 00 30 0d 20 00 00 00  00 01 00 00   as the call becomes active
++//!   02 00 30 0d 20 00 00 00  00 01 06 00   at hangup
++//! ```
++//!
++//! So the token is zero, the third byte of that word is the state, and the
++//! second is 1 throughout -- on the evidence of one capture that is a count or
++//! an index rather than a constant, so it is named rather than inlined.
++//!
++//! The state values are the observed ones. Their order across a call gives the
++//! obvious reading (setup, alerting, connected, ended) but nothing in the
++//! capture names them, so they are recorded as what was seen.
++
++use crate::{frame, msg_id};
++use samsung_sit::{frame_header_typed, msg_type};
++
++/// The byte that sat at offset 9 in every captured frame.
++const MEDIA_ENTRY: u8 = 1;
++/// 8-byte header + the 4-byte word + 20 bytes of payload.
++const PAYLOAD_LEN: usize = 20;
++
++/// What a call's media is doing, as the CP is told it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[repr(u8)]
++pub enum MediaState {
++    /// Observed once, immediately after the dial request.
++    Setup = 2,
++    /// Observed between the dial and the call becoming active.
++    Alerting = 4,
++    /// Observed as the call became active, immediately before the CP was given
++    /// its RTP thresholds.
++    Connected = 0,
++    /// Observed at hangup.
++    Ended = 6,
++}
++
++/// Build `MEDIA_STATE_IND` (0x0d30) for one media state.
++pub fn build_media_state_ind(state: MediaState) -> Vec<u8> {
++    let mut body = vec![0u8; 4 + PAYLOAD_LEN];
++    body[1] = MEDIA_ENTRY;
++    body[2] = state as u8;
++    frame_header_typed(msg_type::INDICATION, msg_id::MEDIA_STATE_IND, 0, &body)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn matches_the_captured_frames() {
++        for (state, want) in [
++            (MediaState::Setup, 0x02u8),
++            (MediaState::Alerting, 0x04),
++            (MediaState::Connected, 0x00),
++            (MediaState::Ended, 0x06),
++        ] {
++            let f = build_media_state_ind(state);
++            assert_eq!(f.len(), 32);
++            assert_eq!(f[0], msg_type::INDICATION);
++            assert_eq!(&f[2..4], &0x0d30u16.to_le_bytes());
++            assert_eq!(&f[4..6], &32u16.to_le_bytes());
++            assert_eq!(&f[6..8], &[0, 0]); // indications carry no token
++            assert_eq!(&f[8..12], &[0x00, 0x01, want, 0x00]);
++            assert!(f[12..].iter().all(|&b| b == 0));
++        }
++    }
++
++    #[test]
++    fn the_two_captured_requests_match() {
++        let f = build_set_frame_time(0x0374);
++        assert_eq!(f.len(), 22);
++        assert_eq!(&f[2..4], &0x0d0bu16.to_le_bytes());
++        assert_eq!(&f[12..], &[0x00, 0x02, 0xa1, 0xbc, 0xea, 0x12, 0xa1, 0x01, 0x00, 0x00]);
++
++        let f = build_set_rtp_threshold(0x037e);
++        assert_eq!(f.len(), 25);
++        assert_eq!(&f[2..4], &0x0d72u16.to_le_bytes());
++        assert_eq!(&f[12..],
++                   &[0x00, 0x78, 0x00, 0x00, 0x00, 0x28, 0x03, 0x00, 0x88, 0x13, 0x00, 0x00, 0x00]);
++    }
++}
++
++/// `SET_FRAME_TIME` (0x0d0b) -- Android sends this as the very next frame after
++/// `DIAL`, before the call connects, and the CP later answers with a
++/// `FRAME_TIME` (0x0d11) indication.
++///
++/// Captured payload, ten bytes after the 4-byte word AIMS requests leave
++/// zeroed:
++///
++/// ```text
++///   00 02 a1 bc ea 12 a1 01 00 00
++/// ```
++///
++/// Only the first two bytes are understood -- the rest is replayed as captured.
++/// `a1 bc ea 12` reads as a little-endian 0x12eabca1, far too large for a
++/// count and the right shape for a timestamp or frame counter, so a replayed
++/// value may well be meaningless to the CP. Sending it at all is the point for
++/// now: whether a `FRAME_TIME` indication comes back says whether the CP's
++/// media pipeline started, which is the thing that never happens on komodo.
++pub fn build_set_frame_time(token: u16) -> Vec<u8> {
++    const CAPTURED: [u8; 10] = [0x00, 0x02, 0xa1, 0xbc, 0xea, 0x12, 0xa1, 0x01, 0x00, 0x00];
++    frame(msg_id::SET_FRAME_TIME, token, &CAPTURED)
++}
++
++/// `SET_RTP_THRESHOLD` (0x0d72) -- sent as the call becomes active, right after
++/// the connected media state.
++///
++/// Captured payload:
++///
++/// ```text
++///   00 78 00 00 00 28 03 00 88 13 00 00 00
++/// ```
++///
++/// Reads as thresholds rather than anything time-varying -- 0x78 is 120, 0x28
++/// is 40, and 0x1388 is 5000 -- so unlike the frame time this is static
++/// configuration and replaying it is reasonable.
++pub fn build_set_rtp_threshold(token: u16) -> Vec<u8> {
++    const CAPTURED: [u8; 13] = [
++        0x00, 0x78, 0x00, 0x00, 0x00, 0x28, 0x03, 0x00, 0x88, 0x13, 0x00, 0x00, 0x00,
++    ];
++    frame(msg_id::SET_RTP_THRESHOLD, token, &CAPTURED)
++}
+diff --git a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+index 8557685..63c26bd 100644
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+@@ -822,6 +822,30 @@ SamsungSitStatus samsung_aims_build_hangup(uint16_t token,
+                                            uint8_t **out,
+                                            size_t *out_len);
+ 
++/*
++ `MEDIA_STATE_IND` (0x0d30) -- tell the CP what a call's media is doing.
++
++ An indication, not a request: the CP sends no response, and it dispatches
++ on the header's type byte, so this cannot be sent through the ordinary
++ request path.  `state` takes the values observed on Android: 2 just after
++ the dial, 4 while alerting, 0 as the call becomes active, 6 at hangup.
++ Any other value is rejected rather than guessed at.
++ */
++SamsungSitStatus samsung_aims_build_media_state_ind(uint8_t state, uint8_t **out, size_t *out_len);
++
++/*
++ `SET_FRAME_TIME` (0x0d0b) -- sent straight after the dial, before the call
++ connects.  The payload is replayed from a capture; see the crate docs.
++ */
++SamsungSitStatus samsung_aims_build_set_frame_time(uint16_t token, uint8_t **out, size_t *out_len);
++
++/*
++ `SET_RTP_THRESHOLD` (0x0d72) -- sent as the call becomes active.
++ */
++SamsungSitStatus samsung_aims_build_set_rtp_threshold(uint16_t token,
++                                                      uint8_t **out,
++                                                      size_t *out_len);
++
+ /*
+  Parse a `REGISTRATION` (0x0d05) indication.
+  */
+diff --git a/crates/samsung-sit-ffi/src/aims.rs b/crates/samsung-sit-ffi/src/aims.rs
+index fb9e586..01a0eda 100644
+--- a/crates/samsung-sit-ffi/src/aims.rs
++++ b/crates/samsung-sit-ffi/src/aims.rs
+@@ -396,6 +396,52 @@ pub unsafe extern "C" fn samsung_aims_build_hangup(
+     )
+ }
+ 
++/// `MEDIA_STATE_IND` (0x0d30) -- tell the CP what a call's media is doing.
++///
++/// An indication, not a request: the CP sends no response, and it dispatches
++/// on the header's type byte, so this cannot be sent through the ordinary
++/// request path.  `state` takes the values observed on Android: 2 just after
++/// the dial, 4 while alerting, 0 as the call becomes active, 6 at hangup.
++/// Any other value is rejected rather than guessed at.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_media_state_ind(
++    state: u8,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    use aims::media::MediaState;
++
++    let state = match state {
++        0 => MediaState::Connected,
++        2 => MediaState::Setup,
++        4 => MediaState::Alerting,
++        6 => MediaState::Ended,
++        _ => return emit_result(Err(SitError::Malformed("media state")), out, out_len),
++    };
++    emit_result(Ok(aims::media::build_media_state_ind(state)), out, out_len)
++}
++
++/// `SET_FRAME_TIME` (0x0d0b) -- sent straight after the dial, before the call
++/// connects.  The payload is replayed from a capture; see the crate docs.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_set_frame_time(
++    token: u16,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    emit_result(Ok(aims::media::build_set_frame_time(token)), out, out_len)
++}
++
++/// `SET_RTP_THRESHOLD` (0x0d72) -- sent as the call becomes active.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_set_rtp_threshold(
++    token: u16,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    emit_result(Ok(aims::media::build_set_rtp_threshold(token)), out, out_len)
++}
++
+ /// Parse a `REGISTRATION` (0x0d05) indication.
+ #[no_mangle]
+ pub unsafe extern "C" fn samsung_aims_parse_registration(
+diff --git a/crates/samsung-sit/src/lib.rs b/crates/samsung-sit/src/lib.rs
+index ad65612..39c9e7f 100644
+--- a/crates/samsung-sit/src/lib.rs
++++ b/crates/samsung-sit/src/lib.rs
+@@ -356,9 +356,17 @@ pub(crate) fn valid_slice<const N: usize>(
+ /// a probe by hand almost always wants four zero bytes first; see
+ /// [`build_query`], which is that frame with an empty payload.
+ pub fn frame_header(id: u16, token: u16, body: &[u8]) -> Vec<u8> {
++    frame_header_typed(msg_type::REQUEST, id, token, body)
++}
++
++/// A frame of an explicit message type. Almost everything the AP sends is a
++/// `REQUEST`, but a few messages are indications the AP raises at the CP rather
++/// than requests it answers -- `AIMS_MEDIA_STATE_IND` is one -- and the CP
++/// dispatches on this byte, so sending one as a request has it discarded.
++pub fn frame_header_typed(msg_type: u8, id: u16, token: u16, body: &[u8]) -> Vec<u8> {
+     let total = HEADER_SIZE + body.len();
+     let hdr = SitHeader {
+-        msg_type: msg_type::REQUEST,
++        msg_type,
+         reserved: 0,
+         id,
+         length: total as u16,

@@ -1,0 +1,201 @@
+# Maintainer: Steffen Deusch <steffen@deusch.me>
+pkgname="exynos-modem"
+pkgver=0.1.0_git20260731
+pkgrel=1
+pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
+url="https://git.deusch.me/pixel-mainline/exynos-modem"
+arch="aarch64"
+license="GPL-2.0-or-later"
+makedepends="cargo cargo-auditable"
+depends="
+	android-tools
+	e2fsprogs
+	jq
+	tar
+	util-linux
+"
+subpackages="
+	libsamsung-sit-ffi:libsamsung_sit_ffi
+	$pkgname-lpa:lpa
+	$pkgname-polkit:polkit
+	$pkgname-gnss:gnss
+"
+options="net"
+
+_commit="eba1e23aea1be111aa30796cc84dc4678bae2b46"
+source="
+	$pkgname-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz
+	gipc-serve-uecap-fetch.patch
+	gipc-uecap-type2-and-wrapper.patch
+	gipc-serve-requested-block.patch
+	gipc-pace-bulk-serve.patch
+	aims-media-state-ind.patch
+	aims-send-dtmf.patch
+	cs-send-dtmf.patch
+	apn-list-in-ims-db.patch
+	attach-apn-request-pcscf.patch
+	gnss-prologue-per-board.patch
+	oem-property-store.patch
+	caimito-modem-setup.sh
+	pixel-modem-stage.service
+	exynos-modem.service
+	sit-proxy.service
+	99-google-komodo-modem.rules
+	kepler-gnssd.service
+	gpsd.service
+	20-kepler-gnssd.conf
+	exynos-modem-properties.conf
+	99-kepler-gnssd.rules
+"
+builddir="$srcdir/$pkgname"
+
+prepare() {
+	default_prepare
+
+	# Remove workspace config pinning the static-musl target so cargo uses CTARGET
+	rm -f .cargo/config.toml
+	RUSTC_WRAPPER= cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	# Compile the full workspace so both daemons and the static library are produced
+	# sit-proxy/polkit adds the authorization transport sit-lpa asks for when
+	# /run/sit-proxy/0.auth exists; without it the bridge falls back to raw
+	# filesystem-controlled sockets.
+	RUSTC_WRAPPER= cargo auditable build --release --frozen --features sit-proxy/polkit
+}
+
+package() {
+	# Main package: install the userspace daemons
+	install -Dm755 target/release/exynos-modem \
+		-t "$pkgdir/usr/sbin"
+	install -Dm755 target/release/sit-proxy \
+		-t "$pkgdir/usr/sbin"
+
+	# Install staging helper script
+	install -Dm755 "$srcdir"/caimito-modem-setup.sh \
+		"$pkgdir/usr/libexec/caimito-modem-setup"
+
+	# Install systemd service units
+	install -Dm644 "$srcdir"/pixel-modem-stage.service \
+		"$pkgdir/usr/lib/systemd/system/pixel-modem-stage.service"
+	install -Dm644 "$srcdir"/exynos-modem.service \
+		"$pkgdir/usr/lib/systemd/system/exynos-modem.service"
+	install -Dm644 "$srcdir"/sit-proxy.service \
+		"$pkgdir/usr/lib/systemd/system/sit-proxy.service"
+
+	# Answers the CP's property reads; see the file for why it is tmpfiles.d
+	# rather than RuntimeDirectory=.
+	install -Dm644 "$srcdir"/exynos-modem-properties.conf \
+		"$pkgdir/usr/lib/tmpfiles.d/exynos-modem-properties.conf"
+
+	# Points ModemManager's samsung-sit plugin at the carrier config and routes
+	# it through sit-proxy; see the file for why it must match every SIT port.
+	install -Dm644 "$srcdir"/99-google-komodo-modem.rules \
+		"$pkgdir/usr/lib/udev/rules.d/99-google-komodo-modem.rules"
+
+	# Enable service by default in systemd multi-user target
+	install -dm755 "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+	ln -s "../exynos-modem.service" \
+		"$pkgdir/usr/lib/systemd/system/multi-user.target.wants/exynos-modem.service"
+	ln -s "../sit-proxy.service" \
+		"$pkgdir/usr/lib/systemd/system/multi-user.target.wants/sit-proxy.service"
+}
+
+polkit() {
+	pkgdesc="Polkit authorization policy for the Exynos SIT proxy"
+	depends="$pkgname=$pkgver-r$pkgrel polkit"
+
+	install -Dm644 "$builddir"/crates/sit-proxy/org.exynosmodem.sit-proxy.policy \
+		-t "$subpkgdir/usr/share/polkit-1/actions"
+	install -Dm644 "$builddir"/crates/sit-proxy/polkit.conf \
+		"$subpkgdir/usr/lib/systemd/system/sit-proxy.service.d/50-polkit.conf"
+}
+
+gnss() {
+	pkgdesc="KEPLER GNSS daemon serving NMEA for geoclue"
+	# The receiver is codeloaded by the modem driver and reached over the SPI
+	# node that CONFIG_GNSS_KEPLER binds, so neither gnss-codeload nor any
+	# vendor helper is involved here. gpsd comes along because the unit below
+	# is the systemd side Alpine's OpenRC-only package does not ship.
+	depends="$pkgname=$pkgver-r$pkgrel gpsd"
+
+	install -Dm755 "$builddir"/target/release/kepler-gnssd \
+		-t "$subpkgdir/usr/sbin"
+	install -Dm644 "$srcdir"/kepler-gnssd.service \
+		-t "$subpkgdir/usr/lib/systemd/system"
+	install -Dm644 "$srcdir"/gpsd.service \
+		-t "$subpkgdir/usr/lib/systemd/system"
+	# A board profile is optional: stock rebuilds those records from gps.cfg
+	# at every session open, so the directory is created and left empty until
+	# a capture exists for this board.
+	install -dm755 "$subpkgdir/etc/kepler-gnssd"
+	# geoclue reads NMEA from the socket above; harmless when it is absent.
+	install -Dm644 "$srcdir"/20-kepler-gnssd.conf \
+		-t "$subpkgdir/etc/geoclue/conf.d"
+	install -Dm644 "$srcdir"/99-kepler-gnssd.rules \
+		-t "$subpkgdir/usr/lib/udev/rules.d"
+}
+
+lpa() {
+	pkgdesc="lpac APDU bridge for eSIM management over Exynos SIT"
+	# Stock lpac 2.3.0-r0 returns failure from its stdio callbacks even on
+	# success and dies in euicc_init before a single SIT request goes out.
+	depends="$pkgname=$pkgver-r$pkgrel lpac>=2.3.0-r1"
+	provides="sit-lpa-session=1"
+
+	install -Dm755 "$builddir"/target/release/sit-lpa \
+		-t "$subpkgdir/usr/bin"
+	install -Dm755 "$builddir"/crates/sit-lpa/lpa-gtk-sit \
+		-t "$subpkgdir/usr/bin"
+
+	# Compatibility path for unpatched clients: a private PATH entry whose
+	# "lpac" is the bridge itself. The patched lpa-gtk calls sit-lpa directly.
+	install -dm755 "$subpkgdir/usr/libexec/sit-lpa"
+	ln -s /usr/bin/sit-lpa "$subpkgdir/usr/libexec/sit-lpa/lpac"
+}
+
+libsamsung_sit_ffi() {
+	pkgdesc="C ABI for the samsung-sit SIT (Exynos RIL) wire codec"
+
+	local _lib
+	_lib=$(find "$builddir"/target -name 'libsamsung_sit_ffi.a' -path '*/release/*' -not -path '*/deps/*' -print -quit)
+	[ -n "$_lib" ] || return 1
+
+	install -Dm644 "$_lib" "$subpkgdir/usr/lib/libsamsung_sit_ffi.a"
+	install -Dm644 "$builddir"/crates/samsung-sit-ffi/include/samsung_sit_ffi.h \
+		"$subpkgdir/usr/include/samsung_sit_ffi.h"
+
+	install -dm755 "$subpkgdir/usr/lib/pkgconfig"
+	sed -e "s|@prefix@|/usr|" \
+		-e "s|@version@|${pkgver%%_*}|" \
+		"$builddir"/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in \
+		> "$subpkgdir/usr/lib/pkgconfig/samsung-sit-ffi.pc"
+}
+
+
+
+sha512sums="
+f26ec9ba9cea0671e3d642db1733f5f9083ec65765872039b196f320a8e8f8696210bcbc051bf0932b8a2c6ab602590b9c72d7725bb0f1ed716fbaad28843b65  exynos-modem-eba1e23aea1be111aa30796cc84dc4678bae2b46.tar.gz
+f6e7ea677e08d47cbb10155ebb45ffbe064a9303bdac687b091f451df876b221ac7a80314cf1ca0086ec91f30c27fb9469a07ef989c1b93b2284e1bd9710943e  gipc-serve-uecap-fetch.patch
+7e28d42a2895902225774e8a90527493470d7760690078119c7aa2beab18f5cb8d144219f0d70cc7050db5e26ece4e067189035e3b2136242a111f2eae976fbc  gipc-uecap-type2-and-wrapper.patch
+e3e25178dd5b8d8667218ad74d4d58bdd4825b9b54f96b7edc6d15592851b6fa77678a1fca378b51b5fd1a0884a9d6dcb68ad682711bc9689aa861c90d33a462  gipc-serve-requested-block.patch
+f949893085e0fc90215e956e580250467c62eb3602448a36ded48de459632ff6545239737cbadc264947870e9b2c892773d9195ac82873cd2431666de93c314f  gipc-pace-bulk-serve.patch
+a38b164c08d24d957ffc7857fba6c1207391f1ef43458f46b2126abc47cf879836df425d6410f6e73951dc47350f9509c2e3ba21fba20599d1242dec88fe6c71  aims-media-state-ind.patch
+5e18cd46cb5e0d4fd6c981480e0b2c105734380bb60f24f4314f44b149ef62a4d0228e4c38b6318ac24744ae0a1b67f05133e50c1c27fe45d1a73a460ee763f4  aims-send-dtmf.patch
+13f2cb9cf5cefee42f6733388c414b8734ccc5619704807cba82c9121b25d83437274ad0254e02227d52f7b37f7c14f53af7da67cf5622b72f0b59b5689979c6  cs-send-dtmf.patch
+653ae863f6770b420cfd7a2d40d8398fb6e86f209ab10d3ee1125e5a98c8c56668af1f1f995e56211900595b8e19abbf0b79144c27a8bbba84ef7fea19343377  apn-list-in-ims-db.patch
+f6168fa2fc1d297f73244f45f272efa753bb564ee4269c63f3c7acbae5f05a7efdc4965e6b147f8ebe84d8be13f4f72699c073151347e51f81b6551e045576b2  attach-apn-request-pcscf.patch
+87a26cb111590cdd7eac8f00ec7faff528e213b22e1a705611a6881b1d7cc826bfeb0a97d1c326324cffa004aae9df97b4a30cae96dbf0f21881785d20f8b4cc  gnss-prologue-per-board.patch
+58a7c613dc68cc932e186cf93875573cba24219d0a3097adbfea16453b23f359b1039f99438a1a827892b02d1779119bebf3fb525d89b6819828edddfaca63a9  oem-property-store.patch
+f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
+582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
+7c5292a6fcf9c6b06d96c0c321f490c3a8b615547fe4acf92084e350a8d03aa9de9efc07760a8f74973943d057f868d62e8f2226dc3f632f26b389fdec530a91  exynos-modem.service
+afdba8af1f0e3bb4634c229e5ce51d796468a42f7d032347eef074b9a2ef8b86ceda18dd8b6b4b87f795e6f340c6ba2256bddf084b6ef6d4fb9faa5fae11dc61  sit-proxy.service
+23bdc9d991952ac4d765efa99b1dcb2ef80160bf5da4d232f4e3783dc25e48306334aee8daa46da32f281fc4ff1d9c2134fc43ee6e32dc101555238de31d3ace  99-google-komodo-modem.rules
+7c8af9373a3f6a9ee4a1d609db3f0e85147f0c153ead2da8ddec7db411da2efcaa2e07b273335176a710a64846d19d43704ded016ab38a40aa29266a6d933885  kepler-gnssd.service
+ab41e4071a2791d0699d3c5d7fa00f87ff919e94c5bd24339b63d81e31aa9b528616fa5df469592ade03016004ca5669b3fa091b05bb296cbb6cc423b2759db1  gpsd.service
+8f366cc98955472c908fbb042d8d3fb42019545b2a6c473d679d3078c17ba4de68ff6d9cb78e0494422a10bcf21ef9b05d98e4beac71509ee6a6a560e502f464  20-kepler-gnssd.conf
+4fa00aa444030f94089b6ecbbe62e9b48e85e39f1fda723df03d85660bfa8b8a0d2b76c3a8721880256354f34964f93054ffb23e8c46a866775e99b64357ed6d  exynos-modem-properties.conf
+9dc07a3820c1258ca25e786851d89281828e3fc1d9016ddf87343ba7b9a1b30e1c6705decc148a11ae9e68121c930e30aaab9f5f351e3f0fd2f0fc375d2c43ad  99-kepler-gnssd.rules
+"
