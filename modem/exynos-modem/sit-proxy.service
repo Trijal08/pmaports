@@ -1,0 +1,17 @@
+[Unit]
+Description=Exynos SIT control-port multiplexer
+# No dependency on the wwan0sit* device units on purpose: the SIT ports are
+# created and destroyed with the CP, and sit-proxy reopens them itself.
+After=exynos-modem.service
+Before=ModemManager.service
+
+[Service]
+Type=simple
+# Creates and cleans up /run/sit-proxy, so a stale socket never outlives it.
+RuntimeDirectory=sit-proxy
+ExecStart=/usr/sbin/sit-proxy
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

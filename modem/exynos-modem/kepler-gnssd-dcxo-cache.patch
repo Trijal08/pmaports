@@ -1,0 +1,207 @@
+diff --git a/crates/kepler-gnssd/src/main.rs b/crates/kepler-gnssd/src/main.rs
+index bfc607f..6249136 100644
+--- a/crates/kepler-gnssd/src/main.rs
++++ b/crates/kepler-gnssd/src/main.rs
+@@ -12,7 +12,10 @@ mod mems;
+ mod protocol;
+ 
+ use gnss_betp::{dump_message_name, ChppDecoder, DumpDecoder};
+-use protocol::{encode_prologue, parse_prologue, Event, Output, Protocol};
++use protocol::{
++    encode_prologue, parse_prologue, Event, Output, PrologueRecord, Protocol,
++    MIDSID_DCXO_CORRECTIONS,
++};
+ use std::collections::{BTreeMap, VecDeque};
+ use std::ffi::{CStr, CString};
+ use std::fs::{File, OpenOptions};
+@@ -35,6 +38,10 @@ const DEFAULT_PROLOGUE: &str = "/etc/kepler-gnssd/session-prologue.bin";
+ /// daemon writes about this board, not configuration someone installs, so it
+ /// lives under /var/lib rather than /etc.
+ const DEFAULT_SESSION_CACHE: &str = "/var/lib/kepler-gnssd/session-open.bin";
++/// Where the crystal calibration the receiver handed back is kept. Stock's
++/// equivalent is `cm_dcxo_corrections.bin`. Per-unit, so it is learned here
++/// and never shipped.
++const DEFAULT_DCXO_CACHE: &str = "/var/lib/kepler-gnssd/dcxo-corrections.bin";
+ const DEFAULT_GROUP: &str = "geoclue";
+ /// gpsd drops privileges to nobody:dialout, and grantpt leaves a slave owned
+ /// by root alone, so a device it cannot open is no use to it.
+@@ -61,6 +68,12 @@ Options:
+                              a batch that does not work is never persisted
+       --no-session-cache     Always open with the batch compiled in, and do not
+                              record one
++      --dcxo-cache PATH      Where to keep the crystal calibration the receiver
++                             hands back, and give it back at the next session
++                             start, which narrows the acquisition frequency
++                             search (default:
++                             /var/lib/kepler-gnssd/dcxo-corrections.bin)
++      --no-dcxo-cache        Do not keep or replay it
+       --socket PATH          NMEA stream socket (default: /run/gnss-share.sock)
+       --socket-group GROUP   Socket group (default: geoclue)
+       --no-socket-group      Keep the daemon's effective group
+@@ -97,6 +110,7 @@ struct Args {
+     dump: PathBuf,
+     prologue: PathBuf,
+     session_cache: Option<PathBuf>,
++    dcxo_cache: Option<PathBuf>,
+     socket: PathBuf,
+     socket_group: Option<String>,
+     socket_mode: u32,
+@@ -120,6 +134,7 @@ fn parse_args() -> Result<Args, String> {
+         dump: DEFAULT_DUMP.into(),
+         prologue: DEFAULT_PROLOGUE.into(),
+         session_cache: Some(DEFAULT_SESSION_CACHE.into()),
++        dcxo_cache: Some(DEFAULT_DCXO_CACHE.into()),
+         socket: DEFAULT_SOCKET.into(),
+         socket_group: Some(DEFAULT_GROUP.into()),
+         socket_mode: 0o660,
+@@ -144,6 +159,10 @@ fn parse_args() -> Result<Args, String> {
+                 args.session_cache = Some(parser.value().map_err(|e| e.to_string())?.into())
+             }
+             Long("no-session-cache") => args.session_cache = None,
++            Long("dcxo-cache") => {
++                args.dcxo_cache = Some(parser.value().map_err(|e| e.to_string())?.into())
++            }
++            Long("no-dcxo-cache") => args.dcxo_cache = None,
+             Long("socket") => args.socket = parser.value().map_err(|e| e.to_string())?.into(),
+             Long("socket-group") => {
+                 args.socket_group = Some(
+@@ -508,7 +527,12 @@ fn save_session_cache(path: &Path, records: &[protocol::PrologueRecord]) {
+     if records.is_empty() {
+         return;
+     }
+-    let encoded = encode_prologue(records);
++    save_blob(path, &encode_prologue(records), &format!("{} records", records.len()));
++}
++
++/// Write `bytes` to `path` through a temporary and a rename, skipping the
++/// write when the file already holds them.
++fn save_blob(path: &Path, encoded: &[u8], what: &str) {
+     if let Ok(existing) = std::fs::read(path) {
+         if existing == encoded {
+             return;
+@@ -516,21 +540,17 @@ fn save_session_cache(path: &Path, records: &[protocol::PrologueRecord]) {
+     }
+     if let Some(dir) = path.parent() {
+         if let Err(e) = std::fs::create_dir_all(dir) {
+-            eprintln!("kepler-gnssd: session cache {}: {e}", dir.display());
++            eprintln!("kepler-gnssd: {}: {e}", dir.display());
+             return;
+         }
+     }
+     let tmp = path.with_extension("tmp");
+-    let write = std::fs::write(&tmp, &encoded).and_then(|()| std::fs::rename(&tmp, path));
++    let write = std::fs::write(&tmp, encoded).and_then(|()| std::fs::rename(&tmp, path));
+     match write {
+-        Ok(()) => eprintln!(
+-            "kepler-gnssd: recorded {} session-open records to {}",
+-            records.len(),
+-            path.display()
+-        ),
++        Ok(()) => eprintln!("kepler-gnssd: recorded {what} to {}", path.display()),
+         Err(e) => {
+             let _ = std::fs::remove_file(&tmp);
+-            eprintln!("kepler-gnssd: session cache {}: {e}", path.display());
++            eprintln!("kepler-gnssd: {}: {e}", path.display());
+         }
+     }
+ }
+@@ -849,6 +869,11 @@ fn run_loop(
+                 eprintln!("kepler-gnssd: records so far: {line}");
+             }
+         }
++        if let Some(raw) = protocol.take_dcxo() {
++            if let Some(path) = args.dcxo_cache.as_deref() {
++                save_blob(path, &raw, &format!("{} bytes of crystal calibration", raw.len()));
++            }
++        }
+         // A fix proves the batch this session opened with. Keep it once.
+         if !cache_saved && protocol.has_fixed() {
+             if let Some(path) = args.session_cache.as_deref() {
+@@ -1022,6 +1047,26 @@ fn run(args: Args) -> io::Result<()> {
+         }
+         Err(e) => return Err(e),
+     };
++    /*
++     * The crystal calibration a previous run was handed. Stock pushes this at
++     * session start before anything else, so it goes in front of the prologue.
++     */
++    let mut prologue = prologue;
++    if let Some(raw) = args.dcxo_cache.as_ref().and_then(|p| std::fs::read(p).ok()) {
++        eprintln!(
++            "kepler-gnssd: replaying {} bytes of stored crystal calibration",
++            raw.len()
++        );
++        prologue.insert(
++            0,
++            PrologueRecord {
++                midsid: MIDSID_DCXO_CORRECTIONS,
++                proto: 2,
++                data: raw,
++            },
++        );
++    }
++
+     /*
+      * The session-open batch a previous run proved on this board.  Absent on a
+      * fresh install, in which case the batch compiled in opens the session and
+diff --git a/crates/kepler-gnssd/src/protocol.rs b/crates/kepler-gnssd/src/protocol.rs
+index 71c44f8..01bd9d2 100644
+--- a/crates/kepler-gnssd/src/protocol.rs
++++ b/crates/kepler-gnssd/src/protocol.rs
+@@ -17,6 +17,10 @@ use gnss_betp::{
+ use std::collections::BTreeMap;
+ use std::time::{Duration, Instant};
+ 
++/// The crystal calibration blob, in both directions: stock pushes it at
++/// session start and the receiver hands a refined one back.
++pub const MIDSID_DCXO_CORRECTIONS: u16 = 0x08ad;
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct PrologueRecord {
+     pub midsid: u16,
+@@ -136,6 +140,8 @@ pub struct Protocol {
+     /// above worth keeping.
+     fixed_once: bool,
+     seen_records: BTreeMap<u16, (u32, usize)>,
++    /// Newest DCXO corrections blob the receiver has handed back, if any.
++    dcxo: Option<Vec<u8>>,
+     new_records: Vec<(u16, u16, usize)>,
+     due: Option<Instant>,
+     wanted: bool,
+@@ -159,6 +165,7 @@ impl Protocol {
+             session_open_used: Vec::new(),
+             fixed_once: false,
+             seen_records: BTreeMap::new(),
++            dcxo: None,
+             new_records: Vec::new(),
+             due: None,
+             wanted: false,
+@@ -314,6 +321,18 @@ impl Protocol {
+         &self.seen_records
+     }
+ 
++    /// The crystal calibration the receiver last handed back, taken once.
++    ///
++    /// The receiver refines its DCXO corrections while it runs and offers the
++    /// result unprompted. Keeping it and giving it back at the next session
++    /// start is what lets acquisition search a narrow frequency window
++    /// instead of a cold one; stock does the same through
++    /// `cm_dcxo_corrections.bin`. The payload is opaque to us -- it is
++    /// carried, not interpreted.
++    pub fn take_dcxo(&mut self) -> Option<Vec<u8>> {
++        self.dcxo.take()
++    }
++
+     /// Record ids seen for the first time since the last call.
+     pub fn take_new_records(&mut self) -> Vec<(u16, u16, usize)> {
+         std::mem::take(&mut self.new_records)
+@@ -489,6 +508,9 @@ impl Protocol {
+                     self.new_records
+                         .push((record.midsid, record.proto, record.data.len()));
+                 }
++                if record.midsid == MIDSID_DCXO_CORRECTIONS {
++                    self.dcxo = Some(record.data.to_vec());
++                }
+                 if record.midsid == MIDSID_GEODETIC {
+                     if let Some(position) = Geodetic::parse(record.data) {
+                         self.fixed_once = true;

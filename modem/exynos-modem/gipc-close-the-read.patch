@@ -1,0 +1,39 @@
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -207,11 +207,35 @@
+                 break;
+             }
+         }
++        /*
++         * Close the read with a bare envelope -- no payload, the request's own
++         * sequence -- which is the shape every other service here already
++         * answers with. Stock sends one per read: four of them on this service
++         * in its boot capture (sequences 6, 7, 7, 9) against three file reads,
++         * and we sent none.
++         *
++         * Without it the CP never treats a read as finished and asks again,
++         * about twice a second, for as long as it is up. Matching the frame
++         * size, the payload shape, the block size and even the file's bytes to
++         * stock changed nothing; this was the one thing left that stock does
++         * and we did not.
++         */
++        frames.push(
++            GipcMessage {
++                r#type: Some(TYPE_RESPONSE),
++                endpoint: req.endpoint,
++                service: req.service,
++                method: req.method,
++                payload: None,
++                sequence: req.sequence,
++            }
++            .encode_to_vec(),
++        );
+         eprintln!(
+             "gipc: served {} ({} bytes) in {} block(s) of {}",
+             rr.file_name,
+             n,
+-            frames.len(),
++            frames.len() - 1,
+             block
+         );
+         frames

@@ -1,0 +1,23 @@
+diff --git a/crates/exynos-modem/src/gipc.rs b/crates/exynos-modem/src/gipc.rs
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -142,13 +142,12 @@ impl Gipc {
+                 return Vec::new();
+             }
+         };
+-        // ponytail: cap the GIPC block so one uecap frame + one SIT control frame
+-        // both fit the 4096-byte FMT ring. At the CP's requested 4000 a single
+-        // frame fills the ring (space ~47), starving ModemManager's control
+-        // channel (ch 0xf5) during connect -> SETUP_DATA_CALL times out. The
+-        // response carries offset+last_block so smaller blocks reassemble fine.
+-        // Raise if a CP ever rejects sub-4000 blocks.
+-        let block = (rr.block_size as usize).max(1).min(2048);
++        // Serve exactly the block size the CP asked for. Capping at 2048 split
++        // files the CP expected in one block, and it re-requested them in a
++        // loop (219x ap_plmn_mapping in one boot) until its data plane died.
++        // The 2048 cap was a workaround for the FMT-ring flood; if that
++        // returns, pace the serve instead of resizing the block.
++        let block = (rr.block_size as usize).max(1);
+         let n = data.len();
+         let base = req.sequence.unwrap_or(0);
+         let mut frames = Vec::new();

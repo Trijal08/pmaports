@@ -1,0 +1,128 @@
+# Tag the CP's channels for systemd so units can order against their .device
+# jobs; without this the nodes exist in /dev but the jobs wait out the boot
+# timeout.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*", TAG+="systemd"
+
+# ID_MM_SIT_PROXY routes the samsung-sit plugin through sit-proxy's socket
+# instead of owning the node, so mm-sit-tool can be used while ModemManager is
+# running. If the proxy is not answering the plugin warns and takes the node.
+#
+# The carrier-config directory must be set on *every* SIT port, not just
+# wwan0sit0: mm_plugin_samsung_sit's create_modem reads the property from the
+# first SIT probe in an unordered list and stops there, so with two ports a
+# rule naming only one is a coin flip -- and losing it means no carrier config,
+# no ims.db, and every bearer failing instantly.
+# ID_MM_SIT_CARRIER_CONFIG_DIRECTORY is where the plugin opens cfg.db and
+# ims.db itself, so it has to be a path that exists here. It is NOT the string
+# the CP is told: the plugin advertises downstream's /vendor/firmware/
+# carrierconfig in CARRIER_CONFIG_MANIFEST so the frame matches the vendor
+# RIL's, and exynos-modem's RFS server re-roots whatever the CP then opens onto
+# this directory. Dropping this line leaves the plugin unable to find either
+# database -- no carrier APN list, no IMS config, and every bearer failing.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
+  ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", \
+  ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/lib/firmware/google/s5400/carrierconfig"
+
+# The device identity the CP puts in its IMS configuration, and from which the
+# SIP User-Agent is built. Left to the running system these come out as the
+# device tree's model and /etc/os-release, which do not match what this
+# hardware's own stock stack sends -- captured from komodo's Android on the
+# same SIM:
+#
+#            stock                      ours, unpinned
+#   model    Pixel9ProXL                Pixel 9 Pro XL      (device-tree spaces)
+#   build    CP2A.260605.016            nura edge           (os-release ID + BUILD_ID)
+#   UA       Telus Pixel9ProXL CP2A.260605.016
+#            Telus Pixel-9-Pro-XL nura-edge
+#
+# expand_user_agent() builds the UA from #MODEL# and #BUILD#, so pinning these
+# two fixes the UA as well. The IMS core provisions a device profile per
+# subscription and the User-Agent is how a REGISTER identifies against it,
+# which is the remaining difference between our registration attempt and
+# stock's on this SIM.
+#
+# This is the identity of *this* device as its own vendor stack reports it, on
+# the owner's own subscription -- not a claim to be some other device. Note it
+# does reverse a deliberate earlier choice to name postmarketOS here (see the
+# comment on expand_user_agent in mm-sit-ims-config.c); that string did
+# register on o2, so if a carrier turns out to prefer it, this is the knob.
+# DISABLED 2026-11-04 as the last AP-side variable in the Telus IMS
+# registration failure on the CP2A.260805.005 firmware.
+#
+# Everything else the AP sends is byte-identical between a boot that registered
+# (firmware eeadf643 / baseband 260429) and five boots on 260807 that do not:
+# the IMS hidden menu matches on a 513-byte common prefix, ADD_PDN_INFO is 695
+# bytes both, STACK_START is present, and the CP acks with 0x0d75 either way.
+# The *only* differing bytes are this identity block, so it is the only thing
+# left to test without touching the firmware pin.
+#
+# MEASURED AND CORRECTED 2026-11-04, against Android running this exact vendor
+# commit (baseband g5400c-260604-260807-B-16035863). SET_DEVICE_INFO (0x0922)
+# carries four 32-byte fields; stock sends, on both stacks:
+#
+#     "Pixel 9 Pro XL"  "CP2A.260605.016"  "komodo"  "17"
+#
+# and we were sending
+#
+#     "Pixel 9 Pro XL"  "nura edge"        "google,komodo"  ""
+#
+# So field 1 was already right and the old note here was wrong: stock does NOT
+# send "Pixel9ProXL" without spaces, and pinning MODEL to that would have
+# *broken* parity. Do not re-add a MODEL override.
+#
+# Field 3 is fixed generically in the plugin (the board name is what follows the
+# last ',' or '-' of /proc/device-tree/compatible, so "google,komodo" ->
+# "komodo"). Field 4 is a vendor software-version constant with no counterpart
+# on postmarketOS, so it comes from the property below.
+#
+# DEVICE_BUILD is deliberately NOT pinned.
+#
+# It was, to the Android vendor build id, for DEVICE_INFO parity -- but the
+# same field is the SIP User-Agent's #BUILD# token, so pinning it made this
+# machine introduce itself to the IMS core as an Android build it is not.
+# Unpinned, mm_sit_client read_os_build() derives it from /etc/os-release
+# (ID + VERSION_ID), which is what the OS actually is. The 2253/VoLTE fix
+# turned out to be the ims.db profile content, not this identity, so the
+# parity argument for pinning no longer has anything behind it.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
+  ENV{ID_MM_SIT_DEVICE_SW_VERSION}="17", \
+  ENV{ID_MM_SIT_CP_SW_VERSION}="67"
+
+# The CP's AT service is a veneer over the control plane the plugin already
+# speaks, and a call-waiting query through it knocks the CP off its serving
+# network. The plugin grabs it as ignored anyway; this stops ModemManager
+# probing it at all and leaves it free for manual use.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ENV{ID_MM_PORT_IGNORE}="1"
+
+# Both logical SIM stacks are used. ModemManager groups ports by physdev, and
+# every port here hangs off the one /sys/devices/platform/modem node, so
+# without distinct grouping UIDs both SIT ports collapse into a single modem
+# and the plugin sees logical_stack = -1. Give each stack its own UID while
+# keeping the shared physical CP path for initialization and internet-data
+# ownership. $id is the matched s5xxx-modem parent, so the DRIVERS match is
+# required for it to be defined.
+#
+# CID 1-15 belong to SIT0 and CID 16-30 to SIT1; the netdev is rmnet(CID-1),
+# hence the rmnet0-14 / rmnet15-29 split. The AT port follows stack 0.
+ACTION!="add|change|move|bind", GOTO="google_komodo_modem_end"
+SUBSYSTEM!="wwan|net", GOTO="google_komodo_modem_end"
+# ID_MM_SIT_ESCALATE_ATTACH_TO_IMS: may a 2253 on this stack's IMS PDN take the
+# modem-wide attach APN? Only stack 0 (Telus here).
+#
+# The escalation is a workaround for 2253 and it is not free: taking the attach
+# APN makes the CP refuse that stack's *data* APN, so the SIM loses data. That
+# trade is only worth making on the SIM you want VoLTE on -- this device wants
+# VoLTE on Telus (stack 0) and data on Fizz (stack 1).
+#
+# Setting it on both stacks is what broke this: with firmware and carrier config
+# matched, stack 1's IMS PDN is granted too, so it escalated at t=16s -- before
+# NetworkManager had brought its bearer up, so the plugin's "don't escalate over
+# a live connection" guard never saw a connection to protect -- and the device
+# ended up with no data on either SIM and no VoLTE either.
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit0", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0", ENV{ID_MM_SIT_LOGICAL_STACK}="0", ENV{ID_MM_SIT_ESCALATE_ATTACH_TO_IMS}="1"
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit1", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack1", ENV{ID_MM_SIT_LOGICAL_STACK}="1"
+SUBSYSTEM=="net", DRIVERS=="s5xxx-modem", KERNEL=="rmnet[0-9]|rmnet1[0-4]", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0"
+SUBSYSTEM=="net", DRIVERS=="s5xxx-modem", KERNEL=="rmnet1[5-9]|rmnet2[0-9]", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack1"
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*at*", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0"
+
+LABEL="google_komodo_modem_end"

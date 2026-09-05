@@ -1,0 +1,146 @@
+diff --git a/crates/exynos-modem/src/main.rs b/crates/exynos-modem/src/main.rs
+index 7064f2e..7e0982d 100644
+--- a/crates/exynos-modem/src/main.rs
++++ b/crates/exynos-modem/src/main.rs
+@@ -45,6 +45,8 @@ const DEFAULT_OEM_DEV: &str = "/dev/umts_oem1";
+ const DEFAULT_RADIOEXT_DEV: &str = "/dev/umts_oem0";
+ const DEFAULT_GIPC_DEV: &str = "/dev/umts_oem3";
+ const DEFAULT_UECAP_DIR: &str = "/vendor/firmware/uecapconfig";
++/// Where the CP's property reads are answered from; see `oem::Oem::property`.
++const DEFAULT_PROPERTY_DIR: &str = "/run/exynos-modem/properties";
+ 
+ /// A per-channel device selection: the built-in default, an explicit path, or
+ /// disabled (`none`).
+@@ -83,6 +85,7 @@ struct Config {
+     radioext: Dev,
+     gipc: Dev,
+     uecap_dir: PathBuf,
++    prop_dir: PathBuf,
+     verbose: bool,
+ }
+ 
+@@ -100,6 +103,9 @@ CP and serves rfs + oem on their default nodes.
+       --oem-radioext-dev PATH  radioext/coex node   (default /dev/umts_oem0)
+       --oem-gipc-dev PATH      GEMS GIPC node       (default /dev/umts_oem3)
+       --uecap-dir PATH    UE-cap config directory   (default /vendor/firmware/uecapconfig)
++      --property-dir PATH  directory of files answering the CP's property
++                          reads, one per property name
++                          (default /run/exynos-modem/properties)
+       --state-dir PATH    where the modem's own files are kept, preferred over
+                           the read-only vendor partitions (default /var/lib/exynos-modem)
+   -h, --help              show this help
+@@ -119,6 +125,7 @@ fn parse_args() -> Config {
+         radioext: Dev::Default,
+         gipc: Dev::Default,
+         uecap_dir: PathBuf::from(DEFAULT_UECAP_DIR),
++        prop_dir: PathBuf::from(DEFAULT_PROPERTY_DIR),
+         verbose: false,
+     };
+     let mut parser = lexopt::Parser::from_env();
+@@ -163,6 +170,7 @@ fn parse_args() -> Config {
+             Long("oem-radioext-dev") => parser.value().map(|v| cfg.radioext = parse_dev(v)),
+             Long("oem-gipc-dev") => parser.value().map(|v| cfg.gipc = parse_dev(v)),
+             Long("uecap-dir") => parser.value().map(|v| cfg.uecap_dir = PathBuf::from(v)),
++            Long("property-dir") => parser.value().map(|v| cfg.prop_dir = PathBuf::from(v)),
+             Long("state-dir") => parser.value().map(|v| cfg.state_dir = PathBuf::from(v)),
+             _ => Err(arg.unexpected()),
+         };
+@@ -188,8 +196,9 @@ fn main() {
+     if let Some(dev) = cfg.oem.resolve(DEFAULT_OEM_DEV) {
+         let sd = state_dir.clone();
+         let ud = uecap_dir.clone();
++        let pd = cfg.prop_dir.clone();
+         handles.push(thread::spawn(move || {
+-            oem::run(&dev, ud, sd, verbose)
++            oem::run(&dev, ud, pd, sd, verbose)
+         }));
+     }
+     if let Some(dev) = cfg.gipc.resolve(DEFAULT_GIPC_DEV) {
+diff --git a/crates/exynos-modem/src/oem.rs b/crates/exynos-modem/src/oem.rs
+index 4241e9c..3220860 100644
+--- a/crates/exynos-modem/src/oem.rs
++++ b/crates/exynos-modem/src/oem.rs
+@@ -23,8 +23,10 @@ use crate::pb::{
+ use crate::store::{Kind, Store};
+ 
+ /// Serve the oem/GEMS channel forever (see [`chan::run`]).
+-pub fn run(dev: &Path, uecap_dir: PathBuf, state_dir: PathBuf, verbose: bool) {
+-    let oem = Oem::new(uecap_dir.clone(), verbose).with_store(Store::new(state_dir));
++pub fn run(dev: &Path, uecap_dir: PathBuf, prop_dir: PathBuf, state_dir: PathBuf, verbose: bool) {
++    let oem = Oem::new(uecap_dir.clone(), verbose)
++        .with_properties(prop_dir)
++        .with_store(Store::new(state_dir));
+     eprintln!(
+         "oem: serving {} on {}{}",
+         uecap_dir.display(),
+@@ -36,6 +38,7 @@ pub fn run(dev: &Path, uecap_dir: PathBuf, state_dir: PathBuf, verbose: bool) {
+ 
+ pub struct Oem {
+     uecap_dir: PathBuf,
++    prop_dir: PathBuf,
+     store: Store,
+     verbose: bool,
+ }
+@@ -54,6 +57,7 @@ impl Oem {
+     pub fn new(uecap_dir: PathBuf, verbose: bool) -> Oem {
+         Oem {
+             uecap_dir,
++            prop_dir: PathBuf::from(crate::DEFAULT_PROPERTY_DIR),
+             store: Store::new(PathBuf::from(crate::store::DEFAULT_ROOT)),
+             verbose,
+         }
+@@ -190,6 +194,26 @@ impl Oem {
+         msgs
+     }
+ 
++    /// Answer the CP's property reads from `dir`, one file per property name.
++    pub fn with_properties(mut self, dir: PathBuf) -> Oem {
++        self.prop_dir = dir;
++        self
++    }
++
++    /// The published value of one property, or empty when it is not set.
++    ///
++    /// The name comes from the CP, so it is used as a single path component and
++    /// never as a path: anything with a separator or a traversal is refused.
++    fn property(&self, name: &str) -> String {
++        if name.is_empty() || name.contains('/') || name.contains("..") {
++            eprintln!("oem: refusing property name {:?}", name);
++            return String::new();
++        }
++        fs::read_to_string(self.prop_dir.join(name))
++            .map(|v| v.trim().to_owned())
++            .unwrap_or_default()
++    }
++
+     fn handle_property(&self, req: &ModemSvcMessage, m: &PropertyMessage) -> Vec<ModemSvcMessage> {
+         use property_message::Property;
+         let reply = match &m.property {
+@@ -201,14 +225,22 @@ impl Oem {
+                 }
+                 Property::WriteResponse(PropertyWriteResponse {})
+             }
+-            // The CP asks for a property; none are set here, so return empty.
++            // The CP asks for a property. Downstream this is the Android
++            // property service; here it is one file per property name under
++            // prop_dir, so whoever knows a value can publish it without this
++            // process having to understand it. An unset property reads as the
++            // empty string, which is what the CP gets for anything we do not
++            // publish.
++            //
++            // It matters for at least one: after the carrier config is
++            // announced the CP asks `vendor.ril.modem.cfg.carrier_id<stack>`
++            // and stock answers the cfg.db carrier id (1404 for ca_telus).
+             Some(Property::ReadRequest(r)) => {
++                let value = self.property(&r.property);
+                 if self.verbose {
+-                    eprintln!("oem: property read {}", r.property);
++                    eprintln!("oem: property read {} -> {:?}", r.property, value);
+                 }
+-                Property::ReadResponse(PropertyReadResponse {
+-                    value: String::new(),
+-                })
++                Property::ReadResponse(PropertyReadResponse { value })
+             }
+             other => {
+                 eprintln!("oem: unexpected property message {:?}", other);

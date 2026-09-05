@@ -1,0 +1,2226 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Thu, 6 Nov 2026 00:00:00 +0000
+Subject: [PATCH] ffi: take over the vendor's two carrier databases
+
+ModemManager's samsung-sit plugin read the vendor's cfg.db and ims.db
+itself: 1046 lines of vendor schema, vendor tag numbers, and the vendor
+resolver's four-tier ranking reimplemented in C. That is this project's
+knowledge, not a modem manager's, and holding it there is what kept the
+plugin from going upstream.
+
+Two crates take it over, next to the codecs that build the frames their
+values end up in:
+
+  samsung-carrier-db   cfg.db -> which carrier manifest a SIM gets. The
+                       vendor's own four tiers in order: SIM privilege
+                       rule, the ranked carrier_info match, an ICCID IIN
+                       prefix, the global fallback. Getting this wrong
+                       does not fail loudly, it just applies another
+                       carrier's rules, so it reproduces the ranking
+                       exactly rather than improving on it.
+
+  samsung-ims-config   ims.db -> the CP's per-carrier IMS settings and
+                       APN list, handed back as the same
+                       SamsungAimsConfigEntry the hidden-menu builder
+                       already takes.
+
+Both are exposed through samsung-sit-ffi as opaque handles, because the
+entries point at strings the handle owns. SQLite comes from the system
+here, as in samsung-ims-config's sibling carrier-settings; a static
+consumer of the archive needs it on its own link line, so the pkg-config
+file now says Requires.private: sqlite3.
+
+Each resolver was checked against the C it replaces, compiled as an
+oracle, over every identity the shipped databases contain -- 2582 for
+ims.db and 3964 for cfg.db -- with zero differences in entries, order,
+User-Agent or selected manifest. The ported unit tests travel with the
+crates.
+diff --git a/Cargo.lock b/Cargo.lock
+index d2c8341..2c0da6c 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1125,6 +1125,23 @@ dependencies = [
+  "samsung-sit",
+ ]
+ 
++[[package]]
++name = "samsung-carrier-db"
++version = "0.1.0"
++dependencies = [
++ "rusqlite",
++ "tempfile",
++]
++
++[[package]]
++name = "samsung-ims-config"
++version = "0.1.0"
++dependencies = [
++ "rusqlite",
++ "samsung-aims",
++ "tempfile",
++]
++
+ [[package]]
+ name = "samsung-sit"
+ version = "0.1.0"
+@@ -1138,6 +1155,8 @@ version = "0.1.0"
+ dependencies = [
+  "cbindgen",
+  "samsung-aims",
++ "samsung-carrier-db",
++ "samsung-ims-config",
+  "samsung-sit",
+ ]
+ 
+diff --git a/crates/samsung-carrier-db/Cargo.toml b/crates/samsung-carrier-db/Cargo.toml
+new file mode 100644
+index 0000000..89fb9f6
+--- /dev/null
++++ b/crates/samsung-carrier-db/Cargo.toml
+@@ -0,0 +1,16 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++[package]
++name = "samsung-carrier-db"
++version = "0.1.0"
++edition = "2021"
++license = "GPL-2.0-or-later"
++repository = "ssh://git@git.deusch.me:222/pixel-mainline/exynos-modem.git"
++description = "Selects a carrier manifest for a SIM out of the vendor's cfg.db"
++
++[dependencies]
++# Linked from the system, as in samsung-ims-config: the alternative is shipping
++# a second copy of SQLite in the same library.
++rusqlite = "0.32"
++
++[dev-dependencies]
++tempfile = "3"
+diff --git a/crates/samsung-carrier-db/examples/resolve.rs b/crates/samsung-carrier-db/examples/resolve.rs
+new file mode 100644
+index 0000000..3e3d493
+--- /dev/null
++++ b/crates/samsung-carrier-db/examples/resolve.rs
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! Prints what resolve() picks, in the same form as the C oracle.
++use samsung_carrier_db::{resolve, CarrierIdentity};
++fn main() {
++    let a: Vec<String> = std::env::args().collect();
++    let arg = |n: usize| a.get(n).cloned().unwrap_or_default();
++    let id = CarrierIdentity {
++        imsi: arg(2),
++        iccid: arg(3),
++        mccmnc: arg(4),
++        spn: arg(5),
++        gid1: arg(6),
++        gid2: arg(7),
++        privilege_access_rule: arg(8),
++    };
++    match resolve(&a[1], &id) {
++        Ok(c) => println!(
++            "id {} name {} sha1 {} path {}",
++            c.carrier_id,
++            c.carrier_name,
++            c.manifest_sha1,
++            c.manifest_path.display()
++        ),
++        Err(e) => println!("error {e}"),
++    }
++}
+diff --git a/crates/samsung-carrier-db/src/lib.rs b/crates/samsung-carrier-db/src/lib.rs
+new file mode 100644
+index 0000000..f8aa105
+--- /dev/null
++++ b/crates/samsung-carrier-db/src/lib.rs
+@@ -0,0 +1,426 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! Selects the carrier manifest a SIM should be configured with, out of the
++//! vendor's `cfg.db`.
++//!
++//! The CP pulls its carrier policy as a manifest named by SHA1; this decides
++//! which one. The decision is not ours to design: it reproduces the vendor
++//! resolver's own four tiers and its ranking, because a SIM that resolves to a
++//! different manifest here than it would on the stock stack gets a different
++//! set of carrier rules, and the failures that follow look like radio bugs.
++//!
++//! The tiers, in the order the vendor tries them:
++//!
++//! 1. the SIM's privilege access rule, an exact match that beats everything;
++//! 2. the ranked `carrier_info` match on MCCMNC/IMSI/SPN/GID;
++//! 3. an ICCID IIN prefix;
++//! 4. the global regional fallback.
++
++use std::path::{Path, PathBuf};
++
++use rusqlite::{Connection, OpenFlags};
++
++/// The SIM's identity. Absent fields are empty strings, as the vendor's own
++/// query treats "not present" and "empty" alike.
++#[derive(Debug, Default, Clone)]
++pub struct CarrierIdentity {
++    pub imsi: String,
++    pub iccid: String,
++    pub mccmnc: String,
++    pub spn: String,
++    pub gid1: String,
++    pub gid2: String,
++    pub privilege_access_rule: String,
++}
++
++/// The manifest a SIM resolved to.
++#[derive(Debug, Clone)]
++pub struct CarrierConfig {
++    pub carrier_id: u32,
++    pub carrier_name: String,
++    /// Lowercase hex, as the manifest file is named.
++    pub manifest_sha1: String,
++    pub manifest_sha1_bytes: [u8; 20],
++    pub manifest_path: PathBuf,
++}
++
++#[derive(Debug)]
++pub enum Error {
++    /// The resolver has nothing to match on.
++    NoImsi,
++    Open { path: String, reason: String },
++    /// The database is readable but not the shape the resolver expects.
++    Schema(String),
++    Query(String),
++    /// No tier matched, not even the global fallback.
++    NoManifest,
++    /// A `confman` value that is not a SHA1; the database is corrupt.
++    BadSha1(&'static str),
++    /// The manifest the database names is not packaged.
++    MissingManifest(PathBuf),
++}
++
++impl std::fmt::Display for Error {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Error::NoImsi => {
++                write!(f, "Cannot resolve a Samsung carrier profile without an IMSI")
++            }
++            Error::Open { path, reason } => {
++                write!(f, "Could not open Samsung carrier database {path}: {reason}")
++            }
++            Error::Schema(m) => write!(f, "Invalid Samsung carrier database schema: {m}"),
++            Error::Query(m) => write!(f, "Failed to query Samsung carrier database: {m}"),
++            Error::NoManifest => write!(f, "No matching Samsung carrier manifest was found"),
++            Error::BadSha1(m) => write!(f, "Carrier manifest identifier {m}"),
++            Error::MissingManifest(p) => write!(
++                f,
++                "Selected Samsung carrier manifest does not exist: {}",
++                p.display()
++            ),
++        }
++    }
++}
++impl std::error::Error for Error {}
++
++/// One `carrier_info` row, plus where the ranking put it.
++#[derive(Default, Clone)]
++struct Candidate {
++    carrier_id: u32,
++    rowid: i64,
++    name: String,
++    hash: String,
++    mccmnc: String,
++    imsi_pattern: String,
++    spn: String,
++    gid1: String,
++    gid2: String,
++    iccid_prefix: String,
++    rank: u32,
++    imsi_strength: u32,
++}
++
++impl Candidate {
++    fn is_empty(&self) -> bool {
++        self.hash.is_empty()
++    }
++}
++
++/// A pattern that constrains nothing.
++fn is_wildcard(value: &str) -> bool {
++    value.is_empty() || value == "%"
++}
++
++/// SQL `LIKE`, with `%` and `_` and no escape character -- the vendor's
++/// patterns use neither case folding nor escapes.
++fn like_match(value: &str, pattern: &str) -> bool {
++    if is_wildcard(pattern) {
++        return true;
++    }
++    let (v, p) = (value.as_bytes(), pattern.as_bytes());
++    let (mut vi, mut pi) = (0usize, 0usize);
++    let (mut star, mut retry) = (None, 0usize);
++
++    while vi < v.len() {
++        if pi < p.len() && p[pi] == b'_' {
++            pi += 1;
++            vi += 1;
++        } else if pi < p.len() && p[pi] == b'%' {
++            pi += 1;
++            star = Some(pi);
++            retry = vi;
++        } else if pi < p.len() && p[pi] == v[vi] {
++            pi += 1;
++            vi += 1;
++        } else if let Some(s) = star {
++            pi = s;
++            retry += 1;
++            vi = retry;
++        } else {
++            return false;
++        }
++    }
++    while pi < p.len() && p[pi] == b'%' {
++        pi += 1;
++    }
++    pi == p.len()
++}
++
++/// Score a row against the SIM, or reject it.
++///
++/// Each branch of the vendor's UNION deliberately ignores the discriminators
++/// the others test: a row with a mismatching SPN may still win on GID1+GID2.
++/// The ladder below is those branches in their own order.
++fn candidate_matches(c: &mut Candidate, id: &CarrierIdentity) -> bool {
++    if id.imsi.is_empty() || !like_match(&id.imsi, &c.imsi_pattern) {
++        return false;
++    }
++
++    // The vendor query applies this ICCID constraint only for this IIN/MCCMNC.
++    let orange_france_iin = id.iccid.starts_with("894936") && c.mccmnc == "20801";
++    if orange_france_iin && (c.iccid_prefix.is_empty() || !like_match("894936", &c.iccid_prefix)) {
++        return false;
++    }
++
++    let spn = !id.spn.is_empty() && !c.spn.is_empty() && id.spn == c.spn;
++    let gid1 = !id.gid1.is_empty() && !c.gid1.is_empty() && id.gid1.eq_ignore_ascii_case(&c.gid1);
++    let gid2 = !id.gid2.is_empty() && !c.gid2.is_empty() && id.gid2.eq_ignore_ascii_case(&c.gid2);
++
++    c.rank = match (spn, gid1, gid2) {
++        (true, true, true) => 0,
++        (false, true, true) => 1,
++        (true, true, false) => 2,
++        (true, false, true) => 3,
++        (false, true, false) => 4,
++        (false, false, true) => 5,
++        (true, false, false) => 6,
++        _ if c.spn == "%" && c.gid1 == "%" && c.gid2 == "%" => 7,
++        _ => return false,
++    };
++    c.imsi_strength = u32::from(!is_wildcard(&c.imsi_pattern));
++    true
++}
++
++/// Lower rank wins; then a real IMSI pattern over a wildcard; then the longer
++/// MCCMNC; then the row the vendor's `ORDER BY rowid` would have reached first.
++fn candidate_is_better(candidate: &Candidate, current: &Candidate) -> bool {
++    if current.is_empty() {
++        return true;
++    }
++    if candidate.rank != current.rank {
++        return candidate.rank < current.rank;
++    }
++    if candidate.imsi_strength != current.imsi_strength {
++        return candidate.imsi_strength > current.imsi_strength;
++    }
++    if candidate.mccmnc.len() != current.mccmnc.len() {
++        return candidate.mccmnc.len() > current.mccmnc.len();
++    }
++    candidate.rowid < current.rowid
++}
++
++/// SQLite's own column coercion, which the C API applies on every read: a
++/// value comes back as the type you ask for, not only the type it was stored
++/// as. The vendor's database relies on it -- `confmap.carrier_id` is text in
++/// one table and an integer in another.
++fn text(row: &rusqlite::Row<'_>, i: usize) -> String {
++    use rusqlite::types::ValueRef;
++    match row.get_ref(i) {
++        Ok(ValueRef::Text(b)) | Ok(ValueRef::Blob(b)) => String::from_utf8_lossy(b).into_owned(),
++        Ok(ValueRef::Integer(v)) => v.to_string(),
++        Ok(ValueRef::Real(v)) => v.to_string(),
++        _ => String::new(),
++    }
++}
++
++/// Tier 1: an exact privilege-access-rule match, the vendor resolver's first
++/// choice.
++fn resolve_privilege_rule(
++    db: &Connection,
++    id: &CarrierIdentity,
++    selected: &mut Candidate,
++) -> Result<(), Error> {
++    const SQL: &str = "SELECT ci.rowid,ci.carrier_id,cm.confman,\
++         COALESCE(n.name,pn.name,'') \
++         FROM carrier_info ci \
++         INNER JOIN confmap cm ON cm.carrier_id=CAST(ci.carrier_id AS TEXT) \
++         LEFT JOIN confnames n ON n.carrier_id=ci.carrier_id \
++         LEFT JOIN confnames pn ON pn.carrier_id=CAST(cm.parent_id AS INTEGER) \
++         WHERE UPPER(ci.privelege_access_rule)=UPPER(?1) \
++         ORDER BY ci.rowid LIMIT 1";
++
++    if id.privilege_access_rule.is_empty() {
++        return Ok(());
++    }
++    let mut st = db.prepare(SQL).map_err(|e| Error::Schema(e.to_string()))?;
++    let mut rows = st
++        .query([&id.privilege_access_rule])
++        .map_err(|e| Error::Query(e.to_string()))?;
++    if let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        selected.rowid = r.get(0).unwrap_or(0);
++        selected.carrier_id = r.get::<_, i64>(1).unwrap_or(0) as u32;
++        selected.hash = text(r, 2);
++        selected.name = text(r, 3);
++    }
++    Ok(())
++}
++
++/// Tier 2: the ranked `carrier_info` match.
++fn resolve_ranked_carrier(
++    db: &Connection,
++    id: &CarrierIdentity,
++    selected: &mut Candidate,
++) -> Result<(), Error> {
++    const SQL: &str = "SELECT ci.rowid,ci.carrier_id,ci.mccmnc,ci.imsi_prefix_xpattern,\
++         ci.spn,ci.gid1,ci.gid2,ci.iccid_prefix,cm.confman,\
++         COALESCE(n.name,pn.name,'') \
++         FROM carrier_info ci \
++         INNER JOIN confmap cm ON cm.carrier_id=CAST(ci.carrier_id AS TEXT) \
++         LEFT JOIN confnames n ON n.carrier_id=ci.carrier_id \
++         LEFT JOIN confnames pn ON pn.carrier_id=CAST(cm.parent_id AS INTEGER) \
++         WHERE ((?1 IS NOT NULL AND ci.mccmnc=?1) OR \
++                (?1 IS NULL AND SUBSTR(?2,1,LENGTH(ci.mccmnc))=ci.mccmnc)) \
++         ORDER BY ci.rowid";
++
++    if !selected.is_empty() || id.imsi.is_empty() {
++        return Ok(());
++    }
++    let mccmnc: Option<&str> = if id.mccmnc.is_empty() { None } else { Some(&id.mccmnc) };
++    let mut st = db.prepare(SQL).map_err(|e| Error::Schema(e.to_string()))?;
++    let mut rows = st
++        .query(rusqlite::params![mccmnc, &id.imsi])
++        .map_err(|e| Error::Query(e.to_string()))?;
++
++    while let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        let mut candidate = Candidate {
++            rowid: r.get(0).unwrap_or(0),
++            carrier_id: r.get::<_, i64>(1).unwrap_or(0) as u32,
++            mccmnc: text(r, 2),
++            imsi_pattern: text(r, 3),
++            spn: text(r, 4),
++            gid1: text(r, 5),
++            gid2: text(r, 6),
++            iccid_prefix: text(r, 7),
++            hash: text(r, 8),
++            name: text(r, 9),
++            ..Default::default()
++        };
++        if candidate_matches(&mut candidate, id) && candidate_is_better(&candidate, selected) {
++            *selected = candidate;
++        }
++    }
++    Ok(())
++}
++
++/// Tier 3: an ICCID IIN prefix, longest literal prefix winning.
++fn resolve_iccid_fallback(
++    db: &Connection,
++    id: &CarrierIdentity,
++    selected: &mut Candidate,
++) -> Result<(), Error> {
++    const SQL: &str = "SELECT i.carrier_id,i.iccid_prefix,cm.confman,\
++         COALESCE(n.name,pn.name,'') \
++         FROM iin i \
++         INNER JOIN confmap cm ON cm.carrier_id=i.carrier_id \
++         LEFT JOIN confnames n ON n.carrier_id=CAST(i.carrier_id AS INTEGER) \
++         LEFT JOIN confnames pn ON pn.carrier_id=CAST(cm.parent_id AS INTEGER)";
++
++    if !selected.is_empty() || id.iccid.is_empty() {
++        return Ok(());
++    }
++    let mut st = db.prepare(SQL).map_err(|e| Error::Schema(e.to_string()))?;
++    let mut rows = st.query([]).map_err(|e| Error::Query(e.to_string()))?;
++    let mut selected_strength = 0usize;
++
++    while let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        let pattern = text(r, 1);
++        if !like_match(&id.iccid, &pattern) {
++            continue;
++        }
++        // How much of the pattern is literal, so a more specific IIN wins.
++        let strength = pattern.find(['%', '_']).unwrap_or(pattern.len());
++        if !selected.is_empty() && strength <= selected_strength {
++            continue;
++        }
++        *selected = Candidate {
++            carrier_id: text(r, 0).parse().unwrap_or(0),
++            hash: text(r, 2),
++            name: text(r, 3),
++            ..Default::default()
++        };
++        selected_strength = strength;
++    }
++    Ok(())
++}
++
++/// Tier 4: the one row the vendor ships for "no idea".
++fn resolve_global_fallback(db: &Connection, selected: &mut Candidate) -> Result<(), Error> {
++    const SQL: &str = "SELECT r.carrier_id,cm.confman,COALESCE(n.name,'') \
++         FROM regional_fallback r \
++         INNER JOIN confmap cm ON cm.carrier_id=r.carrier_id \
++         LEFT JOIN confnames n ON n.carrier_id=CAST(r.carrier_id AS INTEGER) \
++         WHERE CAST(r.country_code AS INTEGER)=0 \
++         ORDER BY CAST(r.carrier_id AS INTEGER) LIMIT 1";
++
++    if !selected.is_empty() {
++        return Ok(());
++    }
++    let mut st = db.prepare(SQL).map_err(|e| Error::Schema(e.to_string()))?;
++    let mut rows = st.query([]).map_err(|e| Error::Query(e.to_string()))?;
++    if let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        *selected = Candidate {
++            carrier_id: text(r, 0).parse().unwrap_or(0),
++            hash: text(r, 1),
++            name: text(r, 2),
++            ..Default::default()
++        };
++    }
++    Ok(())
++}
++
++fn decode_sha1(hex: &str) -> Result<[u8; 20], Error> {
++    if hex.len() != 40 {
++        return Err(Error::BadSha1("is not a 40-character SHA1"));
++    }
++    let mut out = [0u8; 20];
++    for (i, slot) in out.iter_mut().enumerate() {
++        let byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
++            .map_err(|_| Error::BadSha1("contains non-hexadecimal data"))?;
++        *slot = byte;
++    }
++    Ok(out)
++}
++
++/// Resolve the manifest for `identity` out of the `cfg.db` at `database_path`.
++///
++/// The manifest file itself must be packaged beside the database, because a
++/// name the CP cannot be given is not a successful resolution.
++pub fn resolve(database_path: &str, identity: &CarrierIdentity) -> Result<CarrierConfig, Error> {
++    if identity.imsi.is_empty() {
++        return Err(Error::NoImsi);
++    }
++    let db = Connection::open_with_flags(
++        database_path,
++        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
++    )
++    .map_err(|e| {
++        let reason = e.to_string();
++        let reason = reason
++            .strip_suffix(&format!(": {database_path}"))
++            .unwrap_or(&reason)
++            .to_string();
++        Error::Open { path: database_path.to_string(), reason }
++    })?;
++
++    let mut selected = Candidate::default();
++    resolve_privilege_rule(&db, identity, &mut selected)?;
++    resolve_ranked_carrier(&db, identity, &mut selected)?;
++    resolve_iccid_fallback(&db, identity, &mut selected)?;
++    resolve_global_fallback(&db, &mut selected)?;
++
++    if selected.is_empty() {
++        return Err(Error::NoManifest);
++    }
++
++    let manifest_sha1 = selected.hash.to_ascii_lowercase();
++    let manifest_sha1_bytes = decode_sha1(&manifest_sha1)?;
++    // A bare filename has an empty parent; the vendor's own path handling
++    // calls that the working directory.
++    let directory = match Path::new(database_path).parent() {
++        Some(d) if !d.as_os_str().is_empty() => d,
++        _ => Path::new("."),
++    };
++    let manifest_path = directory
++        .join("manifests")
++        .join(&manifest_sha1);
++    if !manifest_path.exists() {
++        return Err(Error::MissingManifest(manifest_path));
++    }
++
++    Ok(CarrierConfig {
++        carrier_id: selected.carrier_id,
++        carrier_name: selected.name,
++        manifest_sha1,
++        manifest_sha1_bytes,
++        manifest_path,
++    })
++}
+diff --git a/crates/samsung-ims-config/Cargo.toml b/crates/samsung-ims-config/Cargo.toml
+new file mode 100644
+index 0000000..b9005a0
+--- /dev/null
++++ b/crates/samsung-ims-config/Cargo.toml
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: GPL-2.0-or-later
++[package]
++name = "samsung-ims-config"
++version = "0.1.0"
++edition = "2021"
++license = "GPL-2.0-or-later"
++repository = "ssh://git@git.deusch.me:222/pixel-mainline/exynos-modem.git"
++description = "Resolves the CP's IMS configuration for a SIM out of the vendor's own data"
++
++# This one *does* run on the device, unlike carrier-settings, which builds the
++# database offline and bundles SQLite for the build host. Here SQLite is linked
++# from the system, because the alternative is shipping a second copy of it.
++[dependencies]
++rusqlite = "0.32"
++samsung-aims = { path = "../samsung-aims" }
++
++[dev-dependencies]
++tempfile = "3"
+diff --git a/crates/samsung-ims-config/examples/dump.rs b/crates/samsung-ims-config/examples/dump.rs
+new file mode 100644
+index 0000000..66b0aef
+--- /dev/null
++++ b/crates/samsung-ims-config/examples/dump.rs
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! Prints what resolve() produces, in the same form as the C oracle, so the
++//! two can be diffed entry for entry.
++use samsung_ims_config::{apns, resolve, CarrierIdentity, DeviceIdentity, Value};
++
++fn main() {
++    let a: Vec<String> = std::env::args().collect();
++    let arg = |n: usize| a.get(n).cloned().unwrap_or_default();
++    let db = &a[1];
++    let id = CarrierIdentity {
++        mccmnc: arg(2),
++        imsi: arg(3),
++        gid1: arg(4),
++        spn: arg(5),
++        ..Default::default()
++    };
++    let dev = DeviceIdentity {
++        manufacturer: "Google".into(),
++        model: "Pixel 9 Pro XL".into(),
++        os_name: "Nura".into(),
++        os_version: "1.0".into(),
++        software_version: "nura-edge".into(),
++    };
++    let c = match resolve(db, &dev, &id) {
++        Ok(c) => c,
++        Err(e) => {
++            println!("error {e}");
++            std::process::exit(1);
++        }
++    };
++    println!("carrier {}", c.carrier);
++    println!("ua {}", c.user_agent);
++    println!("entries {}", c.entries.len());
++    for (t, v) in &c.entries {
++        match v {
++            Value::Int(i) => println!("tag {t} int {i}"),
++            Value::Str(s) => println!("tag {t} str {s}"),
++            Value::Byte(b) => println!("tag {t} int {b}"),
++            Value::Bytes(b) => println!(
++                "tag {t} bytes {}",
++                b.iter().map(|x| format!("{x:02x}")).collect::<String>()
++            ),
++        }
++    }
++    let list = apns(db, &id).unwrap_or_default();
++    println!("apns {}", list.len());
++    for p in &list {
++        println!(
++            "apn {}|{}|{}|{}|{}|{}",
++            p.name, p.apn, p.types, p.bearers, p.protocol, p.roaming
++        );
++    }
++}
+diff --git a/crates/samsung-ims-config/src/lib.rs b/crates/samsung-ims-config/src/lib.rs
+new file mode 100644
+index 0000000..19d93a7
+--- /dev/null
++++ b/crates/samsung-ims-config/src/lib.rs
+@@ -0,0 +1,606 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! The configuration the CP's IMS stack needs before it can register.
++//!
++//! This lives here rather than in the ModemManager plugin for one reason: the
++//! plugin is meant to be upstreamable, and a plugin that opens a vendor carrier
++//! database with its own SQLite dependency is not. Everything that knows where
++//! the vendor's data lives and what shape it is in belongs on this side of the
++//! FFI; the plugin should ask for "the IMS configuration for this SIM" and be
++//! handed values it can put on the wire.
++//!
++//! The database is built offline by `carrier-settings` from Android's
++//! CarrierSettings protobufs, merged with AOSP's framework defaults and put
++//! through the vendor's value transforms, so every value stored is already the
++//! value the CP is handed. Reading it is therefore one flat query and no
++//! merging -- for now. The per-MCC XML the vendor IMS app carries in its own
++//! assets is a second, larger source that is not merged here yet.
++
++use rusqlite::{Connection, OpenFlags};
++pub use samsung_aims::Value;
++
++/// Tags the vendor does not read from carrier configuration either, so they are
++/// stated here rather than looked up.
++pub mod tag {
++    pub const USER_AGENT: u16 = 519;
++    pub const SIP_TIMER_TA_MS: u16 = 523;
++    pub const SIP_TIMER_TE_MS: u16 = 527;
++    pub const SIP_TIMER_TG_MS: u16 = 529;
++    pub const SIP_TIMER_TI_MS: u16 = 531;
++    pub const SIP_TIMER_TK_MS: u16 = 533;
++    pub const UA_MANUFACTURER: u16 = 772;
++    pub const UA_MODEL: u16 = 773;
++    pub const UA_SOFTWARE_VERSION: u16 = 774;
++    pub const UA_PRODUCT_LINE: u16 = 775;
++    pub const UA_OS_VERSION: u16 = 776;
++    pub const GEOLOCATION_VOWIFI_EMERGENCY: u16 = 1044;
++    pub const GEOLOCATION_VOLTE_EMERGENCY: u16 = 1045;
++}
++
++const COMPILED_IN: &[(u16, u32)] = &[
++    (tag::SIP_TIMER_TA_MS, 30),
++    (tag::SIP_TIMER_TE_MS, 30),
++    (tag::SIP_TIMER_TG_MS, 30),
++    (tag::SIP_TIMER_TI_MS, 30),
++    (tag::SIP_TIMER_TK_MS, 30),
++    (tag::GEOLOCATION_VOWIFI_EMERGENCY, 1),
++    (tag::GEOLOCATION_VOLTE_EMERGENCY, 0),
++];
++
++/// The SIM's identity, not the serving network's. The discriminators matter:
++/// several carriers share an MCCMNC and are told apart only by these.
++#[derive(Debug, Default, Clone)]
++pub struct CarrierIdentity {
++    pub mccmnc: String,
++    pub spn: String,
++    pub imsi: String,
++    pub gid1: String,
++    pub gid2: String,
++    pub iccid: String,
++}
++
++/// What the device contributes to the SIP User-Agent. The carrier owns the
++/// template's shape; these four fill it in.
++#[derive(Debug, Default, Clone)]
++pub struct DeviceIdentity {
++    pub manufacturer: String,
++    pub model: String,
++    pub os_name: String,
++    pub os_version: String,
++    pub software_version: String,
++}
++
++#[derive(Debug)]
++pub struct ImsConfig {
++    /// Whose overrides were applied, for logging. "default" if none matched.
++    pub carrier: String,
++    pub user_agent: String,
++    pub entries: Vec<(u16, Value)>,
++}
++
++#[derive(Debug, Clone)]
++pub struct Apn {
++    pub name: String,
++    pub apn: String,
++    pub types: u32,
++    pub bearers: u32,
++    pub protocol: u8,
++    pub roaming: u8,
++}
++
++#[derive(Debug)]
++pub enum Error {
++    Unconfigured,
++    Open { path: String, reason: String },
++    Query(String),
++    NoCarrier(String),
++}
++
++impl std::fmt::Display for Error {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Error::Unconfigured => write!(f, "no IMS configuration database configured"),
++            Error::Open { path, reason } => write!(
++                f,
++                "could not open the IMS configuration database '{path}': {reason}"
++            ),
++            Error::Query(m) => write!(f, "IMS configuration database query failed: {m}"),
++            Error::NoCarrier(m) => {
++                write!(f, "the IMS configuration database has no record for '{m}' and no default")
++            }
++        }
++    }
++}
++impl std::error::Error for Error {}
++
++fn open(path: &str) -> Result<Connection, Error> {
++    // An empty path is not a database sqlite can fail to open: it is a
++    // caller that was never configured with one, and sqlite would answer by
++    // opening a private temporary database with no tables in it.
++    if path.is_empty() {
++        return Err(Error::Unconfigured);
++    }
++    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
++        // sqlite repeats the path in its own message; the caller already has
++        // it, and saying it twice makes the log harder to read, not clearer.
++        let reason = e.to_string();
++        let reason = reason
++            .strip_suffix(&format!(": {path}"))
++            .unwrap_or(&reason)
++            .to_string();
++        Error::Open { path: path.to_string(), reason }
++    })
++}
++
++/// A record's field either says nothing, or has to agree with the SIM.
++fn field_matches(required: &str, actual: &str, prefix: bool) -> bool {
++    if required.is_empty() {
++        return true;
++    }
++    if actual.is_empty() {
++        return false;
++    }
++    if prefix {
++        actual.starts_with(required)
++    } else {
++        required.eq_ignore_ascii_case(actual)
++    }
++}
++
++/// Android's rule over `carrier_list`: every field a record *does* specify must
++/// agree with the SIM, and among the survivors the one specifying the most
++/// wins. A record asking for nothing beyond the MCCMNC is the fallback for that
++/// MCCMNC rather than a competitor to a more specific one.
++fn find_carrier(db: &Connection, id: &CarrierIdentity) -> Result<Option<(i64, String)>, Error> {
++    if id.mccmnc.is_empty() {
++        return Ok(None);
++    }
++    let mut st = db
++        .prepare(
++            "SELECT c.id, c.canonical_name, i.spn, i.imsi, i.gid1, i.gid2, i.iccid \
++             FROM carrier c JOIN carrier_id i ON i.carrier = c.id WHERE i.mccmnc = ?1",
++        )
++        .map_err(|e| Error::Query(e.to_string()))?;
++    let mut rows = st
++        .query([&id.mccmnc])
++        .map_err(|e| Error::Query(e.to_string()))?;
++
++    let mut best: Option<(i64, String)> = None;
++    let mut best_score = -1i32;
++    while let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        let get = |i: usize| -> String { r.get::<_, Option<String>>(i).ok().flatten().unwrap_or_default() };
++        let fields = [
++            (get(2), id.spn.as_str(), false),
++            (get(3), id.imsi.as_str(), true),
++            (get(4), id.gid1.as_str(), true),
++            (get(5), id.gid2.as_str(), true),
++            (get(6), id.iccid.as_str(), true),
++        ];
++        let mut score = 0i32;
++        for (required, actual, prefix) in &fields {
++            if !field_matches(required, actual, *prefix) {
++                score = -1;
++                break;
++            }
++            if !required.is_empty() {
++                score += 1;
++            }
++        }
++        if score > best_score {
++            best_score = score;
++            best = Some((
++                r.get(0).map_err(|e| Error::Query(e.to_string()))?,
++                r.get::<_, Option<String>>(1).ok().flatten().unwrap_or_default(),
++            ));
++        }
++    }
++    Ok(best)
++}
++
++fn find_default_carrier(db: &Connection) -> Result<Option<(i64, String)>, Error> {
++    let mut st = db
++        .prepare("SELECT id FROM carrier WHERE canonical_name = 'default'")
++        .map_err(|e| Error::Query(e.to_string()))?;
++    let mut rows = st.query([]).map_err(|e| Error::Query(e.to_string()))?;
++    match rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        Some(r) => Ok(Some((
++            r.get(0).map_err(|e| Error::Query(e.to_string()))?,
++            "default".to_string(),
++        ))),
++        None => Ok(None),
++    }
++}
++
++/// Replace an already-emitted tag, or append.
++///
++/// The database cannot produce a duplicate -- (carrier, tag) is its primary key
++/// -- but the compiled-in values and the device identity go on top of it, and
++/// two entries for one tag would leave the CP taking the second. That happens
++/// to be the right one, but only by accident.
++fn set(entries: &mut Vec<(u16, Value)>, tag: u16, value: Value) {
++    if let Some(slot) = entries.iter_mut().find(|(t, _)| *t == tag) {
++        slot.1 = value;
++    } else {
++        entries.push((tag, value));
++    }
++}
++
++/// SQLite's own column coercion, which the C API applies on every read: a
++/// value comes back as the type you ask for, not only the type it was stored
++/// as. Reproduced here because the database is the vendor's and a column it
++/// stored as text is still a value the CP expects to be sent.
++fn as_text(row: &rusqlite::Row<'_>, i: usize) -> String {
++    use rusqlite::types::ValueRef;
++    match row.get_ref(i) {
++        Ok(ValueRef::Text(b)) | Ok(ValueRef::Blob(b)) => String::from_utf8_lossy(b).into_owned(),
++        Ok(ValueRef::Integer(v)) => v.to_string(),
++        Ok(ValueRef::Real(v)) => v.to_string(),
++        _ => String::new(),
++    }
++}
++
++/// As [`as_text`], for a column read as bytes.
++fn as_blob(row: &rusqlite::Row<'_>, i: usize) -> Vec<u8> {
++    use rusqlite::types::ValueRef;
++    match row.get_ref(i) {
++        Ok(ValueRef::Blob(b)) | Ok(ValueRef::Text(b)) => b.to_vec(),
++        Ok(ValueRef::Integer(v)) => v.to_string().into_bytes(),
++        Ok(ValueRef::Real(v)) => v.to_string().into_bytes(),
++        _ => Vec::new(),
++    }
++}
++
++/// A User-Agent token: one field of the header, so it carries no spaces.
++fn ua_token(value: &str) -> String {
++    value.replace(' ', "-")
++}
++
++/// Expand the carrier's User-Agent template.
++///
++/// The template is the carrier's, placeholders and all
++/// ("#MANUFACTURE# #MODEL# Android #AV# #BUILD# EU01454"), because its *shape*
++/// is what the network is sensitive to -- the separators differ between
++/// carriers, and one carrier's is underscores. Only the placeholders are ours
++/// to fill.
++///
++/// The literal "Android" is replaced too, and deliberately: we are not Android,
++/// the field is one token either way so the shape is preserved, and the string
++/// that registered on o2 named postmarketOS. It is substituted first, while the
++/// template still holds no device values, so a device value containing the word
++/// cannot be corrupted by it.
++fn expand_user_agent(template: &str, dev: &DeviceIdentity) -> String {
++    let vendor = dev.manufacturer.as_str();
++    let mut model = dev.model.as_str();
++
++    // The device tree names the model with its vendor already in it ("Google
++    // Pixel 9a") while the template wants them separately, so a repeated
++    // vendor is dropped rather than emitted twice.
++    let vendor_len = vendor.len();
++    if vendor_len != 0
++        && model.len() > vendor_len
++        && model.as_bytes()[..vendor_len].eq_ignore_ascii_case(vendor.as_bytes())
++        && model.as_bytes()[vendor_len] == b' '
++    {
++        model = &model[vendor_len + 1..];
++    }
++
++    template
++        .replace("Android", &ua_token(&dev.os_name))
++        .replace("#MANUFACTURE#", vendor)
++        .replace("#MODEL#", &ua_token(model))
++        .replace("#AV#", &dev.os_version)
++        .replace("#BUILD#", &ua_token(&dev.software_version))
++}
++
++/// The template every carrier record falls back to.
++const DEFAULT_USER_AGENT: &str = "#MANUFACTURE# #MODEL# Android #AV# #BUILD#";
++
++/// Resolve the IMS configuration for `identity`.
++///
++/// An unknown or absent SIM identity is not an error: the database carries the
++/// carrier-neutral layer every per-carrier record is built on, and a CP with
++/// those settings is worth trying. A missing database *is* an error, because
++/// the alternative is registering with another carrier's timers.
++pub fn resolve(
++    database_path: &str,
++    device: &DeviceIdentity,
++    identity: &CarrierIdentity,
++) -> Result<ImsConfig, Error> {
++    let db = open(database_path)?;
++    let found = match find_carrier(&db, identity)? {
++        Some(c) => Some(c),
++        None => find_default_carrier(&db)?,
++    };
++    let (carrier_id, carrier_name) = found.ok_or_else(|| {
++        let who = if identity.mccmnc.is_empty() { "(unknown operator)" } else { &identity.mccmnc };
++        Error::NoCarrier(who.to_string())
++    })?;
++
++    let mut entries: Vec<(u16, Value)> = Vec::new();
++    let mut template: Option<String> = None;
++
++    {
++        let mut st = db
++            .prepare(
++                "SELECT tag, kind, int_value, text_value, blob_value FROM setting \
++                 WHERE carrier = ?1 ORDER BY tag",
++            )
++            .map_err(|e| Error::Query(e.to_string()))?;
++        let mut rows = st
++            .query([carrier_id])
++            .map_err(|e| Error::Query(e.to_string()))?;
++        while let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++            let tag: u16 = r.get::<_, i64>(0).map_err(|e| Error::Query(e.to_string()))? as u16;
++            // A row with no kind says nothing about how to read its value.
++            let kind = match r.get_ref(1) {
++                Ok(rusqlite::types::ValueRef::Null) | Err(_) => continue,
++                _ => as_text(r, 1),
++            };
++            if tag == tag::USER_AGENT {
++                template = Some(as_text(r, 3));
++                continue;
++            }
++            match kind.as_str() {
++                "int" => {
++                    let v: i64 = r.get(2).unwrap_or(0);
++                    set(&mut entries, tag, Value::Int(v as u32));
++                }
++                "str" => set(&mut entries, tag, Value::Str(as_text(r, 3))),
++                "bytes" => set(&mut entries, tag, Value::Bytes(as_blob(r, 4))),
++                _ => {}
++            }
++        }
++    }
++
++    for (tag, value) in COMPILED_IN {
++        set(&mut entries, *tag, Value::Int(*value));
++    }
++
++    // The CP wants both the parts and the finished string it puts in REGISTER:
++    // it does not assemble one for itself, which is why an unprovisioned CP
++    // cannot register at all.
++    set(&mut entries, tag::UA_MANUFACTURER, Value::Str(device.manufacturer.clone()));
++    set(&mut entries, tag::UA_MODEL, Value::Str(device.model.clone()));
++    set(&mut entries, tag::UA_SOFTWARE_VERSION, Value::Str(device.software_version.clone()));
++    set(&mut entries, tag::UA_PRODUCT_LINE, Value::Str("SH000000".to_string()));
++    set(&mut entries, tag::UA_OS_VERSION, Value::Str(device.os_version.clone()));
++
++    let user_agent = expand_user_agent(
++        template.as_deref().unwrap_or(DEFAULT_USER_AGENT),
++        device,
++    );
++    set(&mut entries, tag::USER_AGENT, Value::Str(user_agent.clone()));
++
++    Ok(ImsConfig { carrier: carrier_name, user_agent, entries })
++}
++
++/// The carrier's APN list, in the vendor's own order, which is the order it
++/// should reach the CP in.
++///
++/// Not an IMS detail despite sharing the database: the CP will not match a URSP
++/// rule for an APN it was never given a data profile for, and answers
++/// MATCH_ALL_RULE_NOT_ALLOWED (2253) instead. The whole list has to be
++/// registered before any one context is asked for.
++pub fn apns(database_path: &str, identity: &CarrierIdentity) -> Result<Vec<Apn>, Error> {
++    let db = open(database_path)?;
++    let carrier_id = match find_carrier(&db, identity)? {
++        Some((id, _)) => id,
++        None => return Ok(Vec::new()),
++    };
++    let mut st = db
++        .prepare(
++            "SELECT name, apn, types, bearers, protocol, roaming FROM apn \
++             WHERE carrier = ?1 ORDER BY seq",
++        )
++        .map_err(|e| Error::Query(e.to_string()))?;
++    let mut rows = st
++        .query([carrier_id])
++        .map_err(|e| Error::Query(e.to_string()))?;
++    let mut out = Vec::new();
++    while let Some(r) = rows.next().map_err(|e| Error::Query(e.to_string()))? {
++        // A row with no APN string names no network to attach to. The database
++        // build should not emit one; if it does, sending it would cost a
++        // context the CP then refuses.
++        let apn = as_text(r, 1);
++        if apn.is_empty() {
++            continue;
++        }
++        out.push(Apn {
++            name: as_text(r, 0),
++            apn,
++            types: r.get::<_, Option<i64>>(2).ok().flatten().unwrap_or(0) as u32,
++            bearers: r.get::<_, Option<i64>>(3).ok().flatten().unwrap_or(0) as u32,
++            protocol: r.get::<_, Option<i64>>(4).ok().flatten().unwrap_or(0) as u8,
++            roaming: r.get::<_, Option<i64>>(5).ok().flatten().unwrap_or(0) as u8,
++        });
++    }
++    Ok(out)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const DEVICE: fn() -> DeviceIdentity = || DeviceIdentity {
++        manufacturer: "Google".into(),
++        model: "Pixel9a".into(),
++        os_name: "Android".into(),
++        os_version: "17".into(),
++        software_version: "CP2A.260705.006".into(),
++    };
++
++    /// The same fixture the C tests build, so a divergence shows up as a
++    /// failing assertion here rather than as a carrier that will not register.
++    fn fixture() -> (tempfile::TempDir, String) {
++        let dir = tempfile::tempdir().expect("tempdir");
++        let path = dir.path().join("ims.db").to_string_lossy().into_owned();
++        let db = Connection::open(&path).expect("create");
++        for sql in [
++            "CREATE TABLE carrier (id INTEGER PRIMARY KEY, canonical_name TEXT NOT NULL UNIQUE, version INTEGER)",
++            "CREATE TABLE carrier_id (carrier INTEGER NOT NULL, mccmnc TEXT, spn TEXT, imsi TEXT, gid1 TEXT, gid2 TEXT, iccid TEXT)",
++            "CREATE TABLE setting (carrier INTEGER NOT NULL, tag INTEGER NOT NULL, kind TEXT NOT NULL, int_value INTEGER, text_value TEXT, blob_value BLOB, key TEXT, PRIMARY KEY (carrier, tag))",
++            "INSERT INTO carrier (id, canonical_name) VALUES (1, 'default'), (2, 'o2_de'), (3, 'mvno_de')",
++            // Two records on one MCCMNC, told apart only by GID1 -- the shape
++            // that makes the match rule matter rather than a formality.
++            "INSERT INTO carrier_id (carrier, mccmnc, gid1) VALUES (2, '26203', NULL), (3, '26203', 'AB')",
++            "INSERT INTO setting (carrier, tag, kind, int_value) VALUES (3, 1028, 'int', 1400)",
++            "INSERT INTO setting (carrier, tag, kind, int_value, text_value) VALUES \
++             (1, 10, 'int', 5060, NULL), (1, 528, 'int', 128000, NULL), \
++             (1, 1028, 'int', 1500, NULL), (1, 1029, 'int', 1500, NULL), \
++             (1, 519, 'str', NULL, '#MANUFACTURE# #MODEL# Android #AV# #BUILD#')",
++            "INSERT INTO setting (carrier, tag, kind, int_value, text_value) VALUES \
++             (2, 10, 'int', 5060, NULL), (2, 528, 'int', 32000, NULL), \
++             (2, 1028, 'int', 1300, NULL), \
++             (2, 1032, 'str', NULL, 'teleconferenceuri-factory@telefonica.de'), \
++             (2, 519, 'str', NULL, '#MANUFACTURE# #MODEL# Android #AV# #BUILD# EU01454')",
++            "INSERT INTO setting (carrier, tag, kind, blob_value) VALUES \
++             (2, 1060, 'bytes', x'6801ff00')",
++        ] {
++            db.execute_batch(sql).expect(sql);
++        }
++        (dir, path)
++    }
++
++    fn sim(mccmnc: &str) -> CarrierIdentity {
++        CarrierIdentity { mccmnc: mccmnc.into(), ..Default::default() }
++    }
++
++    /// Every entry for `tag`, so "the override replaced the default" can be
++    /// told apart from "the override merely came after it".
++    fn all(cfg: &ImsConfig, tag: u16) -> Vec<&Value> {
++        cfg.entries.iter().filter(|(t, _)| *t == tag).map(|(_, v)| v).collect()
++    }
++
++    fn int(cfg: &ImsConfig, tag: u16) -> u32 {
++        let v = all(cfg, tag);
++        assert_eq!(v.len(), 1, "tag {tag} appears {} times", v.len());
++        match v[0] {
++            Value::Int(i) => *i,
++            other => panic!("tag {tag} is {other:?}, not an int"),
++        }
++    }
++
++    /// An unknown carrier is the defaults, not a failure: a CP with sane
++    /// timers and a valid User-Agent is worth trying.
++    #[test]
++    fn unknown_carrier_falls_back_to_the_defaults() {
++        let (_dir, path) = fixture();
++        let cfg = resolve(&path, &DEVICE(), &sim("99999")).expect("resolve");
++        assert_eq!(cfg.carrier, "default");
++        assert_eq!(int(&cfg, 1028), 1500); // IPv4 SIP MTU
++        assert_eq!(int(&cfg, 10), 5060); // SIP server port
++
++        // The seven tags that are in no database because the vendor does not
++        // read them from carrier configuration either. They have to be sent
++        // whatever the database says, so a carrier that never mentions them is
++        // the case worth asserting.
++        for (tag, value) in [(523, 30), (527, 30), (529, 30), (531, 30), (533, 30), (1044, 1), (1045, 0)] {
++            assert_eq!(int(&cfg, tag), value, "compiled-in tag {tag}");
++        }
++    }
++
++    /// A database that is not there is a packaging fault, and reporting it as
++    /// one beats registering with whatever another carrier's timers happen to
++    /// be.
++    #[test]
++    fn a_missing_database_is_an_error() {
++        assert!(resolve("/nonexistent/ims.db", &DEVICE(), &sim("26203")).is_err());
++        assert!(matches!(
++            resolve("", &DEVICE(), &sim("26203")),
++            Err(Error::Unconfigured)
++        ));
++    }
++
++    /// The override has to replace the default, not sit after it. Two entries
++    /// for one tag would still work -- the CP takes the last -- and that is
++    /// exactly why it is worth asserting: it would work by accident.
++    #[test]
++    fn a_carrier_override_replaces_the_default() {
++        let (_dir, path) = fixture();
++        let cfg = resolve(&path, &DEVICE(), &sim("26203")).expect("resolve");
++        assert_eq!(cfg.carrier, "o2_de");
++
++        assert_eq!(int(&cfg, 1028), 1300);
++        assert_eq!(int(&cfg, 528), 32000); // Timer F: 32 s where AOSP says 128 s.
++
++        let v = all(&cfg, 1032);
++        assert_eq!(v.len(), 1);
++        assert_eq!(v[0], &Value::Str("teleconferenceuri-factory@telefonica.de".into()));
++
++        let v = all(&cfg, 1060); // AMR-WB description
++        assert_eq!(v.len(), 1);
++        assert_eq!(v[0], &Value::Bytes(vec![0x68, 0x01, 0xff, 0x00]));
++
++        // A default the carrier does not override stays.
++        assert_eq!(int(&cfg, 10), 5060);
++    }
++
++    /// Several carriers share an MCCMNC and are told apart only by GID1.
++    #[test]
++    fn gid1_picks_between_two_records_on_one_mccmnc() {
++        let (_dir, path) = fixture();
++        let id = CarrierIdentity { mccmnc: "26203".into(), gid1: "AB".into(), ..Default::default() };
++        let cfg = resolve(&path, &DEVICE(), &id).expect("resolve");
++        assert_eq!(cfg.carrier, "mvno_de");
++        assert_eq!(int(&cfg, 1028), 1400);
++    }
++
++    /// The carrier owns the template's shape -- including its certification
++    /// suffix -- and the device owns only what the placeholders stand for.
++    #[test]
++    fn the_user_agent_keeps_the_carriers_shape() {
++        let (_dir, path) = fixture();
++        let cfg = resolve(&path, &DEVICE(), &sim("26203")).expect("resolve");
++        assert_eq!(cfg.user_agent, "Google Pixel9a Android 17 CP2A.260705.006 EU01454");
++        assert_eq!(all(&cfg, tag::USER_AGENT), vec![&Value::Str(cfg.user_agent.clone())]);
++        // The parts go too: the CP does not assemble a User-Agent for itself.
++        assert_eq!(all(&cfg, tag::UA_PRODUCT_LINE), vec![&Value::Str("SH000000".into())]);
++    }
++
++    /// A device value with a space in it would otherwise split the header
++    /// field in two, and the device tree names the model with its vendor
++    /// already in it.
++    #[test]
++    fn the_user_agent_is_one_token_per_field() {
++        let dev = DeviceIdentity {
++            manufacturer: "Google".into(),
++            model: "Google Pixel 9 Pro XL".into(),
++            os_name: "postmarketOS Edge".into(),
++            os_version: "25.12".into(),
++            software_version: "nura edge".into(),
++        };
++        assert_eq!(
++            expand_user_agent(DEFAULT_USER_AGENT, &dev),
++            "Google Pixel-9-Pro-XL postmarketOS-Edge 25.12 nura-edge"
++        );
++    }
++
++    /// Carriers that ship no APNs are a normal outcome; another carrier's
++    /// APNs would be worse than none, so there is no default to fall back on.
++    #[test]
++    fn apns_do_not_fall_back_to_the_default_carrier() {
++        let (_dir, path) = fixture();
++        assert!(apns(&path, &sim("99999")).expect("apns").is_empty());
++    }
++
++    /// A row with no APN string names no network to attach to, and sending it
++    /// would cost a context the CP then refuses.
++    #[test]
++    fn an_apn_row_with_no_apn_is_dropped() {
++        let (_dir, path) = fixture();
++        let db = Connection::open(&path).expect("open");
++        db.execute_batch(
++            "CREATE TABLE apn (carrier INTEGER NOT NULL, seq INTEGER, name TEXT, apn TEXT, \
++             types INTEGER, bearers INTEGER, protocol INTEGER, roaming INTEGER); \
++             INSERT INTO apn (carrier, seq, name, apn, types, bearers, protocol, roaming) VALUES \
++             (2, 0, 'blank', '',   17, 2, 0, 0), \
++             (2, 1, 'ims',   'ims', 64, 2, 2, 2), \
++             (2, 2, 'null',  NULL, 17, 2, 0, 0)",
++        )
++        .expect("apn table");
++
++        let list = apns(&path, &sim("26203")).expect("apns");
++        assert_eq!(list.len(), 1);
++        assert_eq!(list[0].apn, "ims");
++        assert_eq!(list[0].bearers, 2);
++    }
++}
+diff --git a/crates/samsung-sit-ffi/Cargo.toml b/crates/samsung-sit-ffi/Cargo.toml
+index ea0c410..c6e90bb 100644
+--- a/crates/samsung-sit-ffi/Cargo.toml
++++ b/crates/samsung-sit-ffi/Cargo.toml
+@@ -21,6 +21,11 @@ crate-type = ["lib", "cdylib", "staticlib"]
+ samsung-sit = { path = "../samsung-sit" }
+ # The AIMS codec shares this shim rather than getting a second one; see src/aims.rs.
+ samsung-aims = { path = "../samsung-aims" }
++# The vendor's IMS/APN database. It brings SQLite in, which is why a static
++# consumer of this library needs -lsqlite3 too; samsung-sit-ffi.pc says so.
++samsung-ims-config = { path = "../samsung-ims-config" }
++# The vendor's carrier-manifest database. Same SQLite note as above.
++samsung-carrier-db = { path = "../samsung-carrier-db" }
+ 
+ [build-dependencies]
+ # Generates include/samsung_sit_ffi.h from the #[repr(C)] types (see build.rs).
+diff --git a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+index 7ba2c6b..6958215 100644
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+@@ -121,6 +121,11 @@
+  */
+ #define AIMS_MAX_DISPLAY_NAME 130
+ 
++/*
++ SHA1, in bytes, as the CP is given it.
++ */
++#define SAMSUNG_CARRIER_SHA1_LEN 20
++
+ /*
+  Stands in for an absent cause; no 3GPP cause uses it, and it keeps the
+  "absent" case out of the valid 0..=255 range.
+@@ -231,6 +236,24 @@ typedef enum {
+     SAMSUNG_SIT_VOPS_SUPPORT_SUPPORTED = 2,
+ } SamsungSitVopsSupport;
+ 
++/*
++ The manifest a SIM resolved to. Opaque: it owns its strings. Freed with
++ [`samsung_carrier_config_free`].
++ */
++typedef struct SamsungCarrierConfig SamsungCarrierConfig;
++
++/*
++ A resolved APN list. Opaque for the same reason as [`SamsungImsConfig`].
++ Freed with [`samsung_ims_apn_list_free`].
++ */
++typedef struct SamsungImsApnList SamsungImsApnList;
++
++/*
++ A resolved configuration. Opaque: it owns the strings and blobs the entries
++ point at. Freed with [`samsung_ims_config_free`].
++ */
++typedef struct SamsungImsConfig SamsungImsConfig;
++
+ /*
+  One hidden-menu configuration entry.
+ 
+@@ -399,6 +422,68 @@ typedef struct {
+     uint8_t nr;
+ } SamsungSitNetworkGenerations;
+ 
++/*
++ The SIM's identity, as the vendor resolvers match on it -- this one and
++ the IMS one next door, which ignores the privilege access rule.
++
++ The discriminators matter: several carriers share an MCCMNC and are told
++ apart only by SPN, GID or an IMSI prefix. Every field is a NUL-terminated
++ UTF-8 string, or null when the SIM does not carry it.
++ */
++typedef struct {
++    const char *imsi;
++    const char *iccid;
++    const char *mccmnc;
++    const char *spn;
++    const char *gid1;
++    const char *gid2;
++    const char *privilege_access_rule;
++} SamsungCarrierIdentity;
++
++/*
++ The device half of the SIP User-Agent. The carrier owns the template's
++ shape; these fill its placeholders.
++
++ Every field is a NUL-terminated UTF-8 string, or null for an empty one.
++ */
++typedef struct {
++    const char *manufacturer;
++    const char *model;
++    /*
++     Operating system as the User-Agent names it, plus its version.
++     */
++    const char *os_name;
++    const char *os_version;
++    /*
++     Build/software identifier.
++     */
++    const char *software_version;
++} SamsungImsDeviceIdentity;
++
++/*
++ One APN, in the CP's own numbering -- the database build has already done
++ the conversion from Android's enums.
++ */
++typedef struct {
++    /*
++     The vendor's label, for logging. Never null.
++     */
++    const char *name;
++    const char *apn;
++    /*
++     Type bitmask, Android's `ApnSetting` encoding.
++     */
++    uint32_t types;
++    /*
++     `1 << (radio tech - 1)`, Android's framework encoding. Zero is not
++     "any": it declares a profile valid on no radio technology, and the IMS
++     PDN is then refused with MATCH_ALL_RULE_NOT_ALLOWED (2253).
++     */
++    uint32_t bearers;
++    uint8_t protocol;
++    uint8_t roaming;
++} SamsungImsApn;
++
+ /*
+  The CP's version block. Every field is a NUL-terminated string, empty when
+  the CP does not report it.
+@@ -958,6 +1043,21 @@ SamsungSitStatus samsung_sit_build_set_data_profile(uint16_t token,
+                                                     uint8_t **out,
+                                                     size_t *out_len);
+ 
++/*
++ `SET_DATA_PROFILE` with the carrier's roaming protocol named separately;
++ see `build_set_data_profile_roaming`. The older symbol above copies the home
++ protocol and is kept so nothing that links against it has to change.
++ */
++SamsungSitStatus samsung_sit_build_set_data_profile_roaming(uint16_t token,
++                                                            const char *apn,
++                                                            SamsungSitPdpType pdp,
++                                                            SamsungSitPdpType roaming_pdp,
++                                                            uint32_t apn_types,
++                                                            uint32_t bearers,
++                                                            const SamsungSitApnAuth *auth,
++                                                            uint8_t **out,
++                                                            size_t *out_len);
++
+ SamsungSitStatus samsung_sit_build_set_initial_attach_apn(uint16_t token,
+                                                           const char *apn,
+                                                           SamsungSitPdpType pdp,
+@@ -1069,6 +1169,9 @@ SamsungSitStatus samsung_sit_build_device_info(uint16_t token,
+ /*
+  As `samsung_sit_build_device_info`, plus the fourth 32-byte field of 0x0922
+  (a vendor software-version string; stock komodo sends `17`).
++
++ A separate entry point rather than a signature change, so that an older
++ ModemManager keeps linking against the same library.
+  */
+ SamsungSitStatus samsung_sit_build_device_info_sw(uint16_t token,
+                                                   const char *model,
+@@ -1192,8 +1295,8 @@ SamsungSitStatus samsung_sit_build_get_facility_lock(uint16_t token,
+                                                      size_t *out_len);
+ 
+ /*
+- As `samsung_sit_build_get_facility_lock`, naming the application via its AID
+- (`aid_len` 0 keeps the old all-zero field).
++ As `samsung_sit_build_get_facility_lock`, naming the application via its
++ AID (`aid_len` 0 keeps the old all-zero field).
+  */
+ SamsungSitStatus samsung_sit_build_get_facility_lock_aid(uint16_t token,
+                                                          uint8_t facility,
+@@ -1260,6 +1363,157 @@ SamsungSitStatus samsung_sit_build_sim_io(uint16_t token,
+                                           uint8_t **out,
+                                           size_t *out_len);
+ 
++/*
++ Resolve the carrier manifest for `identity` out of the `cfg.db` at
++ `database_path`.
++
++ The manifest file must be packaged beside the database: a name the CP
++ cannot then be given is not a successful resolution, and the status says
++ so rather than handing back a config that cannot be used.
++
++ On `Ok` the handle is written to `out` and must be freed with
++ [`samsung_carrier_config_free`]; on anything else `out` is untouched and
++ `samsung_sit_last_error_message` says why.
++
++ # Safety
++ `database_path` must be a NUL-terminated UTF-8 string, `out` writable.
++ */
++SamsungSitStatus samsung_carrier_config_resolve(const char *database_path,
++                                                const SamsungCarrierIdentity *identity,
++                                                SamsungCarrierConfig **out);
++
++/*
++ The vendor's own carrier id.
++
++ # Safety
++ `config` must come from [`samsung_carrier_config_resolve`] and not yet be freed.
++ */
++uint32_t samsung_carrier_config_id(const SamsungCarrierConfig *config);
++
++/*
++ The carrier's name, for logging. Owned by `config`.
++
++ # Safety
++ As [`samsung_carrier_config_id`].
++ */
++const char *samsung_carrier_config_name(const SamsungCarrierConfig *config);
++
++/*
++ The manifest's SHA1 as lowercase hex -- the manifest file's own name.
++ Owned by `config`.
++
++ # Safety
++ As [`samsung_carrier_config_id`].
++ */
++const char *samsung_carrier_config_sha1(const SamsungCarrierConfig *config);
++
++/*
++ The same SHA1 in bytes, which is the form the CP is given it in.
++ [`SAMSUNG_CARRIER_SHA1_LEN`] of them, owned by `config`.
++
++ # Safety
++ As [`samsung_carrier_config_id`].
++ */
++const uint8_t *samsung_carrier_config_sha1_bytes(const SamsungCarrierConfig *config);
++
++/*
++ Where the manifest is on disk. Owned by `config`.
++
++ # Safety
++ As [`samsung_carrier_config_id`].
++ */
++const char *samsung_carrier_config_path(const SamsungCarrierConfig *config);
++
++/*
++ # Safety
++ `config` must come from [`samsung_carrier_config_resolve`], and be freed once.
++ */
++void samsung_carrier_config_free(SamsungCarrierConfig *config);
++
++/*
++ Resolve the IMS configuration in `database_path` for `identity`, with
++ `device` substituted into the carrier's User-Agent template.
++
++ An unknown or absent SIM identity is not an error -- the database's
++ carrier-neutral layer is returned instead. A database that cannot be read,
++ or that has no default record either, is: the alternative is registering
++ with another carrier's timers.
++
++ On `Ok` the handle is written to `out` and must be freed with
++ [`samsung_ims_config_free`]; on anything else `out` is untouched and
++ `samsung_sit_last_error_message` says why.
++
++ # Safety
++ `database_path` must be a NUL-terminated UTF-8 string, `out` writable.
++ */
++SamsungSitStatus samsung_ims_config_resolve(const char *database_path,
++                                            const SamsungImsDeviceIdentity *device,
++                                            const SamsungCarrierIdentity *identity,
++                                            SamsungImsConfig **out);
++
++/*
++ The entries, in the order they should reach the CP. Owned by `config` and
++ valid until it is freed. Null with `*out_n_entries` zero if `config` is null.
++
++ # Safety
++ `config` must come from [`samsung_ims_config_resolve`] and not yet be freed.
++ */
++const SamsungAimsConfigEntry *samsung_ims_config_entries(const SamsungImsConfig *config,
++                                                         size_t *out_n_entries);
++
++/*
++ Which carrier's overrides were applied, for logging. "default" if none.
++
++ # Safety
++ As [`samsung_ims_config_entries`].
++ */
++const char *samsung_ims_config_carrier(const SamsungImsConfig *config);
++
++/*
++ The assembled User-Agent. Worth logging on its own: it is the one value a
++ network is known to reject a registration over.
++
++ # Safety
++ As [`samsung_ims_config_entries`].
++ */
++const char *samsung_ims_config_user_agent(const SamsungImsConfig *config);
++
++/*
++ # Safety
++ `config` must come from [`samsung_ims_config_resolve`], and be freed once.
++ */
++void samsung_ims_config_free(SamsungImsConfig *config);
++
++/*
++ Resolve the carrier's APN list, in the vendor's own order, which is the
++ order it should reach the CP in.
++
++ Unlike the settings there is no default to fall back on: the carrier-neutral
++ layer has no APNs of its own, and registering another carrier's would be
++ worse than registering none. A SIM that resolves to no carrier therefore
++ yields an empty list, not an error.
++
++ # Safety
++ `database_path` must be a NUL-terminated UTF-8 string, `out` writable.
++ */
++SamsungSitStatus samsung_ims_apns_resolve(const char *database_path,
++                                          const SamsungCarrierIdentity *identity,
++                                          SamsungImsApnList **out);
++
++/*
++ The APNs. Owned by `list` and valid until it is freed.
++
++ # Safety
++ `list` must come from [`samsung_ims_apns_resolve`] and not yet be freed.
++ */
++const SamsungImsApn *samsung_ims_apn_list_peek(const SamsungImsApnList *list, size_t *out_n_apns);
++
++/*
++ # Safety
++ `list` must come from [`samsung_ims_apns_resolve`], and be freed once.
++ */
++void samsung_ims_apn_list_free(SamsungImsApnList *list);
++
+ /*
+  Parse a `GET_RC_NETWORK_TYPE` (0x0718) response: the generations the modem
+  has, as opposed to the ones it is currently allowed to use.
+diff --git a/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in b/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in
+index e49d027..527f606 100644
+--- a/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in
++++ b/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in
+@@ -6,5 +6,8 @@ includedir=${prefix}/include
+ Name: samsung-sit-ffi
+ Description: C ABI for the samsung-sit SIT (Exynos RIL) wire codec
+ Version: @version@
++# The IMS/APN resolver links SQLite. A shared consumer gets it transitively; a
++# static one links this archive directly and needs it named here.
++Requires.private: sqlite3
+ Libs: -L${libdir} -lsamsung_sit_ffi
+ Cflags: -I${includedir}
+diff --git a/crates/samsung-sit-ffi/src/carrier_db.rs b/crates/samsung-sit-ffi/src/carrier_db.rs
+new file mode 100644
+index 0000000..dc5b841
+--- /dev/null
++++ b/crates/samsung-sit-ffi/src/carrier_db.rs
+@@ -0,0 +1,200 @@
++//! C ABI over [`samsung_carrier_db`]: which carrier manifest a SIM should be
++//! configured with.
++//!
++//! Here for the same reason as the IMS resolver next door -- the vendor's
++//! `cfg.db`, its four fallback tiers and its ranking are this project's
++//! business, not a modem daemon's. A caller hands over a path and a SIM
++//! identity and gets a manifest to feed the CP.
++
++use core::ffi::{c_char, CStr};
++use std::ffi::CString;
++
++use samsung_carrier_db as db;
++
++use crate::{set_last_error, SamsungSitStatus};
++
++/// SHA1, in bytes, as the CP is given it.
++pub const SAMSUNG_CARRIER_SHA1_LEN: usize = 20;
++
++/// The SIM's identity, as the vendor resolvers match on it -- this one and
++/// the IMS one next door, which ignores the privilege access rule.
++///
++/// The discriminators matter: several carriers share an MCCMNC and are told
++/// apart only by SPN, GID or an IMSI prefix. Every field is a NUL-terminated
++/// UTF-8 string, or null when the SIM does not carry it.
++#[repr(C)]
++pub struct SamsungCarrierIdentity {
++    pub imsi: *const c_char,
++    pub iccid: *const c_char,
++    pub mccmnc: *const c_char,
++    pub spn: *const c_char,
++    pub gid1: *const c_char,
++    pub gid2: *const c_char,
++    pub privilege_access_rule: *const c_char,
++}
++
++/// The manifest a SIM resolved to. Opaque: it owns its strings. Freed with
++/// [`samsung_carrier_config_free`].
++pub struct SamsungCarrierConfig {
++    carrier_id: u32,
++    carrier_name: CString,
++    manifest_sha1: CString,
++    manifest_path: CString,
++    manifest_sha1_bytes: [u8; SAMSUNG_CARRIER_SHA1_LEN],
++}
++
++unsafe fn opt(s: *const c_char) -> Result<String, SamsungSitStatus> {
++    if s.is_null() {
++        return Ok(String::new());
++    }
++    CStr::from_ptr(s)
++        .to_str()
++        .map(str::to_owned)
++        .map_err(|_| SamsungSitStatus::Utf8)
++}
++
++/// Resolve the carrier manifest for `identity` out of the `cfg.db` at
++/// `database_path`.
++///
++/// The manifest file must be packaged beside the database: a name the CP
++/// cannot then be given is not a successful resolution, and the status says
++/// so rather than handing back a config that cannot be used.
++///
++/// On `Ok` the handle is written to `out` and must be freed with
++/// [`samsung_carrier_config_free`]; on anything else `out` is untouched and
++/// `samsung_sit_last_error_message` says why.
++///
++/// # Safety
++/// `database_path` must be a NUL-terminated UTF-8 string, `out` writable.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_resolve(
++    database_path: *const c_char,
++    identity: *const SamsungCarrierIdentity,
++    out: *mut *mut SamsungCarrierConfig,
++) -> SamsungSitStatus {
++    if out.is_null() || database_path.is_null() || identity.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let path = match opt(database_path) {
++        Ok(p) => p,
++        Err(s) => return s,
++    };
++    let i = &*identity;
++    let id = db::CarrierIdentity {
++        imsi: match opt(i.imsi) { Ok(v) => v, Err(s) => return s },
++        iccid: match opt(i.iccid) { Ok(v) => v, Err(s) => return s },
++        mccmnc: match opt(i.mccmnc) { Ok(v) => v, Err(s) => return s },
++        spn: match opt(i.spn) { Ok(v) => v, Err(s) => return s },
++        gid1: match opt(i.gid1) { Ok(v) => v, Err(s) => return s },
++        gid2: match opt(i.gid2) { Ok(v) => v, Err(s) => return s },
++        privilege_access_rule: match opt(i.privilege_access_rule) {
++            Ok(v) => v,
++            Err(s) => return s,
++        },
++    };
++
++    let resolved = match db::resolve(&path, &id) {
++        Ok(c) => c,
++        Err(e) => {
++            let status = match e {
++                db::Error::NoImsi => SamsungSitStatus::ArgOutOfRange,
++                db::Error::NoManifest | db::Error::MissingManifest(_) => {
++                    SamsungSitStatus::Unsupported
++                }
++                _ => SamsungSitStatus::Malformed,
++            };
++            set_last_error(e.to_string());
++            return status;
++        }
++    };
++
++    let handle = Box::new(SamsungCarrierConfig {
++        carrier_id: resolved.carrier_id,
++        carrier_name: CString::new(resolved.carrier_name).unwrap_or_default(),
++        manifest_sha1: CString::new(resolved.manifest_sha1).unwrap_or_default(),
++        manifest_path: CString::new(resolved.manifest_path.to_string_lossy().into_owned())
++            .unwrap_or_default(),
++        manifest_sha1_bytes: resolved.manifest_sha1_bytes,
++    });
++    out.write(Box::into_raw(handle));
++    SamsungSitStatus::Ok
++}
++
++/// The vendor's own carrier id.
++///
++/// # Safety
++/// `config` must come from [`samsung_carrier_config_resolve`] and not yet be freed.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_id(config: *const SamsungCarrierConfig) -> u32 {
++    if config.is_null() {
++        return 0;
++    }
++    (*config).carrier_id
++}
++
++/// The carrier's name, for logging. Owned by `config`.
++///
++/// # Safety
++/// As [`samsung_carrier_config_id`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_name(
++    config: *const SamsungCarrierConfig,
++) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).carrier_name.as_ptr()
++}
++
++/// The manifest's SHA1 as lowercase hex -- the manifest file's own name.
++/// Owned by `config`.
++///
++/// # Safety
++/// As [`samsung_carrier_config_id`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_sha1(
++    config: *const SamsungCarrierConfig,
++) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).manifest_sha1.as_ptr()
++}
++
++/// The same SHA1 in bytes, which is the form the CP is given it in.
++/// [`SAMSUNG_CARRIER_SHA1_LEN`] of them, owned by `config`.
++///
++/// # Safety
++/// As [`samsung_carrier_config_id`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_sha1_bytes(
++    config: *const SamsungCarrierConfig,
++) -> *const u8 {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).manifest_sha1_bytes.as_ptr()
++}
++
++/// Where the manifest is on disk. Owned by `config`.
++///
++/// # Safety
++/// As [`samsung_carrier_config_id`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_path(
++    config: *const SamsungCarrierConfig,
++) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).manifest_path.as_ptr()
++}
++
++/// # Safety
++/// `config` must come from [`samsung_carrier_config_resolve`], and be freed once.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_carrier_config_free(config: *mut SamsungCarrierConfig) {
++    if !config.is_null() {
++        drop(Box::from_raw(config));
++    }
++}
+diff --git a/crates/samsung-sit-ffi/src/ims_config.rs b/crates/samsung-sit-ffi/src/ims_config.rs
+new file mode 100644
+index 0000000..8784a0d
+--- /dev/null
++++ b/crates/samsung-sit-ffi/src/ims_config.rs
+@@ -0,0 +1,378 @@
++//! C ABI over [`samsung_ims_config`]: the CP's IMS settings and the carrier's
++//! APN list, resolved for one SIM out of the vendor's own database.
++//!
++//! This is the half of the vendor data that is *not* a wire codec, and it lives
++//! here for the same reason the codecs do: the database's schema, the tag space
++//! and the vendor's value rules are this project's business, not a modem
++//! daemon's. A C caller hands over a path and a SIM identity and gets entries
++//! it can put straight into an `AIMS_HIDDEN_MENU` frame -- the same
++//! [`SamsungAimsConfigEntry`] the builder here already takes.
++//!
++//! Both results are opaque handles rather than plain arrays because the entries
++//! point at strings and blobs the handle owns; the array is valid exactly as
++//! long as the handle is.
++
++use core::ffi::{c_char, CStr};
++use std::ffi::CString;
++
++use samsung_aims::Value;
++use samsung_ims_config as cfg;
++
++use crate::aims::{SamsungAimsConfigEntry, SamsungAimsValueType};
++use crate::carrier_db::SamsungCarrierIdentity;
++use crate::{set_last_error, SamsungSitStatus};
++
++/// The device half of the SIP User-Agent. The carrier owns the template's
++/// shape; these fill its placeholders.
++///
++/// Every field is a NUL-terminated UTF-8 string, or null for an empty one.
++#[repr(C)]
++pub struct SamsungImsDeviceIdentity {
++    pub manufacturer: *const c_char,
++    pub model: *const c_char,
++    /// Operating system as the User-Agent names it, plus its version.
++    pub os_name: *const c_char,
++    pub os_version: *const c_char,
++    /// Build/software identifier.
++    pub software_version: *const c_char,
++}
++
++/// One APN, in the CP's own numbering -- the database build has already done
++/// the conversion from Android's enums.
++#[repr(C)]
++pub struct SamsungImsApn {
++    /// The vendor's label, for logging. Never null.
++    pub name: *const c_char,
++    pub apn: *const c_char,
++    /// Type bitmask, Android's `ApnSetting` encoding.
++    pub types: u32,
++    /// `1 << (radio tech - 1)`, Android's framework encoding. Zero is not
++    /// "any": it declares a profile valid on no radio technology, and the IMS
++    /// PDN is then refused with MATCH_ALL_RULE_NOT_ALLOWED (2253).
++    pub bearers: u32,
++    pub protocol: u8,
++    pub roaming: u8,
++}
++
++/// A resolved configuration. Opaque: it owns the strings and blobs the entries
++/// point at. Freed with [`samsung_ims_config_free`].
++pub struct SamsungImsConfig {
++    entries: Vec<SamsungAimsConfigEntry>,
++    carrier: CString,
++    user_agent: CString,
++    /// Keeps every string and blob an entry borrows alive for the handle's
++    /// lifetime. Never read directly -- the entries point into it.
++    _owned: Vec<OwnedValue>,
++}
++
++enum OwnedValue {
++    Str(CString),
++    Bytes(Vec<u8>),
++}
++
++/// A resolved APN list. Opaque for the same reason as [`SamsungImsConfig`].
++/// Freed with [`samsung_ims_apn_list_free`].
++pub struct SamsungImsApnList {
++    apns: Vec<SamsungImsApn>,
++    _owned: Vec<CString>,
++}
++
++/// Borrow an optional C string: null and empty both mean "the SIM does not say".
++unsafe fn opt(s: *const c_char) -> Result<String, SamsungSitStatus> {
++    if s.is_null() {
++        return Ok(String::new());
++    }
++    CStr::from_ptr(s)
++        .to_str()
++        .map(str::to_owned)
++        .map_err(|_| SamsungSitStatus::Utf8)
++}
++
++/// A string the handle owns, as a C pointer into it.
++fn own(owned: &mut Vec<OwnedValue>, s: String) -> *const c_char {
++    let c = CString::new(s).unwrap_or_default();
++    let ptr = c.as_ptr();
++    owned.push(OwnedValue::Str(c));
++    ptr
++}
++
++unsafe fn device_from(d: *const SamsungImsDeviceIdentity) -> Result<cfg::DeviceIdentity, SamsungSitStatus> {
++    if d.is_null() {
++        return Err(SamsungSitStatus::NullPointer);
++    }
++    let d = &*d;
++    Ok(cfg::DeviceIdentity {
++        manufacturer: opt(d.manufacturer)?,
++        model: opt(d.model)?,
++        os_name: opt(d.os_name)?,
++        os_version: opt(d.os_version)?,
++        software_version: opt(d.software_version)?,
++    })
++}
++
++/// A null identity is an absent SIM, not a bad argument: the carrier-neutral
++/// layer is still worth sending.
++unsafe fn identity_from(i: *const SamsungCarrierIdentity) -> Result<cfg::CarrierIdentity, SamsungSitStatus> {
++    if i.is_null() {
++        return Ok(cfg::CarrierIdentity::default());
++    }
++    let i = &*i;
++    Ok(cfg::CarrierIdentity {
++        mccmnc: opt(i.mccmnc)?,
++        spn: opt(i.spn)?,
++        imsi: opt(i.imsi)?,
++        gid1: opt(i.gid1)?,
++        gid2: opt(i.gid2)?,
++        iccid: opt(i.iccid)?,
++        // The privilege access rule picks a carrier *manifest*; the IMS
++        // settings are not keyed on it.
++    })
++}
++
++/// Resolve the IMS configuration in `database_path` for `identity`, with
++/// `device` substituted into the carrier's User-Agent template.
++///
++/// An unknown or absent SIM identity is not an error -- the database's
++/// carrier-neutral layer is returned instead. A database that cannot be read,
++/// or that has no default record either, is: the alternative is registering
++/// with another carrier's timers.
++///
++/// On `Ok` the handle is written to `out` and must be freed with
++/// [`samsung_ims_config_free`]; on anything else `out` is untouched and
++/// `samsung_sit_last_error_message` says why.
++///
++/// # Safety
++/// `database_path` must be a NUL-terminated UTF-8 string, `out` writable.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_resolve(
++    database_path: *const c_char,
++    device: *const SamsungImsDeviceIdentity,
++    identity: *const SamsungCarrierIdentity,
++    out: *mut *mut SamsungImsConfig,
++) -> SamsungSitStatus {
++    if out.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let path = match opt(database_path) {
++        Ok(p) => p,
++        Err(s) => return s,
++    };
++    let device = match device_from(device) {
++        Ok(d) => d,
++        Err(s) => return s,
++    };
++    let identity = match identity_from(identity) {
++        Ok(i) => i,
++        Err(s) => return s,
++    };
++
++    let resolved = match cfg::resolve(&path, &device, &identity) {
++        Ok(c) => c,
++        Err(e) => {
++            set_last_error(e.to_string());
++            return SamsungSitStatus::Unsupported;
++        }
++    };
++
++    let mut owned: Vec<OwnedValue> = Vec::with_capacity(resolved.entries.len() + 2);
++    let mut entries = Vec::with_capacity(resolved.entries.len());
++    for (tag, value) in resolved.entries {
++        let entry = match value {
++            Value::Int(v) => SamsungAimsConfigEntry {
++                tag,
++                value_type: SamsungAimsValueType::Int,
++                int_value: v,
++                str_value: core::ptr::null(),
++                bytes_value: core::ptr::null(),
++                bytes_len: 0,
++            },
++            // The builder has a byte form, and the corpus shows no use of it;
++            // the CP reads it as the integer either way.
++            Value::Byte(v) => SamsungAimsConfigEntry {
++                tag,
++                value_type: SamsungAimsValueType::Int,
++                int_value: u32::from(v),
++                str_value: core::ptr::null(),
++                bytes_value: core::ptr::null(),
++                bytes_len: 0,
++            },
++            Value::Str(s) => {
++                let ptr = own(&mut owned, s);
++                SamsungAimsConfigEntry {
++                    tag,
++                    value_type: SamsungAimsValueType::Str,
++                    int_value: 0,
++                    str_value: ptr,
++                    bytes_value: core::ptr::null(),
++                    bytes_len: 0,
++                }
++            }
++            Value::Bytes(b) => {
++                let len = b.len();
++                let ptr = b.as_ptr();
++                owned.push(OwnedValue::Bytes(b));
++                SamsungAimsConfigEntry {
++                    tag,
++                    value_type: SamsungAimsValueType::Bytes,
++                    int_value: 0,
++                    str_value: core::ptr::null(),
++                    bytes_value: ptr,
++                    bytes_len: len,
++                }
++            }
++        };
++        entries.push(entry);
++    }
++
++    let handle = Box::new(SamsungImsConfig {
++        entries,
++        carrier: CString::new(resolved.carrier).unwrap_or_default(),
++        user_agent: CString::new(resolved.user_agent).unwrap_or_default(),
++        _owned: owned,
++    });
++    out.write(Box::into_raw(handle));
++    SamsungSitStatus::Ok
++}
++
++/// The entries, in the order they should reach the CP. Owned by `config` and
++/// valid until it is freed. Null with `*out_n_entries` zero if `config` is null.
++///
++/// # Safety
++/// `config` must come from [`samsung_ims_config_resolve`] and not yet be freed.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_entries(
++    config: *const SamsungImsConfig,
++    out_n_entries: *mut usize,
++) -> *const SamsungAimsConfigEntry {
++    if config.is_null() {
++        if !out_n_entries.is_null() {
++            out_n_entries.write(0);
++        }
++        return core::ptr::null();
++    }
++    let config = &*config;
++    if !out_n_entries.is_null() {
++        out_n_entries.write(config.entries.len());
++    }
++    config.entries.as_ptr()
++}
++
++/// Which carrier's overrides were applied, for logging. "default" if none.
++///
++/// # Safety
++/// As [`samsung_ims_config_entries`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_carrier(config: *const SamsungImsConfig) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).carrier.as_ptr()
++}
++
++/// The assembled User-Agent. Worth logging on its own: it is the one value a
++/// network is known to reject a registration over.
++///
++/// # Safety
++/// As [`samsung_ims_config_entries`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_user_agent(config: *const SamsungImsConfig) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).user_agent.as_ptr()
++}
++
++/// # Safety
++/// `config` must come from [`samsung_ims_config_resolve`], and be freed once.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_free(config: *mut SamsungImsConfig) {
++    if !config.is_null() {
++        drop(Box::from_raw(config));
++    }
++}
++
++/// Resolve the carrier's APN list, in the vendor's own order, which is the
++/// order it should reach the CP in.
++///
++/// Unlike the settings there is no default to fall back on: the carrier-neutral
++/// layer has no APNs of its own, and registering another carrier's would be
++/// worse than registering none. A SIM that resolves to no carrier therefore
++/// yields an empty list, not an error.
++///
++/// # Safety
++/// `database_path` must be a NUL-terminated UTF-8 string, `out` writable.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_apns_resolve(
++    database_path: *const c_char,
++    identity: *const SamsungCarrierIdentity,
++    out: *mut *mut SamsungImsApnList,
++) -> SamsungSitStatus {
++    if out.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let path = match opt(database_path) {
++        Ok(p) => p,
++        Err(s) => return s,
++    };
++    let identity = match identity_from(identity) {
++        Ok(i) => i,
++        Err(s) => return s,
++    };
++    let resolved = match cfg::apns(&path, &identity) {
++        Ok(a) => a,
++        Err(e) => {
++            set_last_error(e.to_string());
++            return SamsungSitStatus::Unsupported;
++        }
++    };
++
++    let mut owned: Vec<CString> = Vec::with_capacity(resolved.len() * 2);
++    let mut apns = Vec::with_capacity(resolved.len());
++    for a in resolved {
++        let name = CString::new(a.name).unwrap_or_default();
++        let apn = CString::new(a.apn).unwrap_or_default();
++        apns.push(SamsungImsApn {
++            name: name.as_ptr(),
++            apn: apn.as_ptr(),
++            types: a.types,
++            bearers: a.bearers,
++            protocol: a.protocol,
++            roaming: a.roaming,
++        });
++        owned.push(name);
++        owned.push(apn);
++    }
++    out.write(Box::into_raw(Box::new(SamsungImsApnList { apns, _owned: owned })));
++    SamsungSitStatus::Ok
++}
++
++/// The APNs. Owned by `list` and valid until it is freed.
++///
++/// # Safety
++/// `list` must come from [`samsung_ims_apns_resolve`] and not yet be freed.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_apn_list_peek(
++    list: *const SamsungImsApnList,
++    out_n_apns: *mut usize,
++) -> *const SamsungImsApn {
++    if list.is_null() {
++        if !out_n_apns.is_null() {
++            out_n_apns.write(0);
++        }
++        return core::ptr::null();
++    }
++    let list = &*list;
++    if !out_n_apns.is_null() {
++        out_n_apns.write(list.apns.len());
++    }
++    list.apns.as_ptr()
++}
++
++/// # Safety
++/// `list` must come from [`samsung_ims_apns_resolve`], and be freed once.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_apn_list_free(list: *mut SamsungImsApnList) {
++    if !list.is_null() {
++        drop(Box::from_raw(list));
++    }
++}
+diff --git a/crates/samsung-sit-ffi/src/lib.rs b/crates/samsung-sit-ffi/src/lib.rs
+index cc4c541..19d268f 100644
+--- a/crates/samsung-sit-ffi/src/lib.rs
++++ b/crates/samsung-sit-ffi/src/lib.rs
+@@ -29,10 +29,14 @@ use samsung_sit::SitError;
+ 
+ mod aims;
+ mod builders;
++mod carrier_db;
++mod ims_config;
+ mod parsers;
+ mod structs;
+ 
+ pub use aims::*;
++pub use carrier_db::*;
++pub use ims_config::*;
+ pub use structs::*;
+ 
+ /// SIM-slot table dimensions, surfaced to C for the fixed-size arrays in
+@@ -219,12 +223,18 @@ thread_local! {
+ /// Record `e`'s full message for [`samsung_sit_last_error_message`] and map it
+ /// to a status code.
+ pub(crate) fn status_from_err(e: &SitError) -> SamsungSitStatus {
+-    let msg = CString::new(e.to_string())
+-        .unwrap_or_else(|_| CString::new("malformed SIT error").expect("no interior NUL"));
+-    LAST_ERROR.with(|c| *c.borrow_mut() = Some(msg));
++    set_last_error(e.to_string());
+     SamsungSitStatus::from(e)
+ }
+ 
++/// Record a message for [`samsung_sit_last_error_message`], for the callers
++/// whose errors are not the codec's own.
++pub(crate) fn set_last_error(message: String) {
++    let msg = CString::new(message)
++        .unwrap_or_else(|_| CString::new("malformed error message").expect("no interior NUL"));
++    LAST_ERROR.with(|c| *c.borrow_mut() = Some(msg));
++}
++
+ /// The full text of the last codec error on this thread, or null if none. The
+ /// pointer is owned by the shim and valid only until the next call on this
+ /// thread; copy it before then.

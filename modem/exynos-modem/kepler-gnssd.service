@@ -1,0 +1,46 @@
+[Unit]
+Description=Samsung KEPLER GNSS receiver (NMEA on /run/gnss-share.sock)
+Documentation=https://git.deusch.me/pixel-mainline/exynos-modem
+# The receiver is codeloaded by the modem driver as the CP comes up, and the
+# CHPP transport only exists once gnss-kepler has bound to its SPI node.
+# gpsd has no units in Alpine's package, so nothing would ever start it.
+Wants=gpsd.service
+Requires=dev-gnss0.device
+After=dev-gnss0.device
+# The diagnostic channel is a modem-driver port, and it can still be appearing
+# when udev announces the receiver: starting first costs a failed attempt and a
+# ten-second wait. Wants rather than Requires, so a board that never brings it
+# up still gets a daemon.
+Wants=dev-wwan0gnss1.device
+After=dev-wwan0gnss1.device
+# Keep retrying for as long as the receiver is there. The daemon exits when the
+# receiver stops answering -- it can stop asserting its SPI ready line, and only
+# a fresh codeload revives it -- so without this systemd would give up after the
+# default five starts and never try again.
+StartLimitIntervalSec=0
+
+[Service]
+# No ExecStartPre codeload here.  The modem driver stages the receiver itself
+# as the CP comes up, microseconds before it creates the node this unit waits
+# on, so anything fired from here is a *second* codeload against a receiver
+# that has just been reset -- which wedges it and takes the CP down with it.
+# A receiver that stops answering needs a CP reboot anyway, and the driver
+# codeloads again on the way back up.
+# /var/lib/kepler-gnssd, where the daemon keeps the session-open batch that
+# last produced a fix.  There is no shipped profile: a fresh install opens with
+# the batch compiled in, and the first session that fixes records what worked
+# for the next boot to use.
+StateDirectory=kepler-gnssd
+ExecStart=/usr/sbin/kepler-gnssd \
+	--device /dev/gnss0 \
+	--dump-device /dev/wwan0gnss1 \
+	--socket /run/gnss-share.sock \
+	--socket-group geoclue \
+	--pty /dev/gnss-nmea \
+	--mems \
+	--log-records
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

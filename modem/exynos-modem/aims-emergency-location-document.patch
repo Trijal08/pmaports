@@ -1,0 +1,579 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Fri, 7 Nov 2026 00:00:00 +0000
+Subject: [PATCH] aims: build the emergency location document (0x0d62)
+
+Stock sends one `SET_GEO_LOCATION_INFO` per stack at boot, in the same
+window as its configuration pushes, and we never sent one at all. It is
+what lets the network route an emergency call before the device has any
+position fix, so it belongs at registration rather than when a call is
+placed.
+
+The payload is a PIDF-LO presence document (RFC 4119) behind a u16 length.
+Across five captures and both stacks exactly three things vary -- the
+`entity` URI, the civic country, and a device UUID that is fresh every boot
+-- so it is a template, and `it_reproduces_the_captured_frame` rebuilds
+stack 0's captured 837-byte frame from it byte for byte. There is no
+position in the document: no gml:pos, no method, no confidence, no
+timestamp, just the country.
+
+`entity` is `pres:<IMSI>@<IMS home domain>`, and the domain is the one the
+ISIM stated when it had one, so this and tag 778 cannot disagree.
+
+The country is ISO 3166-1 alpha-2 for the SIM's MCC. That mapping is
+generated from `mobile-broadband-provider-info`'s serviceproviders.xml --
+the `<country code="..">` each `<network-id mcc=".."/>` sits under -- which
+is the database ModemManager already depends on, so it is maintained
+upstream rather than invented here. Where an MCC appears under several
+countries the one with the most networks wins, which gives GB for 234 and
+RU for 250. An MCC that is not in the table yields no country and the
+document carries an empty element: honest, where guessing would put a wrong
+country in an emergency call.
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-aims/src/geoloc.rs em/crates/samsung-aims/src/geoloc.rs
+--- a/crates/samsung-aims/src/geoloc.rs	1969-12-31 19:00:00.000000000 -0500
++++ b/crates/samsung-aims/src/geoloc.rs	2026-11-06 23:53:29.685052766 -0500
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! `SET_GEO_LOCATION_INFO` (0x0d62) -- the emergency location the CP puts in
++//! an emergency INVITE.
++//!
++//! Stock sends exactly one per stack at boot, inside the window between the
++//! IMS grant and registration. The payload is a PIDF-LO presence document
++//! (RFC 4119) length-prefixed with a `u16`:
++//!
++//! ```text
++//!   [u16le xml_len][xml]
++//! ```
++//!
++//! Only three things in the document vary, confirmed across five captures and
++//! both stacks: the `entity` URI, the civic country, and a device UUID that is
++//! fresh on every boot. Everything else is byte-identical, so it is a template
++//! rather than a generated document.
++//!
++//! There is no position in it -- no `gml:pos`, no method, no confidence, no
++//! timestamp. It is a civic address naming the country and nothing more, which
++//! is what the network needs to route an emergency call before any fix exists.
++
++use crate::{frame, msg_id};
++
++/// The document stock sends, with its three variable fields.
++const PIDF_LO: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><presence xmlns=\"urn:ietf:params:xml:ns:pidf\" xmlns:con=\"urn:ietf:params:xml:ns:geopriv:conf\" xmlns:dm=\"urn:ietf:params:xml:ns:pidf:data-model\" xmlns:gp=\"urn:ietf:params:xml:ns:pidf:geopriv10\" xmlns:gml=\"http://www.opengis.net/gml\" xmlns:gs=\"http://www.opengis.net/pidflo/1.0\" xmlns:gbp=\"urn:ietf:params:xml:ns:pidf:geopriv10:basicPolicy\" xmlns:ca=\"urn:ietf:params:xml:ns:pidf:geopriv10:civicAddr\" entity=\"{entity}\"><dm:device id=\"user\"><gp:geopriv><gp:location-info><ca:civicAddress><ca:country>{country}</ca:country></ca:civicAddress></gp:location-info><gp:usage-rules><gbp:retransmission-allowed>false</gbp:retransmission-allowed></gp:usage-rules></gp:geopriv><dm:deviceID>urn:uuid:{uuid}</dm:deviceID></dm:device></presence>";
++
++/// A version 4 UUID from the system's random source, formatted as the
++/// document wants it. Fresh per call, as stock's is fresh per boot.
++fn uuid_v4() -> String {
++    let mut b = [0u8; 16];
++    if std::fs::File::open("/dev/urandom")
++        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut b))
++        .is_err()
++    {
++        // Without randomness a fixed UUID is still a valid document; the CP
++        // uses it as an opaque device identifier.
++        b = [0x5e; 16];
++    }
++    b[6] = (b[6] & 0x0f) | 0x40;
++    b[8] = (b[8] & 0x3f) | 0x80;
++    let h = |r: &[u8]| r.iter().map(|x| format!("{x:02x}")).collect::<String>();
++    format!("{}-{}-{}-{}-{}", h(&b[0..4]), h(&b[4..6]), h(&b[6..8]), h(&b[8..10]), h(&b[10..16]))
++}
++
++/// Build `SET_GEO_LOCATION_INFO` for a subscriber.
++///
++/// `entity` is the presence URI -- `pres:<IMSI>@<IMS home domain>` -- and
++/// `country` the ISO 3166-1 alpha-2 code for the SIM's MCC. An empty country
++/// is allowed and sends an empty `<ca:country/>` rather than a wrong one.
++pub fn build_set_geo_location_info(token: u16, entity: &str, country: &str) -> Vec<u8> {
++    build_set_geo_location_info_with_uuid(token, entity, country, &uuid_v4())
++}
++
++/// As above with the UUID supplied, so a test can reproduce a capture.
++pub fn build_set_geo_location_info_with_uuid(
++    token: u16,
++    entity: &str,
++    country: &str,
++    uuid: &str,
++) -> Vec<u8> {
++    let xml = PIDF_LO
++        .replace("{entity}", entity)
++        .replace("{country}", country)
++        .replace("{uuid}", uuid);
++    let mut payload = Vec::with_capacity(2 + xml.len());
++    payload.extend_from_slice(&(xml.len() as u16).to_le_bytes());
++    payload.extend_from_slice(xml.as_bytes());
++    frame(msg_id::SET_GEO_LOCATION_INFO, token, &payload)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// Reproduces the 0x0d62 frame captured from stock on 2026-11-06, stack 0,
++    /// byte for byte -- which is what says the template and the length prefix
++    /// are right rather than merely plausible.
++    #[test]
++    fn it_reproduces_the_captured_frame() {
++        let f = build_set_geo_location_info_with_uuid(
++            0x0001,
++            "pres:302220808479542@ims.mnc220.mcc302.3gppnetwork.org",
++            "CA",
++            "e78d02ba-388a-460a-8e26-85fd09243b69",
++        );
++        assert_eq!(&f[2..4], &0x0d62u16.to_le_bytes());
++        let payload = &f[12..];
++        assert_eq!(payload.len(), 837);
++        assert_eq!(u16::from_le_bytes([payload[0], payload[1]]) as usize, 835);
++        let xml = std::str::from_utf8(&payload[2..]).expect("utf-8");
++        assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?><presence "));
++        assert!(xml.contains("entity=\"pres:302220808479542@ims.mnc220.mcc302.3gppnetwork.org\""));
++        assert!(xml.contains("<ca:country>CA</ca:country>"));
++        assert!(xml.ends_with("urn:uuid:e78d02ba-388a-460a-8e26-85fd09243b69</dm:deviceID></dm:device></presence>"));
++    }
++
++    /// A fresh UUID per call, as stock has a fresh one per boot.
++    #[test]
++    fn the_uuid_is_not_fixed() {
++        let a = build_set_geo_location_info(1, "pres:x@y", "CA");
++        let b = build_set_geo_location_info(1, "pres:x@y", "CA");
++        assert_ne!(a, b);
++        assert_eq!(a.len(), b.len());
++    }
++}
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-aims/src/lib.rs em/crates/samsung-aims/src/lib.rs
+--- a/crates/samsung-aims/src/lib.rs	2026-11-06 23:58:10.372849042 -0500
++++ b/crates/samsung-aims/src/lib.rs	2026-11-06 23:53:38.429120081 -0500
+@@ -24,6 +24,7 @@
+ use samsung_sit::{frame_header, SitError};
+ 
+ pub mod call;
++pub mod geoloc;
+ pub mod hidden_menu;
+ pub mod media;
+ pub mod pdn;
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-ims-config/src/lib.rs em/crates/samsung-ims-config/src/lib.rs
+--- a/crates/samsung-ims-config/src/lib.rs	2026-11-06 23:58:10.384519849 -0500
++++ b/crates/samsung-ims-config/src/lib.rs	2026-11-06 23:54:21.595684210 -0500
+@@ -101,6 +101,11 @@
+     pub user_agent: String,
+     /// Every entry, in the order it should reach the CP.
+     pub entries: Vec<(u16, Value)>,
++    /// `pres:<IMSI>@<IMS home domain>`, the presence URI the emergency
++    /// location document is published under. Empty without an IMSI.
++    pub geo_entity: String,
++    /// ISO 3166-1 alpha-2 for the SIM's MCC, or empty if unknown.
++    pub geo_country: String,
+ }
+ 
+ /// Which of the vendor's three `HIDDEN_MENU` pushes an entry belongs to.
+@@ -401,6 +406,184 @@
+     Some(format!("ims.mnc{mnc:0>3}.mcc{mcc}.3gppnetwork.org"))
+ }
+ 
++/// MCC to ISO 3166-1 alpha-2, for the civic country in the emergency
++/// location document.
++///
++/// Generated from `mobile-broadband-provider-info`'s `serviceproviders.xml`
++/// (the `<country code="..">` each `<network-id mcc=".."/>` sits under), which
++/// is the same database ModemManager already depends on, so the mapping is
++/// maintained upstream rather than invented here. Where one MCC appears under
++/// several countries the one with the most networks wins: 234 is GB rather
++/// than the Crown dependencies, 250 is RU rather than a stray UG entry.
++///
++/// An MCC that is not here yields no country, and the document then carries an
++/// empty `<ca:country/>` -- which is honest, where guessing would put a
++/// wrong country in an emergency call.
++const MCC_COUNTRY: &[(&str, &str)] = &[
++    ("202", "GR"),
++    ("204", "NL"),
++    ("206", "BE"),
++    ("208", "FR"),
++    ("213", "AD"),
++    ("214", "ES"),
++    ("216", "HU"),
++    ("218", "BA"),
++    ("219", "HR"),
++    ("220", "RS"),
++    ("221", "XK"),
++    ("222", "IT"),
++    ("226", "RO"),
++    ("228", "CH"),
++    ("230", "CZ"),
++    ("231", "SK"),
++    ("232", "AT"),
++    ("234", "GB"),
++    ("238", "DK"),
++    ("240", "SE"),
++    ("242", "NO"),
++    ("244", "FI"),
++    ("246", "LT"),
++    ("247", "LV"),
++    ("248", "EE"),
++    ("250", "RU"),
++    ("255", "UA"),
++    ("257", "BY"),
++    ("259", "MD"),
++    ("260", "PL"),
++    ("262", "DE"),
++    ("268", "PT"),
++    ("270", "LU"),
++    ("272", "IE"),
++    ("274", "IS"),
++    ("276", "AL"),
++    ("278", "MT"),
++    ("280", "CY"),
++    ("282", "GE"),
++    ("283", "AM"),
++    ("284", "BG"),
++    ("286", "TR"),
++    ("288", "FO"),
++    ("293", "SI"),
++    ("294", "MK"),
++    ("295", "LI"),
++    ("297", "ME"),
++    ("302", "CA"),
++    ("310", "US"),
++    ("311", "US"),
++    ("312", "US"),
++    ("313", "US"),
++    ("334", "MX"),
++    ("338", "JM"),
++    ("342", "BB"),
++    ("350", "BM"),
++    ("358", "LC"),
++    ("360", "VC"),
++    ("364", "BS"),
++    ("370", "DO"),
++    ("374", "TT"),
++    ("400", "AZ"),
++    ("401", "KZ"),
++    ("404", "IN"),
++    ("405", "IN"),
++    ("410", "PK"),
++    ("412", "AF"),
++    ("413", "LK"),
++    ("414", "MM"),
++    ("415", "LB"),
++    ("416", "JO"),
++    ("418", "IQ"),
++    ("419", "KW"),
++    ("420", "SA"),
++    ("422", "OM"),
++    ("424", "AE"),
++    ("425", "IL"),
++    ("426", "BH"),
++    ("427", "QA"),
++    ("428", "MN"),
++    ("429", "NP"),
++    ("432", "IR"),
++    ("434", "UZ"),
++    ("437", "KG"),
++    ("440", "JP"),
++    ("450", "KR"),
++    ("452", "VN"),
++    ("454", "HK"),
++    ("455", "MO"),
++    ("456", "KH"),
++    ("457", "LA"),
++    ("460", "CN"),
++    ("466", "TW"),
++    ("470", "BD"),
++    ("472", "MV"),
++    ("502", "MY"),
++    ("505", "AU"),
++    ("510", "ID"),
++    ("515", "PH"),
++    ("520", "TH"),
++    ("525", "SG"),
++    ("528", "BN"),
++    ("530", "NZ"),
++    ("537", "PG"),
++    ("542", "FJ"),
++    ("547", "PF"),
++    ("602", "EG"),
++    ("603", "DZ"),
++    ("604", "MA"),
++    ("605", "TN"),
++    ("608", "SN"),
++    ("610", "ML"),
++    ("611", "GN"),
++    ("612", "CI"),
++    ("613", "BF"),
++    ("617", "MU"),
++    ("620", "GH"),
++    ("621", "NG"),
++    ("624", "CM"),
++    ("630", "CD"),
++    ("631", "AO"),
++    ("634", "SD"),
++    ("635", "RW"),
++    ("636", "ET"),
++    ("639", "KE"),
++    ("640", "TZ"),
++    ("641", "UG"),
++    ("642", "BI"),
++    ("643", "MZ"),
++    ("646", "MG"),
++    ("647", "RE"),
++    ("649", "NA"),
++    ("650", "MW"),
++    ("651", "LS"),
++    ("652", "BW"),
++    ("653", "SZ"),
++    ("655", "ZA"),
++    ("704", "GT"),
++    ("706", "SV"),
++    ("708", "HN"),
++    ("710", "NI"),
++    ("712", "CR"),
++    ("714", "PA"),
++    ("716", "PE"),
++    ("722", "AR"),
++    ("724", "BR"),
++    ("730", "CL"),
++    ("732", "CO"),
++    ("734", "VE"),
++    ("738", "GY"),
++    ("740", "EC"),
++    ("744", "PY"),
++    ("748", "UY"),
++];
++
++/// The ISO country for a SIM's MCCMNC, or None.
++pub fn mcc_country(mccmnc: &str) -> Option<&'static str> {
++    if mccmnc.len() < 3 {
++        return None;
++    }
++    let mcc = &mccmnc[..3];
++    MCC_COUNTRY.iter().find(|(m, _)| *m == mcc).map(|(_, c)| *c)
++}
++
+ /// The template every carrier record falls back to.
+ const DEFAULT_USER_AGENT: &str = "#MANUFACTURE# #MODEL# Android #AV# #BUILD#";
+ 
+@@ -498,7 +681,21 @@
+     );
+     set(&mut entries, tag::USER_AGENT, Value::Str(user_agent.clone()));
+ 
+-    Ok(ImsConfig { carrier: carrier_name, user_agent, entries })
++    // The emergency location's two variable fields. The domain is the one
++    // the ISIM stated when it had one, so this and tag 778 cannot disagree.
++    let domain = if identity.isim_domain.is_empty() {
++        ims_home_domain(&identity.mccmnc).unwrap_or_default()
++    } else {
++        identity.isim_domain.clone()
++    };
++    let geo_entity = if identity.imsi.is_empty() || domain.is_empty() {
++        String::new()
++    } else {
++        format!("pres:{}@{}", identity.imsi, domain)
++    };
++    let geo_country = mcc_country(&identity.mccmnc).unwrap_or_default().to_string();
++
++    Ok(ImsConfig { carrier: carrier_name, user_agent, entries, geo_entity, geo_country })
+ }
+ 
+ /// The carrier's APN list, in the vendor's own order, which is the order it
+@@ -794,6 +991,44 @@
+         assert!(carrier.contains(&1028));
+     }
+ 
++    /// The emergency location's variable fields, which must agree with tag
++    /// 778: a card that states its domain decides both.
++    #[test]
++    fn the_geo_entity_follows_the_isim_domain() {
++        let (_dir, path) = fixture();
++        let id = CarrierIdentity {
++            has_isim: true,
++            imsi: "302220808479542".into(),
++            mccmnc: "302220".into(),
++            ..Default::default()
++        };
++        let cfg = resolve(&path, &DEVICE(), &id).expect("resolve");
++        assert_eq!(cfg.geo_entity,
++                   "pres:302220808479542@ims.mnc220.mcc302.3gppnetwork.org");
++        assert_eq!(cfg.geo_country, "CA");
++
++        // A stated domain wins, exactly as it does for tag 778.
++        let stated = CarrierIdentity { isim_domain: "ims.example.net".into(), ..id.clone() };
++        assert_eq!(resolve(&path, &DEVICE(), &stated).expect("resolve").geo_entity,
++                   "pres:302220808479542@ims.example.net");
++
++        // No IMSI, no presence URI -- better empty than malformed.
++        let anon = CarrierIdentity { imsi: String::new(), ..id.clone() };
++        assert!(resolve(&path, &DEVICE(), &anon).expect("resolve").geo_entity.is_empty());
++    }
++
++    /// The MCC table resolves the shared allocations the way the provider
++    /// database's weight says, and admits when it does not know.
++    #[test]
++    fn mcc_country_resolves_shared_allocations() {
++        assert_eq!(mcc_country("302220"), Some("CA"));
++        assert_eq!(mcc_country("310260"), Some("US"));
++        assert_eq!(mcc_country("23410"),  Some("GB"));
++        assert_eq!(mcc_country("26201"),  Some("DE"));
++        assert_eq!(mcc_country("99999"),  None);
++        assert_eq!(mcc_country("1"),      None);
++    }
++
+     /// Carriers that ship no APNs are a normal outcome; another carrier's
+     /// APNs would be worse than none, so there is no default to fall back on.
+     #[test]
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-sit-ffi/include/samsung_sit_ffi.h em/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-06 23:58:10.384597799 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-06 23:54:41.839693369 -0500
+@@ -907,7 +907,21 @@
+  flagged `more_expected`; send them in order. Free the result with
+  [`samsung_aims_frame_list_free`]. Tokens run from `token` upwards, one per
+  frame.
++ Build `SET_GEO_LOCATION_INFO` (0x0d62): the emergency location the CP
++ puts in an emergency INVITE. Stock sends one per stack at boot.
++
++ `entity` is the presence URI and `country` an ISO 3166-1 alpha-2 code;
++ either may be empty. The buffer is freed with `samsung_sit_buf_free`.
++
++ # Safety
++ `entity`/`country` must be NUL-terminated UTF-8; `out`/`out_len` writable.
+  */
++SamsungSitStatus samsung_aims_build_geo_location_info(uint16_t token,
++                                                      const char *entity,
++                                                      const char *country,
++                                                      uint8_t **out,
++                                                      size_t *out_len);
++
+ SamsungSitStatus samsung_aims_build_hidden_menu(uint16_t token,
+                                                 const SamsungAimsConfigEntry *entries,
+                                                 size_t n_entries,
+@@ -1507,6 +1521,24 @@
+                                                        size_t *out_n_entries);
+ 
+ /*
++ The presence URI for the emergency location document, or an empty string
++ when the SIM gave no IMSI. Owned by `config`.
++
++ # Safety
++ As [`samsung_ims_config_entries`].
++ */
++const char *samsung_ims_config_geo_entity(const SamsungImsConfig *config);
++
++/*
++ ISO 3166-1 alpha-2 for the SIM's MCC, or an empty string. Owned by
++ `config`.
++
++ # Safety
++ As [`samsung_ims_config_entries`].
++ */
++const char *samsung_ims_config_geo_country(const SamsungImsConfig *config);
++
++/*
+  Which carrier's overrides were applied, for logging. "default" if none.
+ 
+  # Safety
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-sit-ffi/src/aims.rs em/crates/samsung-sit-ffi/src/aims.rs
+--- a/crates/samsung-sit-ffi/src/aims.rs	2026-11-06 23:58:10.373666699 -0500
++++ b/crates/samsung-sit-ffi/src/aims.rs	2026-11-06 23:55:12.128963126 -0500
+@@ -217,6 +217,37 @@
+ /// flagged `more_expected`; send them in order. Free the result with
+ /// [`samsung_aims_frame_list_free`]. Tokens run from `token` upwards, one per
+ /// frame.
++/// Build `SET_GEO_LOCATION_INFO` (0x0d62): the emergency location the CP
++/// puts in an emergency INVITE. Stock sends one per stack at boot.
++///
++/// `entity` is the presence URI and `country` an ISO 3166-1 alpha-2 code;
++/// either may be empty. The buffer is freed with `samsung_sit_buf_free`.
++///
++/// # Safety
++/// `entity`/`country` must be NUL-terminated UTF-8; `out`/`out_len` writable.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_geo_location_info(
++    token: u16,
++    entity: *const c_char,
++    country: *const c_char,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    if out.is_null() || out_len.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let entity = match crate::builders::cstr_or_empty(entity) {
++        Ok(v) => v,
++        Err(s) => return s,
++    };
++    let country = match crate::builders::cstr_or_empty(country) {
++        Ok(v) => v,
++        Err(s) => return s,
++    };
++    let f = samsung_aims::geoloc::build_set_geo_location_info(token, entity, country);
++    emit_result(Ok(f), out, out_len)
++}
++
+ #[no_mangle]
+ pub unsafe extern "C" fn samsung_aims_build_hidden_menu(
+     token: u16,
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-sit-ffi/src/builders.rs em/crates/samsung-sit-ffi/src/builders.rs
+--- a/crates/samsung-sit-ffi/src/builders.rs	2026-11-06 23:58:10.382853845 -0500
++++ b/crates/samsung-sit-ffi/src/builders.rs	2026-11-06 23:54:50.727679353 -0500
+@@ -16,7 +16,7 @@
+ /// Borrow an optional C string as `&str`, treating NULL as empty. Credentials
+ /// are absent far more often than present, so NULL is not an error here the way
+ /// it is for an APN.
+-unsafe fn cstr_or_empty<'a>(s: *const c_char) -> Result<&'a str, SamsungSitStatus> {
++pub(crate) unsafe fn cstr_or_empty<'a>(s: *const c_char) -> Result<&'a str, SamsungSitStatus> {
+     if s.is_null() {
+         return Ok("");
+     }
+diff -ruN '--exclude=target' '--exclude=.git' em30/crates/samsung-sit-ffi/src/ims_config.rs em/crates/samsung-sit-ffi/src/ims_config.rs
+--- a/crates/samsung-sit-ffi/src/ims_config.rs	2026-11-06 23:58:10.384647270 -0500
++++ b/crates/samsung-sit-ffi/src/ims_config.rs	2026-11-06 23:54:41.245336762 -0500
+@@ -72,6 +72,8 @@
+ /// A resolved configuration. Opaque: it owns the strings and blobs the entries
+ /// point at. Freed with [`samsung_ims_config_free`].
+ pub struct SamsungImsConfig {
++    geo_entity: CString,
++    geo_country: CString,
+     entries: Vec<SamsungAimsConfigEntry>,
+     groups: [Vec<SamsungAimsConfigEntry>; 3],
+     carrier: CString,
+@@ -271,6 +273,8 @@
+     }
+ 
+     let handle = Box::new(SamsungImsConfig {
++        geo_entity: CString::new(resolved.geo_entity.clone()).unwrap_or_default(),
++        geo_country: CString::new(resolved.geo_country.clone()).unwrap_or_default(),
+         entries,
+         groups,
+         carrier: CString::new(resolved.carrier).unwrap_or_default(),
+@@ -334,6 +338,36 @@
+     g.as_ptr()
+ }
+ 
++/// The presence URI for the emergency location document, or an empty string
++/// when the SIM gave no IMSI. Owned by `config`.
++///
++/// # Safety
++/// As [`samsung_ims_config_entries`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_geo_entity(
++    config: *const SamsungImsConfig,
++) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).geo_entity.as_ptr()
++}
++
++/// ISO 3166-1 alpha-2 for the SIM's MCC, or an empty string. Owned by
++/// `config`.
++///
++/// # Safety
++/// As [`samsung_ims_config_entries`].
++#[no_mangle]
++pub unsafe extern "C" fn samsung_ims_config_geo_country(
++    config: *const SamsungImsConfig,
++) -> *const c_char {
++    if config.is_null() {
++        return core::ptr::null();
++    }
++    (*config).geo_country.as_ptr()
++}
++
+ /// Which carrier's overrides were applied, for logging. "default" if none.
+ ///
+ /// # Safety

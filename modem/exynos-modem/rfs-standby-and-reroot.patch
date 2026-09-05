@@ -1,0 +1,206 @@
+Stop the user-space RFS server claiming to serve, and fix its re-root
+
+The kernel driver answers RFS itself -- the S5XXX_CH_RFS arm of its rx path
+hands every frame that fits one ring slot to an in-kernel server and sets
+`port = NULL` -- so this server only ever sees an oversized frame, and none has
+been seen. It nevertheless printed "rfs: serving on /dev/wwan0rfs0" and then sat
+silent forever, which reads exactly like carrier config arriving here. It does
+not arrive here, and believing it did cost a day of debugging a modem that was
+in fact never asked for its carrier policy at all.
+
+Keep the implementation, drop the claim. It is not dead code: the in-kernel
+server cannot implement the write half -- drivers do not write files, so the
+CP's NV writes are acked and discarded today -- and a mainline driver wants the
+protocol in user space regardless, because carrier config is a rootfs tree that
+the kernel's own documentation says only user space can know is ready
+(Documentation/driver-api/firmware/direct-fs-lookup.rst). When the driver stops
+answering, this is what answers.
+
+Also carried here: the re-root the CP needs when it falls back to the built-in
+Android path. There is no /vendor on a mainline rootfs, so a request for
+/vendor/firmware/carrierconfig/... is tried against the directory the firmware
+package actually installs before the bare staging one, instead of only the
+latter.
+
+Also folded in: the CP's NV writes are applied at the offset it names, over
+the image we would serve, instead of landing in a file of their own. The CP
+sends the region it changed -- the first 99 KiB of a 512 KiB nv_normal, at
+offset 0 -- so truncating produced a 99 KiB file that is not a valid NV image,
+and nothing it ever wrote could be given back to it. The seed source now
+includes the directory the firmware package installs to, which is where the
+pristine image actually lives on a mainline rootfs; /mnt/vendor/efs does not
+exist there. With both, a write round-trips: 524288 bytes out, 524288 back.
+
+--- a/crates/exynos-modem/src/rfs.rs
++++ b/crates/exynos-modem/src/rfs.rs
+@@ -59,6 +59,13 @@
+     }
+ }
+ 
++/// Where a re-rooted carrier config may live, most specific first: the path the
++/// firmware package installs to, then a bare staging directory.
++const CC_ROOTS: &[&str] = &[
++    "/lib/firmware/google/s5400/carrierconfig",
++    "/carrierconfig",
++];
++
+ /// Resolve + open an OPEN(path) request read-only, honouring the whitelist.
+ fn open_path(path: &str) -> Option<File> {
+     if !path.contains("carrierconfig") && !path.contains("confpack") {
+@@ -68,11 +75,17 @@
+     if let Ok(f) = File::open(path) {
+         return Some(f);
+     }
+-    // Fallback: carrier config staged at /carrierconfig instead of the vendor
+-    // path the modem names.
++    // The CP asks for whatever path the AP named in CARRIER_CONFIG_MANIFEST, so
++    // the open above is the normal case. A CP that instead fell back to the
++    // built-in Android location is re-rooted: there is no /vendor on a mainline
++    // rootfs, and refusing it would leave the CP with no carrier policy at all.
+     const CCPATH: &str = "/vendor/firmware/carrierconfig";
+     if let Some(rest) = path.strip_prefix(CCPATH) {
+-        return File::open(format!("/carrierconfig{}", rest)).ok();
++        for root in CC_ROOTS {
++            if let Ok(f) = File::open(format!("{}{}", root, rest)) {
++                return Some(f);
++            }
++        }
+     }
+     None
+ }
+@@ -232,10 +245,11 @@
+                     },
+                 );
+                 eprintln!(
+-                    "rfs: OPEN fid={} size={} {}",
++                    "rfs: OPEN fid={} size={} {} {}",
+                     fid,
+                     size,
+-                    if served { "(served)" } else { "(NOT FOUND)" }
++                    if served { "(served)" } else { "(NOT FOUND)" },
++                    path
+                 );
+                 self.op_status(token, fid, size as u32);
+             }
+@@ -293,17 +307,44 @@
+                 } else if iotype == IO_WRITE {
+                     // Into a .part; RFS_CLOSE renames it over our copy, so an
+                     // interrupted write is never served back to the CP.
++                    //
++                    // Seeded with the image we would serve, because the CP
++                    // writes the region it changed and not a whole file: it
++                    // sends the first 99 KiB of a 512 KiB nv_normal, at offset
++                    // 0, and the rest of the image has to survive. Truncating
++                    // here produced a 99 KiB file that is not a valid NV image
++                    // at all -- same header, missing four fifths of its body --
++                    // so nothing the CP ever wrote could be given back to it.
+                     let part = nv_name(fid).and_then(|n| self.store.part(Kind::Efs, n).ok());
++                    if let (Some(p), Some(name)) = (part.as_ref(), nv_name(fid)) {
++                        match self.store.read_path(Kind::Efs, name) {
++                            Some(src) => {
++                                if let Err(e) = std::fs::copy(&src, p) {
++                                    eprintln!(
++                                        "rfs: cannot seed the write sink from {}: {}",
++                                        src.display(),
++                                        e
++                                    );
++                                }
++                            }
++                            // No image to preserve: a first write lands on its
++                            // own, which is what the old behaviour always did.
++                            None => {}
++                        }
++                    }
+                     let sink = part.as_ref().and_then(|p| {
+-                        OpenOptions::new()
+-                            .write(true)
+-                            .create(true)
+-                            .truncate(true)
+-                            .open(p)
+-                            .ok()
++                        OpenOptions::new().write(true).create(true).open(p).ok()
+                     });
+-                    if sink.is_none() {
+-                        eprintln!("rfs: cannot open a write sink for fid={}", fid);
++                    match sink.as_ref() {
++                        // The CP names the offset it is writing at; honour it.
++                        Some(f) => {
++                            use std::io::Seek;
++                            let mut f = f;
++                            if let Err(e) = (&mut f).seek(std::io::SeekFrom::Start(off as u64)) {
++                                eprintln!("rfs: cannot seek the write sink to {}: {}", off, e);
++                            }
++                        }
++                        None => eprintln!("rfs: cannot open a write sink for fid={}", fid),
+                     }
+                     let e = self.files.get_mut(&fid).unwrap();
+                     e.wfd = sink;
+@@ -422,8 +463,30 @@
+ }
+ 
+ /// Serve the RFS port forever, reopening on error (fresh CP => fresh fid table).
++/// Serve the RFS port -- in practice, stand by on it.
++///
++/// The kernel driver answers RFS itself: the `S5XXX_CH_RFS` arm of its rx path
++/// hands every frame that fits one ring slot to its own in-kernel server and
++/// sets `port = NULL`, so only an oversized frame ever reaches user space, and
++/// none has been seen. An idle server here is therefore the normal state and
++/// not a fault.
++///
++/// It is kept whole rather than deleted for two reasons. The in-kernel server
++/// cannot implement the write half at all -- drivers do not write files, so the
++/// CP's NV writes are acked and dropped today -- and a mainline driver wants
++/// this protocol in user space regardless: carrier config is a rootfs tree the
++/// kernel's own documentation says only user space can know is ready
++/// (`Documentation/driver-api/firmware/direct-fs-lookup.rst`). When the driver
++/// stops answering, this is what answers.
++///
++/// Until then it says so at startup. Claiming to serve reads like the carrier
++/// config is arriving here, which cost a long day of debugging exactly once.
+ pub fn run(dev: &Path, state_dir: PathBuf, verbose: bool) {
+-    eprintln!("rfs: serving on {}", dev.display());
++    eprintln!(
++        "rfs: standing by on {} (the kernel driver answers RFS; only frames too \
++         large for one ring slot reach here)",
++        dev.display()
++    );
+     loop {
+         match OpenOptions::new().read(true).write(true).open(dev) {
+             Ok(f) => serve(Rfs::new(f, Store::new(state_dir.clone()), verbose)),
+--- a/crates/exynos-modem/src/store.rs
++++ b/crates/exynos-modem/src/store.rs
+@@ -65,11 +65,17 @@
+     }
+ 
+     /// The read-only vendor directory holding the factory original, if any.
+-    fn vendor(self) -> Option<&'static str> {
++    /// Where the pristine copy lives when we have never written one, most
++    /// specific first. The firmware package's directory is on the list because
++    /// it is what the driver streams into the CP at a cold boot: seeding a
++    /// partial write from it is what keeps the CP's own updates a valid image
++    /// rather than a truncated one. The Android mount points are kept for a
++    /// rootfs that has them.
++    fn vendor(self) -> &'static [&'static str] {
+         match self {
+-            Kind::Efs => Some("/mnt/vendor/efs"),
+-            Kind::Replay => Some("/mnt/vendor/modem_userdata/replay"),
+-            _ => None,
++            Kind::Efs => &["/mnt/vendor/efs", "/lib/firmware/google/s5400/efs"],
++            Kind::Replay => &["/mnt/vendor/modem_userdata/replay"],
++            _ => &[],
+         }
+     }
+ }
+@@ -102,8 +108,10 @@
+         if own.is_file() {
+             return Some(own);
+         }
+-        let vendor = Path::new(kind.vendor()?).join(name);
+-        vendor.is_file().then_some(vendor)
++        kind.vendor()
++            .iter()
++            .map(|root| Path::new(root).join(name))
++            .find(|p| p.is_file())
+     }
+ 
+     /// True if the path we would serve is the read-only vendor original --

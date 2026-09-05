@@ -1,0 +1,459 @@
+diff --git a/crates/kepler-gnssd/src/main.rs b/crates/kepler-gnssd/src/main.rs
+index ff22ed4..e89db8c 100644
+--- a/crates/kepler-gnssd/src/main.rs
++++ b/crates/kepler-gnssd/src/main.rs
+@@ -8,6 +8,7 @@
+ //! /run/gnss-share.sock. Navigation starts on the first client and stops on the
+ //! last without tearing down the receiver's warm state.
+ 
++mod mems;
+ mod protocol;
+ 
+ use gnss_betp::{dump_message_name, ChppDecoder, DumpDecoder};
+@@ -51,6 +52,11 @@ Options:
+       --no-socket-group      Keep the daemon's effective group
+       --socket-mode OCTAL    Socket permissions (default: 0660)
+       --interval-ms MS       Position period (default: 1000)
++      --mems                 Feed accelerometer and gyroscope samples to the
++                             receiver, as stock does; the staged header
++                             declares MEMS present, so the navigation engine
++                             expects them
++      --mems-hz HZ           Sensor rate when --mems is given (default: 100)
+       --dump-capture PATH    Save raw dump-channel bytes for diagnosis
+       --dump-log             Print decoded KEPLER LOG_TEXT records
+       --always-on            Stream without a socket client (device tests)
+@@ -67,6 +73,8 @@ struct Args {
+     socket_group: Option<String>,
+     socket_mode: u32,
+     interval_ms: u32,
++    mems: bool,
++    mems_hz: u32,
+     dump_capture: Option<PathBuf>,
+     dump_log: bool,
+     always_on: bool,
+@@ -84,6 +92,8 @@ fn parse_args() -> Result<Args, String> {
+         socket_group: Some(DEFAULT_GROUP.into()),
+         socket_mode: 0o660,
+         interval_ms: 1_000,
++        mems: false,
++        mems_hz: 100,
+         dump_capture: None,
+         dump_log: false,
+         always_on: false,
+@@ -119,6 +129,17 @@ fn parse_args() -> Result<Args, String> {
+                     return Err("socket mode must not exceed 0777".into());
+                 }
+             }
++            Long("mems") => args.mems = true,
++            Long("mems-hz") => {
++                args.mems_hz = parser
++                    .value()
++                    .map_err(|e| e.to_string())?
++                    .parse()
++                    .map_err(|_| "mems-hz must be an integer".to_string())?;
++                if !(10..=200).contains(&args.mems_hz) {
++                    return Err("mems-hz must be between 10 and 200".into());
++                }
++            }
+             Long("interval-ms") => {
+                 let value = parser
+                     .value()
+@@ -624,10 +645,49 @@ fn run_loop(
+     let mut was_ready = protocol.is_ready();
+     let mut setup_generation = protocol.setup_generation();
+     let mut setup_deadline = (!was_ready).then(|| Instant::now() + SETUP_TIMEOUT);
++    // The sensor feed is opened once navigation is actually running: the
++    // receiver has no use for samples before then, and holding the IIO buffers
++    // open while idle would spin the sensor hub for nothing.
++    let mut sensors: Option<mems::Mems> = None;
++    let mut mems_failed = false;
++    let mut mems_sent: u64 = 0;
+     while !STOP.load(Ordering::Acquire) {
+         dump_drain.check()?;
+         let now = Instant::now();
+         handle_output(protocol.tick(now), chpp, peers, args.verbose)?;
++        if args.mems {
++            if sensors.is_none() && !mems_failed && protocol.is_streaming() {
++                match mems::Mems::open(args.mems_hz, mems::boottime_ns()) {
++                    Ok(m) => {
++                        if args.verbose {
++                            eprintln!("kepler-gnssd: MEMS feed open at {} Hz", args.mems_hz);
++                        }
++                        sensors = Some(m);
++                    }
++                    Err(e) => {
++                        // Report once; a missing sensor is not fatal, but
++                        // retrying every loop would flood the log.
++                        eprintln!("kepler-gnssd: MEMS feed unavailable: {e}");
++                        mems_failed = true;
++                    }
++                }
++            }
++            if !protocol.is_streaming() {
++                sensors = None;
++            }
++            if let Some(m) = sensors.as_mut() {
++                while let Some(body) = m.poll() {
++                    let out = protocol.send_record(mems::MIDSID_MEMS, mems::PROTO_MEMS, &body);
++                    handle_output(out, chpp, peers, args.verbose)?;
++                    mems_sent += 1;
++                    // Periodic rather than per-record: at 100 Hz in batches of
++                    // five this is one line every ten seconds.
++                    if args.verbose && mems_sent % 200 == 0 {
++                        eprintln!("kepler-gnssd: MEMS records sent: {mems_sent}");
++                    }
++                }
++            }
++        }
+         let ready = protocol.is_ready();
+         let generation = protocol.setup_generation();
+         if generation != setup_generation {
+diff --git a/crates/kepler-gnssd/src/mems.rs b/crates/kepler-gnssd/src/mems.rs
+new file mode 100644
+index 0000000..8e38876
+--- /dev/null
++++ b/crates/kepler-gnssd/src/mems.rs
+@@ -0,0 +1,306 @@
++//! MEMS sensor injection for the KEPLER receiver.
++//!
++//! The header we stage at codeload declares MEMS present
++//! (`Chip_Configuration_mems_data_Configuration = 0x25` on caimito, and
++//! `GlueLayer_IsMemsEnable=1` in the stock `gps.cfg`), so the navigation engine
++//! is configured for sensor fusion. Stock then feeds it accelerometer and
++//! gyroscope samples continuously -- in a captured session that is record
++//! `0x3348` at about 14 batches a second, 1.1 MB over five minutes, which is
++//! the overwhelming bulk of everything the host sends. Declaring the sensors
++//! and never delivering any is not a combination stock ever produces.
++//!
++//! Record layout, recovered from `gnssdump_fixing.bin` and verified by
++//! re-encoding every captured record byte-for-byte:
++//!
++//! ```text
++//! 00 02 00 00 NN                      accel block, NN = sample count
++//! NN x 20 bytes                       samples
++//! 40 00 00 00 00 00 08 00 00 NN       gyro block, NN = sample count
++//! NN x 20 bytes                       samples
++//! 23 constant bytes + u32 LE sequence
++//! ```
++//!
++//! A sample is eight little-endian `i16` followed by a `u32` millisecond
++//! timestamp at +16. The first three are the live axes. The next three are a
++//! fixed per-sensor triple -- constant across all 1870 samples measured in the
++//! capture (accelerometer 7/-21/11, gyroscope -2/-1/-1), so a calibration
++//! offset rather than a second reading -- and the last two are always zero.
++//!
++//! Scaling is derived rather than assumed: the kernel reports the accelerometer
++//! as 0.000598550 m/s^2 per LSB, so one g is 16384 raw counts, and the captured
++//! records sit at 5117 counts for the same one g. That ratio is 5/16, so the
++//! receiver's unit is 1 g = 5120 counts. The gyro ratio cannot be derived the
++//! same way because every captured sample was taken stationary, so its factor
++//! is left at 1 and exposed for tuning.
++use std::fs::{File, OpenOptions};
++use std::io::{Read, Write};
++use std::os::fd::AsRawFd;
++use std::path::{Path, PathBuf};
++
++/// `0x3348`, the record stock carries sensor batches in.
++pub const MIDSID_MEMS: u16 = 0x3348;
++/// Every captured record used protocol 2.
++pub const PROTO_MEMS: u16 = 2;
++
++const ACCEL_HDR: [u8; 4] = [0x00, 0x02, 0x00, 0x00];
++const GYRO_HDR: [u8; 9] = [0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00];
++const TRAILER: [u8; 23] = [
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++];
++
++/// Samples per block in the dominant captured shape.
++pub const BATCH: usize = 5;
++
++/// 1 g expressed in the receiver's accelerometer unit.
++const ACCEL_COUNTS_PER_G: f64 = 5120.0;
++const STANDARD_GRAVITY: f64 = 9.806_65;
++
++/// One IIO buffer record: three `s32` axes, four bytes of padding so the
++/// `s64` timestamp lands on its natural alignment, then the timestamp.
++const IIO_SAMPLE: usize = 24;
++
++/// CLOCK_BOOTTIME in nanoseconds, the clock IIO stamps buffer records with.
++pub fn boottime_ns() -> i64 {
++    let mut ts = libc::timespec {
++        tv_sec: 0,
++        tv_nsec: 0,
++    };
++    // SAFETY: clock_gettime writes only the timespec we hand it.
++    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) } != 0 {
++        return 0;
++    }
++    ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
++}
++
++/// A sensor sample in the receiver's own units.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct Sample {
++    pub x: i16,
++    pub y: i16,
++    pub z: i16,
++    pub ms: u32,
++}
++
++/// The fixed triple stock puts in fields 3..5, observed constant for the whole
++/// capture. It is small next to a 5120-count g, so carrying the captured
++/// device's values is closer to stock than sending zeros would be, but it is
++/// calibration data and may well be per-unit.
++const ACCEL_BIAS: [i16; 3] = [7, -21, 11];
++const GYRO_BIAS: [i16; 3] = [-2, -1, -1];
++
++/// Serialise one 20-byte sample: the live triple, the fixed triple, two zero
++/// fields, then the timestamp.
++fn put_sample(out: &mut Vec<u8>, s: Sample, bias: [i16; 3]) {
++    for v in [s.x, s.y, s.z, bias[0], bias[1], bias[2], 0, 0] {
++        out.extend_from_slice(&v.to_le_bytes());
++    }
++    out.extend_from_slice(&s.ms.to_le_bytes());
++}
++
++/// Build the body of one `0x3348` record.
++pub fn encode(accel: &[Sample], gyro: &[Sample], seq: u32) -> Vec<u8> {
++    let mut out = Vec::with_capacity(5 + accel.len() * 20 + 10 + gyro.len() * 20 + TRAILER.len() + 4);
++    out.extend_from_slice(&ACCEL_HDR);
++    out.push(accel.len() as u8);
++    for s in accel {
++        put_sample(&mut out, *s, ACCEL_BIAS);
++    }
++    out.extend_from_slice(&GYRO_HDR);
++    out.push(gyro.len() as u8);
++    for s in gyro {
++        put_sample(&mut out, *s, GYRO_BIAS);
++    }
++    out.extend_from_slice(&TRAILER);
++    out.extend_from_slice(&seq.to_le_bytes());
++    out
++}
++
++fn write_attr(dir: &Path, name: &str, value: &str) -> std::io::Result<()> {
++    let path = dir.join(name);
++    let mut f = OpenOptions::new().write(true).open(&path)?;
++    f.write_all(value.as_bytes())
++}
++
++fn read_attr(dir: &Path, name: &str) -> std::io::Result<String> {
++    Ok(std::fs::read_to_string(dir.join(name))?.trim().to_string())
++}
++
++/// Find `/sys/bus/iio/devices/iio:deviceN` whose `name` matches.
++fn find_device(want: &str) -> Option<(PathBuf, usize)> {
++    for entry in std::fs::read_dir("/sys/bus/iio/devices").ok()? {
++        let dir = entry.ok()?.path();
++        let base = dir.file_name()?.to_str()?.to_string();
++        let Some(idx) = base.strip_prefix("iio:device") else {
++            continue;
++        };
++        if read_attr(&dir, "name").ok()? == want {
++            return Some((dir, idx.parse().ok()?));
++        }
++    }
++    None
++}
++
++/// One configured IIO buffer, read as 24-byte records.
++struct Channel {
++    dev: File,
++    buf: Vec<u8>,
++    /// Multiply a raw count by this to reach the receiver's unit.
++    factor: f64,
++    axis_prefix: &'static str,
++    dir: PathBuf,
++}
++
++impl Channel {
++    fn open(name: &str, axis_prefix: &'static str, hz: u32, factor_for: fn(f64) -> f64) -> std::io::Result<Self> {
++        let (dir, idx) = find_device(name).ok_or_else(|| {
++            std::io::Error::new(std::io::ErrorKind::NotFound, format!("no IIO device {name}"))
++        })?;
++        // Disable before reconfiguring; an enabled buffer rejects changes.
++        let _ = write_attr(&dir, "buffer/enable", "0");
++        for axis in ["x", "y", "z"] {
++            let _ = write_attr(&dir, &format!("scan_elements/in_{axis_prefix}_{axis}_en"), "1");
++        }
++        let _ = write_attr(&dir, "scan_elements/in_timestamp_en", "1");
++        let _ = write_attr(&dir, "sampling_frequency", &hz.to_string());
++        let _ = write_attr(&dir, "buffer/length", "128");
++        let _ = write_attr(&dir, "buffer/watermark", "1");
++        write_attr(&dir, "buffer/enable", "1")?;
++
++        let scale: f64 = read_attr(&dir, &format!("in_{axis_prefix}_scale"))
++            .ok()
++            .and_then(|s| s.parse().ok())
++            .unwrap_or(1.0);
++
++        let dev = OpenOptions::new().read(true).open(format!("/dev/iio:device{idx}"))?;
++        crate::set_nonblocking(dev.as_raw_fd())?;
++        Ok(Self {
++            dev,
++            buf: Vec::with_capacity(IIO_SAMPLE * 64),
++            factor: factor_for(scale),
++            axis_prefix,
++            dir,
++        })
++    }
++
++    /// Drain whatever the buffer holds, appending converted samples.
++    fn drain(&mut self, out: &mut Vec<Sample>, epoch_ns: i64) {
++        let mut chunk = [0u8; IIO_SAMPLE * 32];
++        loop {
++            match self.dev.read(&mut chunk) {
++                Ok(0) => break,
++                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
++                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
++                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
++                Err(_) => break,
++            }
++        }
++        let whole = self.buf.len() / IIO_SAMPLE * IIO_SAMPLE;
++        for rec in self.buf[..whole].chunks_exact(IIO_SAMPLE) {
++            let raw = |o: usize| i32::from_le_bytes(rec[o..o + 4].try_into().unwrap()) as f64;
++            let ts = i64::from_le_bytes(rec[16..24].try_into().unwrap());
++            let conv = |v: f64| (v * self.factor).round().clamp(-32768.0, 32767.0) as i16;
++            out.push(Sample {
++                x: conv(raw(0)),
++                y: conv(raw(4)),
++                z: conv(raw(8)),
++                ms: ts.saturating_sub(epoch_ns).max(0) as u64 as u32 / 1_000_000,
++            });
++        }
++        self.buf.drain(..whole);
++    }
++}
++
++impl Drop for Channel {
++    fn drop(&mut self) {
++        let _ = write_attr(&self.dir, "buffer/enable", "0");
++        let _ = self.axis_prefix;
++    }
++}
++
++/// Accelerometer + gyroscope, batched into `0x3348` records.
++pub struct Mems {
++    accel: Channel,
++    gyro: Channel,
++    accel_q: Vec<Sample>,
++    gyro_q: Vec<Sample>,
++    seq: u32,
++    epoch_ns: i64,
++}
++
++impl Mems {
++    /// Open both sensors at `hz` and anchor timestamps at `epoch_ns`
++    /// (CLOCK_BOOTTIME, matching `in_timestamp`).
++    pub fn open(hz: u32, epoch_ns: i64) -> std::io::Result<Self> {
++        // The kernel reports m/s^2 per count; the receiver wants 1 g = 5120.
++        let accel_factor = |scale: f64| scale * ACCEL_COUNTS_PER_G / STANDARD_GRAVITY;
++        // Stationary captures give no lever arm on the gyro ratio, so pass the
++        // raw count through until a moving capture pins it down.
++        let gyro_factor = |_scale: f64| 1.0;
++        Ok(Self {
++            accel: Channel::open("usf_accel", "accel", hz, accel_factor)?,
++            gyro: Channel::open("usf_gyro", "anglvel", hz, gyro_factor)?,
++            accel_q: Vec::new(),
++            gyro_q: Vec::new(),
++            seq: 0,
++            epoch_ns,
++        })
++    }
++
++    /// Collect pending samples and return a record once both sensors have a
++    /// full batch. Short batches are not sent: stock always pairs the blocks.
++    pub fn poll(&mut self) -> Option<Vec<u8>> {
++        self.accel.drain(&mut self.accel_q, self.epoch_ns);
++        self.gyro.drain(&mut self.gyro_q, self.epoch_ns);
++        if self.accel_q.len() < BATCH || self.gyro_q.len() < BATCH {
++            return None;
++        }
++        let accel: Vec<Sample> = self.accel_q.drain(..BATCH).collect();
++        let gyro: Vec<Sample> = self.gyro_q.drain(..BATCH).collect();
++        self.seq = self.seq.wrapping_add(1);
++        Some(encode(&accel, &gyro, self.seq))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// The dominant captured shape is 242 bytes: 5 + 5x20 + 10 + 5x20 + 27.
++    #[test]
++    fn record_matches_the_captured_shape() {
++        let s = [Sample::default(); BATCH];
++        let r = encode(&s, &s, 1);
++        assert_eq!(r.len(), 242);
++        assert_eq!(&r[..5], &[0x00, 0x02, 0x00, 0x00, 0x05]);
++        assert_eq!(
++            &r[105..115],
++            &[0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x05]
++        );
++        assert_eq!(u32::from_le_bytes(r[238..242].try_into().unwrap()), 1);
++    }
++
++    /// A sample carries the triple twice and the timestamp at +16.
++    #[test]
++    fn sample_layout() {
++        let mut v = Vec::new();
++        put_sample(
++            &mut v,
++            Sample {
++                x: -24,
++                y: 85,
++                z: 5124,
++                ms: 20952,
++            },
++            ACCEL_BIAS,
++        );
++        // Matches the first accelerometer sample decoded out of the capture:
++        // [-24, 85, 5124, 7, -21, 11, 0, 0] @ 20952 ms.
++        assert_eq!(v.len(), 20);
++        let f: Vec<i16> = (0..8)
++            .map(|i| i16::from_le_bytes(v[i * 2..i * 2 + 2].try_into().unwrap()))
++            .collect();
++        assert_eq!(f, vec![-24, 85, 5124, 7, -21, 11, 0, 0]);
++        assert_eq!(u32::from_le_bytes(v[16..20].try_into().unwrap()), 20952);
++    }
++}
+diff --git a/crates/kepler-gnssd/src/protocol.rs b/crates/kepler-gnssd/src/protocol.rs
+index f64664a..39203ec 100644
+--- a/crates/kepler-gnssd/src/protocol.rs
++++ b/crates/kepler-gnssd/src/protocol.rs
+@@ -154,7 +154,8 @@ impl Protocol {
+         self.setup_generation
+     }
+ 
+-    #[cfg(test)]
++    /// Whether navigation is running, which is when the receiver has any use
++    /// for sensor samples.
+     pub fn is_streaming(&self) -> bool {
+         self.streaming
+     }
+@@ -284,6 +285,22 @@ impl Protocol {
+         self.setup_generation = self.setup_generation.wrapping_add(1);
+     }
+ 
++    /// Send one application record on the open BETP service.
++    ///
++    /// Used for the sensor feed, which is not part of the session handshake:
++    /// it only makes sense once navigation is running, and it must share the
++    /// link's sequence numbering rather than write to the device behind it.
++    pub fn send_record(&mut self, midsid: u16, proto: u16, data: &[u8]) -> Output {
++        let mut out = Output::default();
++        if !self.streaming {
++            return out;
++        }
++        if let Some(bytes) = self.send_app(betp_encode_tx(&[(midsid, proto, data)])) {
++            out.writes.push(bytes);
++        }
++        out
++    }
++
+     fn send_app(&mut self, datagram: Vec<u8>) -> Option<Vec<u8>> {
+         match self.link.send(&datagram)? {
+             Action::Send(bytes) => Some(bytes),

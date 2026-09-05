@@ -1,0 +1,126 @@
+--- a/crates/samsung-sit/src/builders.rs
++++ b/crates/samsung-sit/src/builders.rs
+@@ -681,10 +681,14 @@
+ 
+ /// `SET_DEVICE_INFO` (0x0922): what the *AP* is, told to the CP.
+ ///
+-/// Three 32-byte NUL-padded fields, confirmed against the corpus: the model at
+-/// body+4, the OS build at body+36 and the board codename at body+68 (e.g.
+-/// `Pixel 9a` / `BP4A.251205.006` / `tegu`). The build varies between captures,
+-/// so the CP takes it as free text.
++/// **Four** 32-byte NUL-padded fields: the model at body+4, the OS build at
++/// body+36, the board codename at body+68 and a vendor software-version string
++/// at body+100. The body was always 132 bytes, so the fourth field was already
++/// allocated and simply left zero.
++///
++/// Measured against Android on baseband g5400c-260604-260807-B-16035863, both
++/// stacks: `Pixel 9 Pro XL` / `CP2A.260605.016` / `komodo` / `17`. The build
++/// varies between captures, so the CP takes it as free text.
+ ///
+ /// Each is capped at 31 characters plus a NUL. An earlier version allowed 95
+ /// for the build, which would have written straight through the codename field.
+@@ -693,12 +697,14 @@
+     model: &str,
+     build: &str,
+     codename: &str,
++    sw_version: &str,
+ ) -> Result<Vec<u8>, SitError> {
+     let mut body = vec![0u8; 132];
+     for (off, value, what) in [
+         (4usize, model, "device model"),
+         (36, build, "device build"),
+         (68, codename, "device codename"),
++        (100, sw_version, "device sw version"),
+     ] {
+         if value.len() > DEVICE_INFO_FIELD - 1 {
+             return Err(SitError::ArgTooLong(what));
+@@ -813,14 +819,17 @@
+ 
+     #[test]
+     fn config_requests() {
+-        let info = build_device_info(2, "Pixel 9a", "TEST.BUILD", "tegu").unwrap();
++        let info = build_device_info(2, "Pixel 9a", "TEST.BUILD", "tegu", "17").unwrap();
+         assert_eq!(info.len(), 140);
+         assert_eq!(&info[12..20], b"Pixel 9a");
+         assert_eq!(&info[44..54], b"TEST.BUILD");
+         assert_eq!(&info[76..80], b"tegu");
++        // Field 4 (body+100 == frame+108): the vendor software version. The
++        // body was always 132 bytes, so this field existed and was left zero.
++        assert_eq!(&info[108..110], b"17");
+         // Each field is 31 characters plus a NUL; a longer one used to run
+         // straight through the field after it.
+-        assert!(build_device_info(2, "m", &"x".repeat(32), "c").is_err());
++        assert!(build_device_info(2, "m", &"x".repeat(32), "c", "").is_err());
+ 
+         let sha1: [u8; 20] = std::array::from_fn(|i| i as u8);
+         let manifest = build_carrier_manifest(3, "/vendor/firmware/carrierconfig", &sha1).unwrap();
+--- a/crates/samsung-sit-ffi/src/builders.rs
++++ b/crates/samsung-sit-ffi/src/builders.rs
+@@ -421,7 +421,45 @@
+         Err(s) => return s,
+     };
+     emit_result(
+-        sit::build_device_info(token, model, build, codename),
++        sit::build_device_info(token, model, build, codename, ""),
++        out,
++        out_len,
++    )
++}
++
++/// As `samsung_sit_build_device_info`, plus the fourth 32-byte field of 0x0922
++/// (a vendor software-version string; stock komodo sends `17`).
++///
++/// A separate entry point rather than a signature change, so that an older
++/// ModemManager keeps linking against the same library.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_build_device_info_sw(
++    token: u16,
++    model: *const c_char,
++    build: *const c_char,
++    codename: *const c_char,
++    sw_version: *const c_char,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let model = match cstr(model) {
++        Ok(a) => a,
++        Err(s) => return s,
++    };
++    let build = match cstr(build) {
++        Ok(a) => a,
++        Err(s) => return s,
++    };
++    let codename = match cstr(codename) {
++        Ok(a) => a,
++        Err(s) => return s,
++    };
++    let sw_version = match cstr(sw_version) {
++        Ok(a) => a,
++        Err(s) => return s,
++    };
++    emit_result(
++        sit::build_device_info(token, model, build, codename, sw_version),
+         out,
+         out_len,
+     )
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+@@ -1067,6 +1067,18 @@
+                                                size_t *out_len);
+ 
+ /*
++ As `samsung_sit_build_device_info`, plus the fourth 32-byte field of 0x0922
++ (a vendor software-version string; stock komodo sends `17`).
++ */
++SamsungSitStatus samsung_sit_build_device_info_sw(uint16_t token,
++                                                  const char *model,
++                                                  const char *build,
++                                                  const char *codename,
++                                                  const char *sw_version,
++                                                  uint8_t **out,
++                                                  size_t *out_len);
++
++/*
+  `sha1` must point to [`sit::SHA1_LEN`] (20) bytes.
+  */
+ SamsungSitStatus samsung_sit_build_carrier_manifest(uint16_t token,

@@ -1,0 +1,134 @@
+diff --git a/crates/kepler-gnssd/src/main.rs b/crates/kepler-gnssd/src/main.rs
+index 88bb087..bfc607f 100644
+--- a/crates/kepler-gnssd/src/main.rs
++++ b/crates/kepler-gnssd/src/main.rs
+@@ -73,6 +73,10 @@ Options:
+       --mems-hz HZ           Sensor rate when --mems is given (default: 100)
+       --dump-capture PATH    Save raw dump-channel bytes for diagnosis
+       --dump-log             Print decoded KEPLER LOG_TEXT records
++      --log-records          Report every record id the receiver sends, as it
++                             first appears, and a census every 60s. The daemon
++                             acts only on the position record, so this is the
++                             only way to see what else is on offer
+       --pty PATH             Also serve NMEA on a pseudo-terminal linked at
+                              PATH, for consumers that need a device rather
+                              than a socket (gpsd takes a serial device or a
+@@ -101,6 +105,7 @@ struct Args {
+     mems_hz: u32,
+     dump_capture: Option<PathBuf>,
+     dump_log: bool,
++    log_records: bool,
+     always_on: bool,
+     pty: Option<PathBuf>,
+     pty_group: Option<String>,
+@@ -123,6 +128,7 @@ fn parse_args() -> Result<Args, String> {
+         mems_hz: 100,
+         dump_capture: None,
+         dump_log: false,
++        log_records: false,
+         always_on: false,
+         pty: None,
+         pty_group: Some(DEFAULT_PTY_GROUP.into()),
+@@ -189,6 +195,7 @@ fn parse_args() -> Result<Args, String> {
+                 args.dump_capture = Some(parser.value().map_err(|e| e.to_string())?.into())
+             }
+             Long("dump-log") => args.dump_log = true,
++            Long("log-records") => args.log_records = true,
+             Long("always-on") => args.always_on = true,
+             Long("pty") => args.pty = Some(parser.value().map_err(|e| e.to_string())?.into()),
+             Long("pty-group") => {
+@@ -820,10 +827,28 @@ fn run_loop(
+     let mut mems_failed = false;
+     let mut mems_sent: u64 = 0;
+     let mut cache_saved = false;
++    let mut last_census = Instant::now();
+     while !STOP.load(Ordering::Acquire) {
+         dump_drain.check()?;
+         let now = Instant::now();
+         handle_output(protocol.tick(now), chpp, peers, args.verbose)?;
++        if args.log_records {
++            for (midsid, proto, len) in protocol.take_new_records() {
++                eprintln!(
++                    "kepler-gnssd: receiver sends {midsid:#06x} (proto {proto}, {len} bytes)"
++                );
++            }
++            if now.duration_since(last_census) >= Duration::from_secs(60) {
++                last_census = now;
++                let census = protocol.record_census();
++                let line = census
++                    .iter()
++                    .map(|(m, (n, l))| format!("{m:#06x}x{n}/{l}B"))
++                    .collect::<Vec<_>>()
++                    .join(" ");
++                eprintln!("kepler-gnssd: records so far: {line}");
++            }
++        }
+         // A fix proves the batch this session opened with. Keep it once.
+         if !cache_saved && protocol.has_fixed() {
+             if let Some(path) = args.session_cache.as_deref() {
+diff --git a/crates/kepler-gnssd/src/protocol.rs b/crates/kepler-gnssd/src/protocol.rs
+index 813b424..71c44f8 100644
+--- a/crates/kepler-gnssd/src/protocol.rs
++++ b/crates/kepler-gnssd/src/protocol.rs
+@@ -14,6 +14,7 @@ use gnss_betp::{
+     CHPP_DISCOVERY_DISCOVER_ALL, CHPP_HANDLE_DISCOVERY, CHPP_HANDLE_TIMESYNC, CHPP_SERVICE_OPEN,
+     CHPP_TIMESYNC_GET_TIME, MIDSID_GEODETIC, MIDSID_POS_REQ,
+ };
++use std::collections::BTreeMap;
+ use std::time::{Duration, Instant};
+ 
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -134,6 +135,8 @@ pub struct Protocol {
+     /// Whether this session has produced a position. Only then is the batch
+     /// above worth keeping.
+     fixed_once: bool,
++    seen_records: BTreeMap<u16, (u32, usize)>,
++    new_records: Vec<(u16, u16, usize)>,
+     due: Option<Instant>,
+     wanted: bool,
+     streaming: bool,
+@@ -155,6 +158,8 @@ impl Protocol {
+             session_open,
+             session_open_used: Vec::new(),
+             fixed_once: false,
++            seen_records: BTreeMap::new(),
++            new_records: Vec::new(),
+             due: None,
+             wanted: false,
+             streaming: false,
+@@ -302,6 +307,18 @@ impl Protocol {
+         out
+     }
+ 
++    /// Every record id the receiver has sent, with its count and last size.
++    /// The daemon only acts on the geodetic record, so without this there is
++    /// no way to know what else is on offer.
++    pub fn record_census(&self) -> &BTreeMap<u16, (u32, usize)> {
++        &self.seen_records
++    }
++
++    /// Record ids seen for the first time since the last call.
++    pub fn take_new_records(&mut self) -> Vec<(u16, u16, usize)> {
++        std::mem::take(&mut self.new_records)
++    }
++
+     /// Whether a position has been decoded in this session.
+     pub fn has_fixed(&self) -> bool {
+         self.fixed_once
+@@ -462,6 +479,16 @@ impl Protocol {
+ 
+         if app.handle == BETP_HANDLE && app.command == BETP_CMD_RX {
+             for record in betp_records(inner) {
++                let entry = self
++                    .seen_records
++                    .entry(record.midsid)
++                    .or_insert((0, record.data.len()));
++                entry.0 += 1;
++                entry.1 = record.data.len();
++                if entry.0 == 1 {
++                    self.new_records
++                        .push((record.midsid, record.proto, record.data.len()));
++                }
+                 if record.midsid == MIDSID_GEODETIC {
+                     if let Some(position) = Geodetic::parse(record.data) {
+                         self.fixed_once = true;

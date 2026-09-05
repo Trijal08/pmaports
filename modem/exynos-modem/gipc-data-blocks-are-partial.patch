@@ -1,0 +1,101 @@
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -65,6 +65,15 @@
+ const TYPE_REQUEST: u32 = 0;
+ const TYPE_RESPONSE: u32 = 1;
+ 
++/// A response block that is **not** the whole response: more follows, and the
++/// request stays open until a `TYPE_RESPONSE` envelope closes it.
++///
++/// Captured from stock: all 39 payload-carrying frames of its boot are type 7,
++/// and every one of the envelopes that closes a read is type 1. Both numbers
++/// are exact -- there is not one type-1 data block or one type-7 close in the
++/// whole capture.
++const TYPE_RESPONSE_PARTIAL: u32 = 7;
++
+ /// The payload of a uecap file-read response: the block's bytes in field 1,
+ /// and nothing else.
+ ///
+@@ -151,7 +160,16 @@
+     /// arrives as 1, not UECAP_PATH=3, over this channel); the filename is
+     /// whitelisted to uecap `.binarypb` regardless.
+     ///
+-    /// Every block of one reply carries the **request's** sequence, unchanged.
++    /// Every block of one reply carries the **request's** sequence, unchanged,
++    /// and is tagged `TYPE_RESPONSE_PARTIAL`; only the closing envelope is a
++    /// `TYPE_RESPONSE`.
++    ///
++    /// The type is what ended the re-read storm. Tagging every block type 1
++    /// told the CP each 4000-byte block was the complete answer to its read,
++    /// so it took the block, still had the rest of the file to fetch, and
++    /// issued a fresh read -- 84 reads across 5 triggers (16.8 per trigger)
++    /// against stock's 4 across 3 (1.3). Stock's blocks say "more follows" and
++    /// its close says "that was all": 39 type-7 data frames and 0 type-1 ones.
+     ///
+     /// Captured from stock answering a multi-block read: all 31 blocks of
+     /// lte_2160127815.binarypb go out with sequence 6, the sequence of the
+@@ -197,7 +215,7 @@
+             let last = len == remaining;
+             frames.push(
+                 GipcMessage {
+-                    r#type: Some(TYPE_RESPONSE),
++                    r#type: Some(TYPE_RESPONSE_PARTIAL),
+                     endpoint: req.endpoint,
+                     service: req.service,
+                     method: req.method,
+@@ -490,6 +508,55 @@
+         assert!(GipcMessage::decode(out[3].as_slice()).unwrap().payload.is_none());
+     }
+ 
++    /// Data blocks say "more follows"; only the close says "that was all".
++    ///
++    /// Stock's boot capture has 39 payload-carrying frames, every one type 7,
++    /// and every read-closing envelope type 1. Tagging the blocks type 1 makes
++    /// the CP read block one as the whole answer and re-issue the read, which
++    /// is the entire boot-time re-read storm.
++    #[test]
++    fn data_blocks_are_partial_and_only_the_close_is_the_response() {
++        let dir = std::env::temp_dir().join(format!("gipc-type-{}", std::process::id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        let name = "typetest.binarypb";
++        std::fs::write(dir.join(name), vec![3u8; 9000]).unwrap();
++
++        let req = GipcMessage {
++            r#type: Some(TYPE_REQUEST),
++            endpoint: Some(132),
++            service: Some(SVC_UECAP_FILE),
++            method: Some(0x5b78_66da),
++            payload: Some(
++                UecapFileReadRequest {
++                    size: 20000,
++                    block_size: 4000,
++                    file_dir: 1,
++                    file_name: name.to_string(),
++                }
++                .encode_to_vec(),
++            ),
++            sequence: Some(6),
++        };
++        let out = Gipc::new(dir.clone(), false).serve_uecap_file(&req);
++        std::fs::remove_dir_all(&dir).ok();
++
++        /* 9000 bytes at 4000 per block is 3 blocks, plus the closing envelope. */
++        assert_eq!(out.len(), 4);
++        for (n, frame) in out[..3].iter().enumerate() {
++            let m = GipcMessage::decode(frame.as_slice()).unwrap();
++            assert_eq!(
++                m.r#type,
++                Some(TYPE_RESPONSE_PARTIAL),
++                "data block {} is not marked partial",
++                n
++            );
++            assert!(m.payload.is_some(), "data block {} lost its payload", n);
++        }
++        let close = GipcMessage::decode(out[3].as_slice()).unwrap();
++        assert_eq!(close.r#type, Some(TYPE_RESPONSE));
++        assert!(close.payload.is_none());
++    }
++
+     #[test]
+     fn garbage_is_dropped_not_answered() {
+         assert!(Gipc::new(PathBuf::from("/nonexistent"), false)
