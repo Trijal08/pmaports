@@ -1,0 +1,93 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Fri, 7 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: send the emergency location at registration
+
+Stock sends SET_GEO_LOCATION_INFO once per stack in the window between the
+IMS grant and registration; we sent none. The library builds the document
+and derives its two variable fields, so this adds the step that sends it.
+
+A SIM that gave no IMSI, or an MCC with no country in the table, yields
+nothing to publish and the step is skipped rather than sending a document
+with a wrong or empty subject.
+diff -ruN mm70/src/plugins/samsung-sit/mm-sit-ims.c f72/src/plugins/samsung-sit/mm-sit-ims.c
+--- a/src/plugins/samsung-sit/mm-sit-ims.c	2026-11-06 23:58:10.369353073 -0500
++++ b/src/plugins/samsung-sit/mm-sit-ims.c	2026-11-06 23:55:48.268109410 -0500
+@@ -474,6 +474,7 @@
+     STEP_PDN,
+     STEP_REASSERT_FILTER,
+     STEP_HIDDEN_MENU,
++    STEP_GEO_LOCATION,
+     STEP_ADD_PDN_INFO,
+     STEP_DONE,
+ } Step;
+@@ -867,6 +868,31 @@
+         return;
+     }
+ 
++    case STEP_GEO_LOCATION: {
++        /*
++         * The emergency location, which stock sends once per stack in this
++         * same window. It is a country and a device UUID, no position: it is
++         * what lets the network route an emergency call before any fix
++         * exists, which is why it goes out at registration rather than when
++         * a call is placed.
++         *
++         * A SIM that gave no IMSI, or an MCC with no country in the table,
++         * yields nothing to publish and the step is skipped rather than
++         * sending a document with a wrong or empty subject.
++         */
++        const gchar *entity = mm_sit_ims_config_get_geo_entity (ctx->config);
++        const gchar *country = mm_sit_ims_config_get_geo_country (ctx->config);
++
++        if (!entity || !entity[0]) {
++            ctx->step++;
++            sequence_step (task);
++            return;
++        }
++        status = samsung_aims_build_geo_location_info (mm_sit_client_next_token (self->priv->client),
++                                                       entity, country ?: "", &frame, &len);
++        break;
++    }
++
+     case STEP_ADD_PDN_INFO: {
+         SamsungAimsPdnInfo info;
+ 
+diff -ruN mm70/src/plugins/samsung-sit/mm-sit-ims-config.c f72/src/plugins/samsung-sit/mm-sit-ims-config.c
+--- a/src/plugins/samsung-sit/mm-sit-ims-config.c	2026-11-06 23:58:10.369425354 -0500
++++ b/src/plugins/samsung-sit/mm-sit-ims-config.c	2026-11-06 23:55:48.268004789 -0500
+@@ -129,6 +129,20 @@
+     return samsung_ims_config_user_agent (self->handle);
+ }
+ 
++const gchar *
++mm_sit_ims_config_get_geo_entity (const MMSitImsConfig *self)
++{
++    g_return_val_if_fail (self != NULL, NULL);
++    return samsung_ims_config_geo_entity (self->handle);
++}
++
++const gchar *
++mm_sit_ims_config_get_geo_country (const MMSitImsConfig *self)
++{
++    g_return_val_if_fail (self != NULL, NULL);
++    return samsung_ims_config_geo_country (self->handle);
++}
++
+ static void
+ apn_free (MMSitApn *apn)
+ {
+diff -ruN mm70/src/plugins/samsung-sit/mm-sit-ims-config.h f72/src/plugins/samsung-sit/mm-sit-ims-config.h
+--- a/src/plugins/samsung-sit/mm-sit-ims-config.h	2026-11-06 23:58:10.369444954 -0500
++++ b/src/plugins/samsung-sit/mm-sit-ims-config.h	2026-11-06 23:55:48.267983239 -0500
+@@ -92,6 +92,11 @@
+  * most likely to reject us over, so it belongs in the log. */
+ const gchar *mm_sit_ims_config_get_user_agent (const MMSitImsConfig *self);
+ 
++/* The emergency location's presence URI and ISO country, for
++ * SET_GEO_LOCATION_INFO. Either may be empty. Owned by `self`. */
++const gchar *mm_sit_ims_config_get_geo_entity  (const MMSitImsConfig *self);
++const gchar *mm_sit_ims_config_get_geo_country (const MMSitImsConfig *self);
++
+ /*
+  * The carrier's APN list, from the same database and resolved for the same SIM.
+  *

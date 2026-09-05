@@ -1,0 +1,45 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -2103,16 +2103,33 @@
+         mm_sit_client_get_carrier_sim_info (self->priv->client, &sit_info))
+         imsi = sit_info.imsi;
+ 
+-    if (self->priv->carrier_config_ready && imsi &&
+-        self->priv->carrier_config_imsi &&
+-        g_str_equal (self->priv->carrier_config_imsi, imsi)) {
+-        task = g_task_new (self, NULL, callback, user_data);
+-        g_task_return_boolean (task, TRUE);
+-        g_object_unref (task);
+-        return;
+-    }
+-    if (self->priv->carrier_config_ready)
++    /*
++     * Re-push only for a subscription we can see has changed.
++     *
++     * An IMSI we cannot read right now is not evidence that it changed -- the
++     * SIM object's load loses the CP's park/wake race often enough that the
++     * comment below exists for it -- and the old test fell through to
++     * invalidate on exactly that, throwing away a configuration the CP had
++     * already accepted.
++     *
++     * The cost is not one wasted frame. Re-pushing the manifest makes the CP
++     * reload its carrier policy, which means re-reading every carrier-config
++     * file over the oem channel: measured on hardware, one redundant push on
++     * stack 1 at t=26.3s drew 47 of the boot's 89 file reads, and the CP
++     * answered "already had the carrier configuration" both times. Stock
++     * pushes once per stack and never again.
++     */
++    if (self->priv->carrier_config_ready) {
++        if (!imsi || !imsi[0] ||
++            !self->priv->carrier_config_imsi ||
++            g_str_equal (self->priv->carrier_config_imsi, imsi)) {
++            task = g_task_new (self, NULL, callback, user_data);
++            g_task_return_boolean (task, TRUE);
++            g_object_unref (task);
++            return;
++        }
+         invalidate_carrier_config (self);
++    }
+ 
+     if (!database || !database[0]) {
+         task = g_task_new (self, NULL, callback, user_data);

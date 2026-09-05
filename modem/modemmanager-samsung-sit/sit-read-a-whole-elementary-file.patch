@@ -1,0 +1,80 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Thu, 6 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: read a whole elementary file, and EF_PLMNwAcT
+
+Diffing SIM_IO per file id against stock, both sides read the same 37 files
+and the gap was records per file -- 46 exchanges on the secondary stack,
+almost all of it two operator-name tables:
+
+               stock   ours
+    0x6fc6 OPL    51     32
+    0x6fc5 PNN    50     32
+    0x6f61        2       0
+
+SIM_IO_MAX_PASSES was 32, which is fewer records than real files carry. The
+read loop already stops when the SIM says there are no records left, so that
+constant is a safety bound, not a count -- and at 32 this loop reports an
+error rather than a short read, so a 51-record file could not be read at all.
+It goes to 128.
+
+The counts above are identical in all three boot captures because they are
+that SIM's record counts, which is also why they are not written down
+anywhere here: counting records off the SIM is the only form that is right on
+somebody else's card.
+
+EF_PLMNwAcT (0x6f61) is added to the boot pass; stock reads it twice on both
+stacks in all three captures and we never read it. The boot-config test
+pinned the file count and now expects thirty.
+
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -1165,7 +1165,18 @@
+ #define SIM_IO_MAX_READ 255
+ /* Backstop on a file that claims an implausible number of records; a truncated
+  * read is reported rather than passed off as the whole file. */
+-#define SIM_IO_MAX_PASSES 32
++/*
++ * Safety bound on record reads of one file, not a record count: the loop stops
++ * when the SIM says there are no records left.
++ *
++ * It was 32, which is fewer records than real files carry. Stock reads 51
++ * records of EF_OPL (0x6fc6) and 50 of EF_PNN (0x6fc5) on the secondary SIM
++ * here -- identical in all three captures, because it is that SIM's record
++ * count -- and we stopped at 32, which this loop treats as an error rather
++ * than a short read. Counting records off the SIM instead of a constant is
++ * also the only form that is right on somebody else's SIM.
++ */
++#define SIM_IO_MAX_PASSES 128
+ /* Absolute record addressing, the mode rild uses. */
+ #define SIM_IO_RECORD_MODE_ABSOLUTE 4
+ 
+@@ -4495,6 +4506,8 @@
+     { 0x6fd9, FALSE }, { 0x6f7b, FALSE }, { 0x6f05, FALSE }, { 0x2f05, FALSE },
+     { 0x6f3c, FALSE }, { 0x6fe5, FALSE }, { 0x6f43, FALSE }, { 0x6fe7, FALSE },
+     { 0x6fc7, FALSE }, { 0x6f14, FALSE }, { 0x6f18, FALSE }, { 0x6f3b, FALSE },
++    /* Stock reads this twice on both stacks in all three captures. */
++    { 0x6f61, FALSE },
+     { 0x6f02, FALSE }, { 0x6f04, FALSE }, { 0x6f03, FALSE }, { 0x6f09, FALSE },
+ };
+ 
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -2461,7 +2461,7 @@
+          * after one data pass -- reading all records of all of them overshot
+          * stock by 85 exchanges.
+          */
+-#define BOOT_EF_FILES 29
++#define BOOT_EF_FILES 30
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+@@ -2471,7 +2471,8 @@
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+-        MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
++        /* 0x6f61 EF_PLMNwAcT, which stock reads and we did not. */
++        MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         /*
+          * The UICC access-control probe that closes the boot batch: three
+          * opens by AID that the card refuses, one with no AID that yields a

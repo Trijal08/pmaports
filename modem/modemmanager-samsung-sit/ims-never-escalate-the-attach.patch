@@ -1,0 +1,66 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -1071,6 +1071,19 @@
+  * CP or firmware that accepts the DNN never reaches this path. The IMS sequence
+  * retries on its own timer, so the next attempt uses the new attach APN.
+  */
++/*
++ * Whether a 2253 on the IMS PDN moves the modem-wide attach APN to the IMS
++ * entry. FALSE matches the stock stack; see ims_pdn_refused().
++ *
++ * TRUE for now, deliberately. Stock does not need this and neither should we,
++ * but until 2253 is understood, FALSE means no VoLTE at all on a SIM whose IMS
++ * PDN is refused -- which is every SIM, every boot. The escalation is a poor
++ * workaround: it costs that SIM its data, and the P-CSCF pool it yields
++ * registers only about one boot in five. A poor workaround still beats no
++ * telephony. Flip to FALSE to see the refusal unmasked.
++ */
++static const gboolean escalate_attach_to_ims = TRUE;
++
+ static void
+ ims_pdn_refused (MMSitIms                   *ims,
+                  guint                       cause,
+@@ -1084,6 +1097,43 @@
+ 
+     if (cause != MM_SIT_REJECT_CAUSE_MATCH_ALL_RULE_NOT_ALLOWED)
+         return;
++
++    /*
++     * Never escalate. The stock stack does not, and the escalation is actively
++     * harmful.
++     *
++     * Captured from komodo's own Android, 2026-11-03, both stacks: the attach
++     * APN stays on the carrier's data entry ('sp.telus.com' / 'mobile.bm') for
++     * the whole boot and the CP still grants the IMS PDN -- on stack 1 it holds
++     * the data PDN on cid 17 and the IMS PDN on cid 18 *at the same time*, both
++     * cause 0. So "the CP grants only one PDN per stack" is false, VoLTE-xor-
++     * data is false, and 2253 is not inherent to this CP.
++     *
++     * What the escalation bought was not a PDN at all. With the attach moved to
++     * 'ims' the CP answers a later IMS request in 3-4 ms -- "Matched with exist
++     * PDU session", i.e. it just echoes the attach context -- where stock takes
++     * 295-710 ms doing a real over-the-air establishment. The P-CSCF addresses
++     * then come from whatever the *attach* happened to be given, and that is a
++     * dice roll: 2001:568:fff2:300/fff3:300 registers (stock always gets this
++     * pool), 2001:568:ffff:3002/ffff:4002 never does. Measured 6 for 6. That is
++     * the whole reason VoLTE here was a one-in-five coin flip.
++     *
++     * And it costs the SIM its data, because with the attach on 'ims' the CP
++     * refuses 2253 for the carrier's data APN.
++     *
++     * So this is now a diagnostic no-op: it reports the refusal and leaves the
++     * attach alone. Until 2253 is fixed that means no VoLTE on a SIM whose IMS
++     * PDN is refused -- but it also means the refusal is visible instead of
++     * being papered over by a context that cannot register, and the SIM keeps
++     * its data. Re-enabling the old behaviour is flipping the gate below.
++     */
++    if (!escalate_attach_to_ims) {
++        mm_obj_info (self, "the CP refused the IMS PDN (cause %u); leaving the attach APN "
++                     "alone -- the stock stack never escalates and still gets the PDN",
++                     cause);
++        return;
++    }
++
+     if (self->priv->attach_ims_fallback)
+         return;
+     if (!mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IMS))

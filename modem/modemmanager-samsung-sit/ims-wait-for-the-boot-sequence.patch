@@ -1,0 +1,198 @@
+Do not ask for the IMS context before the stack's boot sequence has finished
+
+Stock's first IMS request is granted every time. Ours comes back 168 in 9-61 ms
+on essentially every boot, and the stack only gets a context on a later
+attempt -- which is why both SIMs register around T+68s at best where stock has
+them at T+13-14s.
+
+The difference is where the request sits in the boot, not when in wall-clock
+time. Measured on identical firmware, from the network becoming known to the
+first ims SETUP_DATA_CALL:
+
+    stock  ch 0xf5   6491ms -> 11238ms    4.7s
+    stock  ch 0xf6   5974ms -> 11332ms    5.4s
+    r52    ch 0xf5   8758ms ->  9429ms    0.7s
+    r52    ch 0xf6   8764ms ->  9227ms    0.5s
+
+Stock spends those five seconds finishing the per-stack boot work -- the config
+batch, the card reads, the profile pushes, the post-radio-on replay -- and asks
+after. We asked as soon as net_registered flipped, part-way through our own.
+
+So the gate is the work, not a delay: the modem reports when a stack's boot
+sequence has finished and provisioning waits for that. A faster or slower
+device asks whenever its own work is done, which is the portable form of what
+stock does rather than a number copied out of this capture.
+
+Because the gate only runs when the modem pushes an access-tech update, a
+condition that becomes true in between has to announce itself, so the modem
+re-runs it via mm_sit_ims_reevaluate() -- otherwise nothing would start until
+the next RAT indication happened to arrive.
+
+I previously reported timing as ruled out, on the grounds that our *retries* at
+25 s and 114 s were also refused 168. That was the wrong comparison: a retry
+happens after the CP has already refused once, which is not the same state as a
+clean first ask. The lead was live and I closed it on bad evidence.
+
+If the first request is granted after this, that was the cause and both SIMs
+should register together at around 15 s. If it still comes back 168, timing is
+genuinely dead.
+
+The retry-limit test drives the IMS object with no modem behind it, so the
+fixture now reports the precondition itself.
+
+--- a/src/plugins/samsung-sit/mm-sit-client.h
++++ b/src/plugins/samsung-sit/mm-sit-client.h
+@@ -65,6 +65,11 @@
+  * here rather than resolving them a second time. Any field may be NULL until
+  * the boot configuration has run. Owned by the client.
+  */
++/* Whether this stack's boot sequence has finished; IMS provisioning waits for
++ * it, the way stock does. */
++gboolean mm_sit_client_boot_sequence_done     (MMSitClient *self);
++void     mm_sit_client_set_boot_sequence_done (MMSitClient *self);
++
+ void     mm_sit_client_get_device_identity (MMSitClient  *self,
+                                             const gchar **out_manufacturer,
+                                             const gchar **out_model,
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -54,6 +54,12 @@
+     gboolean             has_carrier_sim_info;
+     MMSitCarrierSimInfo  carrier_sim_info;
+     gboolean             boot_config_done;
++    /*
++     * The whole per-stack boot sequence, not just the config batch: the modem
++     * sets this when its post-radio-on replay finishes. IMS provisioning waits
++     * for it; see mm_sit_client_boot_sequence_done().
++     */
++    gboolean             boot_sequence_done;
+     /* The struct versions the CP announced when answering 0x0922, and whether
+      * it has answered yet. Every field reads "supported" until it has, so a CP
+      * that never got the question is never blocked on its answer. */
+@@ -384,6 +390,7 @@
+     mm_sit_client_invalidate_sim (self);
+     memset (&self->priv->carrier_sim_info, 0, sizeof (self->priv->carrier_sim_info));
+     self->priv->boot_config_done = FALSE;
++    self->priv->boot_sequence_done = FALSE;
+     self->priv->struct_versions_known = FALSE;
+     if (!mm_port_serial_is_open (MM_PORT_SERIAL (self->priv->port)))
+         return;
+@@ -402,6 +409,35 @@
+     return mm_port_serial_is_open (MM_PORT_SERIAL (self->priv->port));
+ }
+ 
++/*
++ * Whether this stack's boot sequence has finished -- the config batch, the
++ * card reads, and the post-radio-on replay.
++ *
++ * Stock lets about five seconds pass between the network becoming known and
++ * asking for its IMS context, and it spends them finishing exactly this work:
++ * measured on identical firmware, ch 0xf5 learns the network at 6491ms and
++ * asks at 11238ms, ch 0xf6 at 5974ms and 11332ms. We asked 0.5-0.7s after the
++ * network was known and the first request was refused 168 on essentially every
++ * boot, where stock's first request is granted every time.
++ *
++ * So the condition is the work, not a delay: a faster or slower device asks
++ * whenever its own boot sequence has finished, which is the portable form of
++ * what stock does.
++ */
++gboolean
++mm_sit_client_boot_sequence_done (MMSitClient *self)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), FALSE);
++    return self->priv->boot_sequence_done;
++}
++
++void
++mm_sit_client_set_boot_sequence_done (MMSitClient *self)
++{
++    g_return_if_fail (MM_IS_SIT_CLIENT (self));
++    self->priv->boot_sequence_done = TRUE;
++}
++
+ void
+ mm_sit_client_get_device_identity (MMSitClient  *self,
+                                    const gchar **out_manufacturer,
+--- a/src/plugins/samsung-sit/mm-sit-ims.h
++++ b/src/plugins/samsung-sit/mm-sit-ims.h
+@@ -54,6 +54,10 @@
+  * placed is [`mm_sit_ims_is_registered`], never this, because the network can
+  * refuse IMS on a perfectly good LTE cell.
+  */
++/* Re-run the start gate with what is already known, for a condition that
++ * became true between access-tech updates. */
++void mm_sit_ims_reevaluate (MMSitIms *self);
++
+ void mm_sit_ims_update_access_tech (MMSitIms                   *self,
+                                     MMModemAccessTechnology     act);
+ 
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -1484,6 +1484,21 @@
+     return G_SOURCE_REMOVE;
+ }
+ 
++/*
++ * Re-run the start gate with whatever is already known.
++ *
++ * The gate only runs when the modem pushes an access-tech update, so a
++ * condition that becomes true in between -- the boot sequence finishing -- has
++ * to say so, or nothing would start until the next RAT indication happened to
++ * arrive.
++ */
++void
++mm_sit_ims_reevaluate (MMSitIms *self)
++{
++    g_return_if_fail (MM_IS_SIT_IMS (self));
++    mm_sit_ims_update_access_tech (self, self->priv->last_act);
++}
++
+ void
+ mm_sit_ims_update_access_tech (MMSitIms                *self,
+                                MMModemAccessTechnology  act)
+@@ -1533,6 +1548,18 @@
+             mm_obj_dbg (self, "not starting IMS yet: waiting for the radio to register");
+             return;
+         }
++        /*
++         * And wait for this stack's boot sequence to finish. Stock lets ~5s
++         * pass between the network becoming known and its IMS request, and
++         * spends them completing that work; we asked 0.5-0.7s in and the first
++         * request came back 168 on essentially every boot. See
++         * mm_sit_client_boot_sequence_done().
++         */
++        if (!mm_sit_client_boot_sequence_done (self->priv->client)) {
++            mm_obj_dbg (self, "not starting IMS yet: the stack's boot sequence "
++                        "has not finished");
++            return;
++        }
+         mm_obj_dbg (self, "packet-switched RAT available; starting IMS");
+         self->priv->state = IMS_STATE_STARTING;
+         g_clear_object (&self->priv->cancellable);
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -3888,6 +3888,12 @@
+         if (phase == MM_SIT_PARITY_PHASE_BOOT) {
+             apply_attach_apn (task);
+         } else {
++            /* The stack's boot sequence is done; IMS provisioning waits on
++             * this. See mm_sit_client_boot_sequence_done(). */
++            if (client)
++                mm_sit_client_set_boot_sequence_done (client);
++            if (self->priv->ims)
++                mm_sit_ims_reevaluate (self->priv->ims);
+             arm_search_watchdog (self);
+             g_task_return_boolean (task, TRUE);
+             g_object_unref (task);
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -3128,6 +3128,9 @@
+     peer_id = g_unix_fd_add (sockets[1], G_IO_IN | G_IO_HUP | G_IO_ERR,
+                              (GUnixFDSourceFunc) ims_retry_peer_ready, &peer);
+     ims = mm_sit_ims_new (client, 0, database);
++    /* Provisioning waits for the stack's boot sequence, which the modem
++     * normally reports; there is no modem here, so say so directly. */
++    mm_sit_client_set_boot_sequence_done (client);
+     mm_sit_ims_set_device_identity (ims, &test_device);
+     if (vops) {
+         ims_test_vops_updates (ims, &peer);

@@ -1,0 +1,44 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-ims.c b/src/plugins/samsung-sit/mm-sit-ims.c
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -1221,7 +1221,6 @@
+                                  const MMSitRegistration *registration)
+ {
+     MMSitVopsSupport support;
+-    guint8           rat;
+     gboolean         changed = FALSE;
+ 
+     g_return_if_fail (MM_IS_SIT_IMS (self));
+@@ -1232,9 +1231,29 @@
+      * while MM core still reports the previous registered state. */
+     if (!registration->registered)
+         mm_sit_ims_set_registered (self, FALSE);
+-    rat = registration->registered ? registration->radio_technology : 0;
+-    if (self->priv->reg_rat != rat) {
+-        self->priv->reg_rat = rat;
++    /*
++     * Remember the last RAT the CP reported *while registered*, instead of
++     * zeroing it whenever an indication says not-registered.
++     *
++     * reg_rat exists so a signal measurement can only add a RAT to the gate,
++     * never remove one: on DSDS the other stack's traffic leaves this one with
++     * no LTE measurement and the mask reads as UMTS. But DSDS produces
++     * packet-registration blips too, and each of those used to zero reg_rat --
++     * after which the CP, which only sends registration indications on change,
++     * never restores it. The phantom measurement then won the gate unopposed
++     * and RAT_GRACE_SECS later IMS was torn down for good.
++     *
++     * Observed exactly that: mmcli reporting lte/registered/attached the whole
++     * time while "SIT signal changed (RAT mask: 0x0002)" was followed sixty
++     * seconds later by "IMS still has no supporting RAT; stopping IMS", and
++     * nothing ever started it again.
++     *
++     * A real move off LTE still clears this, because it arrives as a
++     * registered indication naming the new RAT.
++     */
++    if (registration->registered &&
++        self->priv->reg_rat != registration->radio_technology) {
++        self->priv->reg_rat = registration->radio_technology;
+         changed = TRUE;
+     }
+     support = registration->registered ? registration->vops_support : MM_SIT_VOPS_SUPPORT_UNKNOWN;

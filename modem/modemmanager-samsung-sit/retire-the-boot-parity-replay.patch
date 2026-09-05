@@ -1,0 +1,1341 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Wed, 5 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: retire the boot-parity replay for boot config
+
+mm-sit-boot-parity.h was a generated transcript of one captured Android
+boot: 246 rows of opaque blobs, including the same request twenty-four
+times because the capture window caught a poll loop, and values that were
+true only for the two SIMs in the device it was taken from. It is replaced
+by 48 named requests, each justified.
+
+Every payload was checked against five Android captures spanning two
+baseband builds, two carriers, both stacks, warm and cold boots. 34 of the
+42 message ids are byte-identical in all of them, so they are constants
+here and are still right on another SIM in another country. The rest are
+derived:
+
+  SET_BROADCAST_SMS_CONFIG  built from the 3GPP TS 23.041 channel table
+  SET_OPEN_CARRIER_INFO     carries this SIM's MCCMNC
+  SET_MOBILE_DATA_STATE     carries the logical stack
+  AIMS_SET_CALL_WAITING     carries the current time
+
+Cell broadcast was the one row that would have been wrong elsewhere. It is
+not national policy, as it first looked: stock enables every identifier
+that carries a real alert and disables every test and exercise channel,
+which is the standard's own distinction and means the same thing in every
+country. Built from that table it reproduces stock's 57 bytes exactly, and
+a new test pins it. Erring towards enabling is deliberate -- a channel the
+local network never uses costs nothing, a disabled one is an alert the user
+does not get.
+
+Dropped, with reasons:
+
+  14 pure getters, whose responses were discarded. A getter cannot
+     configure anything.
+  22 AIMS rows in the RADIO phase. mm-sit-ims.c builds and sends that block
+     itself, per session and properly stack-indexed, within a second of the
+     context request; these were the same block sent 20-25s too early.
+
+Two rows were wrong and are fixed. SET_FAST_DORMANCY_INFO and
+SIT_SET_GPS_SUPL_NI_READY were marked stack-1-only, an artifact of the
+single boot the table was generated from; stock sends both on both stacks
+in all five captures. Conversely SEND_SGC_VALUE, SET_DEBUG_TRACE and 0x1307
+really are stack-0-only in all five, so that is now stated rather than
+implied.
+
+The PRE_PDN block stays a verbatim replay and says so. Its purpose is not
+its settings but that the CP's last impression before a context request
+matches stock's, so it cannot be half-converted. The comment records what
+would retire it: a boot without it that still gets both stacks granted on
+the first ask. Since r60 that is 6 for 6, so the experiment is now cheap.
+diff --git a/cli/meson.build b/cli/meson.build
+index 69e3eb38..fb1a013e 100644
+--- a/cli/meson.build
++++ b/cli/meson.build
+@@ -48,6 +48,7 @@ if plugins_options['samsung-sit']
+     sources: files(
+       'mm-sit-tool.c',
+       '../src/plugins/samsung-sit/mm-port-serial-sit.c',
++      '../src/plugins/samsung-sit/mm-sit-boot-config.c',
+       '../src/plugins/samsung-sit/mm-sit-client.c',
+       '../src/plugins/samsung-sit/mm-sit-cp.c',
+       '../src/plugins/samsung-sit/mm-sit-protocol.c',
+diff --git a/src/plugins/meson.build b/src/plugins/meson.build
+index 66180abb..dd5dc7d4 100644
+--- a/src/plugins/meson.build
++++ b/src/plugins/meson.build
+@@ -49,7 +49,8 @@ if enable_tests and plugins_options['samsung-sit']
+     'test-samsung-sit-protocol',
+     sources: files(
+       'samsung-sit/mm-sit-protocol.c',
+-      'samsung-sit/mm-sit-carrier-config.c',
++      'samsung-sit/mm-sit-boot-config.c',
++    'samsung-sit/mm-sit-carrier-config.c',
+       'samsung-sit/mm-port-serial-sit.c',
+       'samsung-sit/mm-sit-client.c',
+       'samsung-sit/mm-sit-cp.c',
+@@ -976,6 +977,7 @@ if plugins_options['samsung-sit']
+     'samsung-sit/mm-call-samsung-sit.c',
+     'samsung-sit/mm-port-serial-sit.c',
+     'samsung-sit/mm-plugin-samsung-sit.c',
++    'samsung-sit/mm-sit-boot-config.c',
+     'samsung-sit/mm-sit-carrier-config.c',
+     'samsung-sit/mm-sit-client.c',
+       'samsung-sit/mm-sit-cp.c',
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index da59c52a..3fa0dc33 100644
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -28,7 +28,7 @@
+ #include "mm-sit-ims-config.h"
+ #include "mm-sit-ims.h"
+ #include "mm-sit-cp.h"
+-#include "mm-sit-boot-parity.h"
++#include "mm-sit-boot-config.h"
+ #include "mm-utils.h"
+ 
+ static void iface_modem_init      (MMIfaceModemInterface     *iface);
+@@ -3809,24 +3809,24 @@ power_up_retry_chain (GTask *task)
+  * its own init, and none of them is worth failing a power-up over.
+  */
+ static void apply_attach_apn (GTask *task);
+-static void parity_step (GTask *task, MMSitParityPhase phase);
++static void parity_step (GTask *task, MMSitBootPhase phase);
+ 
+ static GByteArray *
+ parity_build (MMBroadbandModemSamsungSit *self,
+               MMSitClient                *client,
+-              const MMSitParityRequest   *req,
++              const MMSitBootRequest   *req,
+               GError                    **error)
+ {
+     g_autoptr(MMBaseSim)  sim = NULL;
+     const gchar          *mccmnc = NULL;
+ 
+     /* The client does every substitution but this one, which needs the SIM. */
+-    if (req->sub == MM_SIT_PARITY_SUB_MCCMNC) {
++    if (req->sub == MM_SIT_BOOT_SUB_MCCMNC) {
+         g_object_get (self, MM_IFACE_MODEM_SIM, &sim, NULL);
+         mccmnc = sim ? mm_gdbus_sim_get_operator_identifier (MM_GDBUS_SIM (sim)) : NULL;
+     }
+ 
+-    return mm_sit_client_build_parity_request (client, req, mccmnc, error);
++    return mm_sit_client_build_boot_request (client, req, mccmnc, error);
+ }
+ 
+ static void
+@@ -3837,16 +3837,16 @@ parity_ready (MMSitClient  *client,
+     MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
+     g_autoptr(MMSitMessage)     message = NULL;
+     g_autoptr(GError)           error = NULL;
+-    MMSitParityPhase            phase;
+-    const MMSitParityRequest   *table;
++    MMSitBootPhase            phase;
++    const MMSitBootRequest   *table;
+     gsize                       n_table = 0;
+ 
+-    table = mm_sit_parity_requests_for_stack (mm_sit_client_get_stack (client), &n_table);
++    table = mm_sit_boot_requests (&n_table);
+     g_assert (self->priv->parity_index < n_table);
+     phase = table[self->priv->parity_index].phase;
+     message = mm_sit_client_command_finish (client, res, &error);
+     if (!message)
+-        mm_obj_dbg (self, "boot parity: 0x%04x refused: %s",
++        mm_obj_dbg (self, "boot config: 0x%04x refused: %s",
+                     table[self->priv->parity_index].id, error->message);
+ 
+     self->priv->parity_index++;
+@@ -3854,22 +3854,23 @@ parity_ready (MMSitClient  *client,
+ }
+ 
+ static void
+-parity_step (GTask *task, MMSitParityPhase phase)
++parity_step (GTask *task, MMSitBootPhase phase)
+ {
+     MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
+     g_autoptr(GByteArray)       request = NULL;
+     g_autoptr(GError)           error = NULL;
+     MMSitClient                *client;
+-    const MMSitParityRequest   *table = NULL;
++    const MMSitBootRequest   *table = NULL;
+     gsize                       n_table = 0;
+ 
+     client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+     if (client)
+-        table = mm_sit_parity_requests_for_stack (mm_sit_client_get_stack (client), &n_table);
++        table = mm_sit_boot_requests (&n_table);
+     while (client && self->priv->parity_index < n_table) {
+-        const MMSitParityRequest *req = &table[self->priv->parity_index];
++        const MMSitBootRequest *req = &table[self->priv->parity_index];
+ 
+-        if (req->phase != phase) {
++        if (req->phase != phase ||
++            !mm_sit_boot_request_wanted (req, mm_sit_client_get_stack (client))) {
+             self->priv->parity_index++;
+             continue;
+         }
+@@ -3877,7 +3878,7 @@ parity_step (GTask *task, MMSitParityPhase phase)
+         if (request)
+             break;
+         if (error) {
+-            mm_obj_dbg (self, "boot parity: couldn't build 0x%04x: %s",
++            mm_obj_dbg (self, "boot config: couldn't build 0x%04x: %s",
+                         req->id, error->message);
+             g_clear_error (&error);
+         }
+@@ -3885,7 +3886,7 @@ parity_step (GTask *task, MMSitParityPhase phase)
+     }
+ 
+     if (!request) {
+-        if (phase == MM_SIT_PARITY_PHASE_BOOT) {
++        if (phase == MM_SIT_BOOT_PHASE_BOOT) {
+             apply_attach_apn (task);
+         } else {
+             /* The stack's boot sequence is done; IMS provisioning waits on
+@@ -3940,7 +3941,7 @@ modem_power_up_ready (MMSitClient  *client,
+      * anything asks for a second PDN. arm_search_watchdog() and the task's
+      * result move to the end of that walk. */
+     self->priv->parity_index = 0;
+-    parity_step (task, MM_SIT_PARITY_PHASE_RADIO);
++    parity_step (task, MM_SIT_BOOT_PHASE_RADIO);
+ }
+ 
+ static void
+@@ -4072,7 +4073,7 @@ register_next_apn_profile (GTask *task)
+ 
+     if (!self->priv->boot_apns || self->priv->boot_apn_index >= self->priv->boot_apns->len) {
+         self->priv->parity_index = 0;
+-        parity_step (task, MM_SIT_PARITY_PHASE_BOOT);
++        parity_step (task, MM_SIT_BOOT_PHASE_BOOT);
+         return;
+     }
+     client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+diff --git a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-sit/mm-sit-boot-config.c
+new file mode 100644
+index 00000000..487b5418
+--- /dev/null
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.c
+@@ -0,0 +1,350 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * The configuration the CP expects at boot.
++ *
++ * This replaces mm-sit-boot-parity.h, which was a generated replay of one
++ * captured Android boot: 246 rows of opaque blobs, including the same request
++ * repeated twenty-four times because the capture window happened to catch a
++ * poll loop. What is here instead is 41 requests, each named, each justified.
++ *
++ * Every payload was checked against five Android captures spanning two
++ * baseband builds, two carriers, both stacks, and warm and cold boots. 34 of
++ * the 42 message ids are byte-identical in all of them, which is why they can
++ * be constants here and still be right on somebody else's SIM in another
++ * country. The ones that are not constant are derived instead:
++ *
++ *   SET_BROADCAST_SMS_CONFIG  built from the 3GPP channel table below
++ *   SET_OPEN_CARRIER_INFO     carries this SIM's MCCMNC
++ *   SET_MOBILE_DATA_STATE     carries the logical stack
++ *   the AIMS block            mm-sit-ims.c owns it and sends it per session
++ *
++ * Copyright (C) 2026 Trijal Saha
++ */
++
++#include <string.h>
++#include "mm-sit-boot-config.h"
++
++/*
++ * Cell broadcast, 3GPP TS 23.041 message identifiers.
++ *
++ * Stock enables every channel that carries a real alert and disables every
++ * test and exercise channel, which is what `test` records here. That is the
++ * standard's own distinction, not a national policy: the identifiers mean the
++ * same thing in every country, so building the request from them is correct
++ * everywhere, where replaying one operator's bytes would not be.
++ *
++ * Erring towards enabling is deliberate. A channel the local network never
++ * uses costs nothing; a disabled channel is an emergency alert the user does
++ * not receive.
++ */
++static const struct {
++    guint16  from;
++    guint16  to;
++    gboolean test;
++    const gchar *what;
++} cbs_ranges[] = {
++    { 4352, 4354, FALSE, "ETWS earthquake, tsunami, and both"      },
++    { 4355, 4355, TRUE,  "ETWS test"                               },
++    { 4356, 4356, FALSE, "ETWS other emergency"                    },
++    { 4370, 4379, FALSE, "CMAS presidential through amber"         },
++    { 4380, 4382, TRUE,  "CMAS test, exercise, operator defined"   },
++    { 4383, 4392, FALSE, "CMAS, additional language"               },
++    { 4393, 4395, TRUE,  "CMAS test and exercise, additional language" },
++    { 4396, 4399, FALSE, "CMAS, further languages"                 },
++};
++
++/* One count byte, then seven bytes per range. */
++#define CBS_RECORD_SIZE 7
++
++static guint8 *
++build_broadcast_sms_config (gsize *len)
++{
++    guint8 *out;
++    gsize   i;
++
++    *len = 1 + (G_N_ELEMENTS (cbs_ranges) * CBS_RECORD_SIZE);
++    out = g_malloc0 (*len);
++    out[0] = (guint8) G_N_ELEMENTS (cbs_ranges);
++    for (i = 0; i < G_N_ELEMENTS (cbs_ranges); i++) {
++        guint8 *r = out + 1 + (i * CBS_RECORD_SIZE);
++
++        r[0] = (guint8) (cbs_ranges[i].from & 0xff);
++        r[1] = (guint8) (cbs_ranges[i].from >> 8);
++        r[2] = (guint8) (cbs_ranges[i].to & 0xff);
++        r[3] = (guint8) (cbs_ranges[i].to >> 8);
++        /* Every coding scheme: the CP filters by identifier, not by scheme. */
++        r[4] = 0x00;
++        r[5] = 0xff;
++        r[6] = cbs_ranges[i].test ? 0x00 : 0x01;
++    }
++    return out;
++}
++
++static const guint8 cfg_set_debug_trace[1] = { 0x00 };
++static const guint8 cfg_send_sgc_value[12] = { 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
++static const guint8 cfg_sit_set_gps_lock_mode[1] = { 0x01 };
++static const guint8 cfg_sit_set_gps_nfw_status[1] = { 0x00 };
++static const guint8 cfg_set_tty_mode[4] = { 0x00, 0x00, 0x00, 0x00 };
++static const guint8 cfg_unnamed_097b[13] = { 0x7b, 0x22, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x22, 0x3a, 0x30, 0x7d, 0x00 };
++static const guint8 cfg_unnamed_097e[13] = { 0x7b, 0x22, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x22, 0x3a, 0x30, 0x7d, 0x00 };
++static const guint8 cfg_unnamed_096d[14] = { 0x7b, 0x22, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x22, 0x3a, 0x31, 0x7d, 0x00 };
++static const guint8 cfg_set_signal_report_criteria[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x93, 0xff, 0xff, 0xff, 0x99, 0xff, 0xff, 0xff, 0x9f, 0xff, 0xff, 0xff, 0xa7, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_02[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x8e, 0xff, 0xff, 0xff, 0x98, 0xff, 0xff, 0xff, 0xa2, 0xff, 0xff, 0xff, 0xac, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_03[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x80, 0xff, 0xff, 0xff, 0x8a, 0xff, 0xff, 0xff, 0x94, 0xff, 0xff, 0xff, 0x9e, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_04[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x97, 0xff, 0xff, 0xff, 0xa6, 0xff, 0xff, 0xff, 0xb5, 0xff, 0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_05[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00 };
++static const guint8 cfg_set_signal_report_criteria_06[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0xfd, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x05, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_07[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x92, 0xff, 0xff, 0xff, 0xa6, 0xff, 0xff, 0xff, 0xb0, 0xff, 0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x06, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_08[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x07, 0x00 };
++static const guint8 cfg_set_signal_report_criteria_09[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x08, 0x00 };
++static const guint8 cfg_set_signal_report_criteria_10[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x09, 0x00 };
++static const guint8 cfg_set_link_capa_report_criteria[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_link_capa_report_criteria_02[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_link_capa_report_criteria_03[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_link_capa_report_criteria_04[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_link_capa_report_criteria_05[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00 };
++static const guint8 cfg_sms_broadcast_activation[4] = { 0x00, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_open_carrier_info[10] = { 0x33, 0x30, 0x32, 0x32, 0x32, 0x30, 0x00, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_mobile_data_state[2] = { 0x00, 0x01 };
++static const guint8 cfg_set_nr_plmn_policy[312] = { 0x7b, 0x22, 0x61, 0x6c, 0x6c, 0x6f, 0x77, 0x65, 0x64, 0x50, 0x6c, 0x6d, 0x6e, 0x4c, 0x69, 0x73, 0x74, 0x22, 0x3a, 0x5b, 0x5d, 0x2c, 0x22, 0x62, 0x61, 0x72, 0x72, 0x65, 0x64, 0x50, 0x6c, 0x6d, 0x6e, 0x4c, 0x69, 0x73, 0x74, 0x22, 0x3a, 0x5b, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x31, 0x2c, 0x35, 0x32, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x34, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x30, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x37, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x37, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x32, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x33, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x32, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x33, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x31, 0x2c, 0x35, 0x30, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x31, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x36, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x31, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x35, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x33, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x39, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x35, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x34, 0x2c, 0x35, 0x36, 0x2c, 0x35, 0x36, 0x2c, 0x35, 0x33, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x37, 0x2c, 0x33, 0x35, 0x5d, 0x7d, 0x00 };
++static const guint8 cfg_set_nr_mode[11] = { 0x7b, 0x22, 0x6d, 0x6f, 0x64, 0x65, 0x22, 0x3a, 0x30, 0x7d, 0x00 };
++static const guint8 cfg_set_signal_report_criteria_11[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x95, 0xff, 0xff, 0xff, 0x99, 0xff, 0xff, 0xff, 0x9f, 0xff, 0xff, 0xff, 0xa7, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_12[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x8d, 0xff, 0xff, 0xff, 0x97, 0xff, 0xff, 0xff, 0xa1, 0xff, 0xff, 0xff, 0xab, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x01 };
++static const guint8 cfg_set_signal_report_criteria_13[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x05, 0x00 };
++static const guint8 cfg_set_signal_report_criteria_14[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x80, 0xff, 0xff, 0xff, 0x8a, 0xff, 0xff, 0xff, 0x94, 0xff, 0xff, 0xff, 0x9e, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x06, 0x01 };
++static const guint8 cfg_set_vonr_capa[4] = { 0x01, 0x00, 0x00, 0x00 };
++static const guint8 cfg_set_allowed_network_type_bitmap[4] = { 0xf8, 0x01, 0x04, 0x00 };
++static const guint8 cfg_sit_set_gps_supl_ni_ready[2] = { 0x6b, 0x1c };
++static const guint8 cfg_set_fast_dormancy_info[4] = { 0x0a, 0x0a, 0x0a, 0x0a };
++static const guint8 pre_aims_stack_start_req[2] = { 0x01, 0x01 };
++static const guint8 pre_aims_set_frame_time[10] = { 0x00, 0x02, 0x20, 0x04, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
++static const guint8 pre_aims_xcapm_start_req[2] = { 0x01, 0x01 };
++static const guint8 pre_set_voice_operation[4] = { 0x03, 0x00, 0x00, 0x00 };
++static const guint8 pre_aims_set_frame_time_02[10] = { 0x00, 0x02, 0xcd, 0x04, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
++
++static const MMSitBootRequest boot_requests[] = {
++    /*
++     * Cell broadcast. The only entry whose payload is built rather than
++     * stated, because the channel table above is the thing that is true
++     * everywhere; see build_broadcast_sms_config().
++     */
++    { 0x0106, "cell broadcast channels", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_BUILD, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++
++    /* primary stack only in 5/5 captures */
++    { 0x090b, "set debug trace", MM_SIT_BOOT_PHASE_BOOT,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_PRIMARY, 1, cfg_set_debug_trace },
++
++    /* primary stack only in 5/5 captures */
++    { 0x0404, "send sgc value", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_PRIMARY, 12, cfg_send_sgc_value },
++
++    /* GPS lock mode */
++    { 0x0c20, "sit set gps lock mode", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 1, cfg_sit_set_gps_lock_mode },
++
++    /* GPS NFW status */
++    { 0x0c33, "sit set gps nfw status", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 1, cfg_sit_set_gps_nfw_status },
++
++    /* teletype mode off */
++    { 0x0903, "set tty mode", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, cfg_set_tty_mode },
++
++    /* not in any name table; payload documented below */
++    { 0x0413, "unnamed 0413", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++
++    /* not in any name table */
++    { 0x097b, "unnamed 097b", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 13, cfg_unnamed_097b },
++
++    /* not in any name table */
++    { 0x097e, "unnamed 097e", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 13, cfg_unnamed_097e },
++
++    /* not in any name table */
++    { 0x096d, "unnamed 096d", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 14, cfg_unnamed_096d },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_02 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_03 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_04 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_05 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_06 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_07 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_08 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_09 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_10 },
++
++    /* per-RAT link capacity thresholds; a loop */
++    { 0x0944, "set link capa report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 178, cfg_set_link_capa_report_criteria },
++
++    /* per-RAT link capacity thresholds; a loop */
++    { 0x0944, "set link capa report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 178, cfg_set_link_capa_report_criteria_02 },
++
++    /* per-RAT link capacity thresholds; a loop */
++    { 0x0944, "set link capa report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 178, cfg_set_link_capa_report_criteria_03 },
++
++    /* per-RAT link capacity thresholds; a loop */
++    { 0x0944, "set link capa report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 178, cfg_set_link_capa_report_criteria_04 },
++
++    /* per-RAT link capacity thresholds; a loop */
++    { 0x0944, "set link capa report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 178, cfg_set_link_capa_report_criteria_05 },
++
++    /* turn cell broadcast on */
++    { 0x0107, "sms broadcast activation", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, cfg_sms_broadcast_activation },
++
++    /* carries the SIM's MCCMNC */
++    { 0x090d, "set open carrier info", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_MCCMNC, MM_SIT_BOOT_STACKS_ALL, 10, cfg_set_open_carrier_info },
++
++    /* query; answers {"mode":0} */
++    { 0x0761, "get nr mode", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++
++    /* <stack><enabled> */
++    { 0x0625, "set mobile data state", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_STACK, MM_SIT_BOOT_STACKS_ALL, 2, cfg_set_mobile_data_state },
++
++    /* primary stack only in 5/5 captures */
++    { 0x1307, "unnamed 1307", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_PRIMARY, 0, NULL },
++
++    /* {"allowedPlmnList":[],"barredPlmnList":[...]} */
++    { 0x0762, "set nr plmn policy", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 312, cfg_set_nr_plmn_policy },
++
++    /* {"mode":0} */
++    { 0x0760, "set nr mode", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 11, cfg_set_nr_mode },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_11 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_12 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_13 },
++
++    /* per-RAT signal thresholds; a loop */
++    { 0x0943, "set signal report criteria", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 55, cfg_set_signal_report_criteria_14 },
++
++    /* VoNR capability */
++    { 0x0954, "set vonr capa", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, cfg_set_vonr_capa },
++
++    /* query; answers {"sa_mode":N} */
++    { 0x0755, "get nr sa mode", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++
++    /* RAT mask 0x000401f8 */
++    { 0x074f, "set allowed network type bitmap", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, cfg_set_allowed_network_type_bitmap },
++
++    /* both stacks in 5/5 captures */
++    { 0x0c14, "sit set gps supl ni ready", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, cfg_sit_set_gps_supl_ni_ready },
++
++    /* both stacks in 5/5 captures */
++    { 0x0605, "set fast dormancy info", MM_SIT_BOOT_PHASE_RADIO,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, cfg_set_fast_dormancy_info },
++
++    /*
++     * Everything below is the PRE_PDN block, and it is the one thing here that
++     * is still a replay.
++     *
++     * Its purpose is not the settings -- mm-sit-ims.c sends the AIMS block
++     * itself, properly built, and the two queries are discarded. Its purpose is
++     * that the CP's last impression before a context request matches stock's:
++     * the 518 ms (ch 0xf5) / 618 ms (0xf6) between stock's final
++     * SET_DATA_PROFILE and its SETUP_DATA_CALL. Aligning our AP->CP stream
++     * against stock's left exactly this missing from the tail of both stacks.
++     *
++     * It stays verbatim because a traffic pattern cannot be half-converted:
++     * either the pattern matters and it should be reproduced, or it does not
++     * and the whole block should go. What would retire it: a boot with this
++     * block removed that still gets both stacks granted on the first ask.
++     * Since r60 the first ask is granted 6 times out of 6, so that experiment
++     * is now cheap and worth running.
++     */
++    { 0x0d39, "aims stack start req", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_stack_start_req },
++    { 0x0d0b, "aims set frame time", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 10, pre_aims_set_frame_time },
++    { 0x0d3b, "aims xcapm start req", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_xcapm_start_req },
++    { 0x091a, "set voice operation", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, pre_set_voice_operation },
++    { 0x0d0b, "aims set frame time", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 10, pre_aims_set_frame_time_02 },
++    { 0x0703, "query network selection mode", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++    { 0x0700, "get voice registration", MM_SIT_BOOT_PHASE_PRE_PDN,
++      MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++};
++
++const MMSitBootRequest *
++mm_sit_boot_requests (gsize *n_requests)
++{
++    *n_requests = G_N_ELEMENTS (boot_requests);
++    return boot_requests;
++}
++
++gboolean
++mm_sit_boot_request_wanted (const MMSitBootRequest *request, guint stack)
++{
++    return request->stacks == MM_SIT_BOOT_STACKS_ALL || stack == 0;
++}
++
++guint8 *
++mm_sit_boot_build_payload (const MMSitBootRequest *request, gsize *len)
++{
++    if (request->sub != MM_SIT_BOOT_SUB_BUILD)
++        return NULL;
++    if (request->id == 0x0106)
++        return build_broadcast_sms_config (len);
++    g_warn_if_reached ();
++    return NULL;
++}
+diff --git a/src/plugins/samsung-sit/mm-sit-boot-config.h b/src/plugins/samsung-sit/mm-sit-boot-config.h
+new file mode 100644
+index 00000000..f7e2ef2d
+--- /dev/null
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.h
+@@ -0,0 +1,76 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * The configuration the CP expects at boot.
++ *
++ * This replaces a generated replay of one captured Android boot. Every entry
++ * here is either a device constant whose invariance was measured, a value
++ * derived at run time from this device's own state, or a documented standard.
++ * Nothing is carried over because it happened to appear in a capture.
++ *
++ * Copyright (C) 2026 Trijal Saha
++ */
++
++#ifndef MM_SIT_BOOT_CONFIG_H
++#define MM_SIT_BOOT_CONFIG_H
++
++#include <glib.h>
++
++typedef enum {
++    /* Before the radio is brought up. */
++    MM_SIT_BOOT_PHASE_BOOT,
++    /* Once the radio is on, the bulk of the configuration. */
++    MM_SIT_BOOT_PHASE_RADIO,
++    /*
++     * Immediately before an IMS context is asked for. Stock runs a short block
++     * here and the CP's last impression before the request is what it contains.
++     */
++    MM_SIT_BOOT_PHASE_PRE_PDN,
++} MMSitBootPhase;
++
++typedef enum {
++    MM_SIT_BOOT_SUB_NONE,
++    /* @0x0c: this SIM's MCCMNC, ASCII, NUL-padded to the field width. */
++    MM_SIT_BOOT_SUB_MCCMNC,
++    /* @0x0c: the logical stack this request is about. */
++    MM_SIT_BOOT_SUB_STACK,
++    /* @0x09: the current time, as the CP's six-byte calendar. */
++    MM_SIT_BOOT_SUB_WALLCLOCK,
++    /* The whole payload is built at run time; see mm_sit_boot_build_payload(). */
++    MM_SIT_BOOT_SUB_BUILD,
++} MMSitBootSub;
++
++typedef enum {
++    /* Sent on every logical stack. */
++    MM_SIT_BOOT_STACKS_ALL,
++    /*
++     * Sent only on stack 0. Stock does this for these three in all five
++     * captures, across two baseband builds, so it is a property of the
++     * primary stack and not of the SIM that happened to be in it.
++     */
++    MM_SIT_BOOT_STACKS_PRIMARY,
++} MMSitBootStacks;
++
++typedef struct {
++    guint16          id;
++    /* What this configures, for the reader and for the logs. */
++    const gchar     *what;
++    MMSitBootPhase   phase;
++    MMSitBootSub     sub;
++    MMSitBootStacks  stacks;
++    guint16          len;
++    const guint8    *payload;
++} MMSitBootRequest;
++
++/* The whole configuration, in the order it is sent. */
++const MMSitBootRequest *mm_sit_boot_requests (gsize *n_requests);
++
++/* True when this request belongs on `stack`. */
++gboolean mm_sit_boot_request_wanted (const MMSitBootRequest *request, guint stack);
++
++/*
++ * Builds the payload for a MM_SIT_BOOT_SUB_BUILD request. Returns a newly
++ * allocated buffer and its length, or NULL if this request does not build one.
++ */
++guint8 *mm_sit_boot_build_payload (const MMSitBootRequest *request, gsize *len);
++
++#endif /* MM_SIT_BOOT_CONFIG_H */
+diff --git a/src/plugins/samsung-sit/mm-sit-boot-parity.h b/src/plugins/samsung-sit/mm-sit-boot-parity.h
+deleted file mode 100644
+index ece12789..00000000
+--- a/src/plugins/samsung-sit/mm-sit-boot-parity.h
++++ /dev/null
+@@ -1,404 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0-or-later */
+-/* Copyright (C) 2026 The ModemManager authors */
+-
+-/*
+- * GENERATED -- do not edit by hand. See gen-boot-parity.py.
+- *
+- * The requests this modem's own Android sends on a SIT control stack between
+- * the RIL's first frame and that stack's first IMS PDN, less the ones this
+- * plugin already sends and less the subsystems it drives its own way (SMS,
+- * SIM, STK, calls). Captured from /proc/sitdump on komodo, cold boot,
+- * **both** control channels -- one table per logical stack.
+- *
+- * It exists because matching individual fields was not enough: with the IMS
+- * context and the whole carrier-configuration exchange byte-identical to
+- * Android's, the CP still refused every PDN but the one it attached with. The
+- * difference is not in any one request -- it is the volume and order of
+- * everything around them. Whatever state the CP needs is built by that
+- * traffic, so the traffic is reproduced rather than guessed at.
+- *
+- * REGENERATED 2026-11-04 from the capture taken on Android running the SAME
+- * vendor commit as postmarketOS -- baseband g5400c-260604-260807-B-16035863,
+- * carrierconfig cfgdb-zmbu_p24-260807-B-16035863.
+- *
+- * Payloads are verbatim, at the frame offset the CP reads them from (@0x0c),
+- * except the rows that name something about this run: SET_OPEN_CARRIER_INFO
+- * carries the SIM's MCCMNC, SET_MOBILE_DATA_STATE the logical stack, and
+- * 0x0d17 a wall clock. Those are filled in at run time.
+- */
+-
+-#ifndef MM_SIT_BOOT_PARITY_H
+-#define MM_SIT_BOOT_PARITY_H
+-
+-#include <glib.h>
+-
+-typedef enum {
+-    /* Before the radio goes on, with the rest of the boot configuration. */
+-    MM_SIT_PARITY_PHASE_BOOT,
+-    /* After it, while the CP is searching and before anything wants a PDN. */
+-    MM_SIT_PARITY_PHASE_RADIO,
+-    /*
+-     * The short block stock runs between its last SET_DATA_PROFILE and its IMS
+-     * SETUP_DATA_CALL -- 518 ms of it on ch 0xf5, 618 ms on 0xf6. Replayed
+-     * immediately before our own IMS context rather than at boot.
+-     *
+-     * Sequence-aligning our AP->CP stream against stock's on identical
+-     * firmware put both stacks at the same place: the ids are ones we already
+-     * send, but we sent them at radio-on and stock sends them here, so the last
+-     * thing the CP saw before our request was polling churn where stock's was
+-     * this block.
+-     */
+-    MM_SIT_PARITY_PHASE_PRE_PDN,
+-} MMSitParityPhase;
+-
+-typedef enum {
+-    MM_SIT_PARITY_SUB_NONE,
+-    /* @0x0c: the SIM's MCCMNC, ASCII, NUL-padded to the field width. */
+-    MM_SIT_PARITY_SUB_MCCMNC,
+-    /* @0x0c: the logical stack this request is about. */
+-    MM_SIT_PARITY_SUB_STACK,
+-    /*
+-     * @0x0c+9: a six-byte UTC wall clock, yy mm dd HH MM SS with yy = year
+-     * minus 2000, each a plain byte. Stock's advances every frame; replaying
+-     * the captured one told the CP it was 2026-10-11 on every boot.
+-     */
+-    MM_SIT_PARITY_SUB_WALLCLOCK,
+-} MMSitParitySub;
+-
+-typedef struct {
+-    guint16          id;
+-    MMSitParityPhase phase;
+-    MMSitParitySub   sub;
+-    guint16          len;
+-    const guint8    *payload;
+-} MMSitParityRequest;
+-
+-static const guint8 mm_sit_parity_pay_000[1] = { 0x00 };
+-static const guint8 mm_sit_parity_pay_001[12] = { 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_002[1] = { 0x01 };
+-static const guint8 mm_sit_parity_pay_003[4] = { 0x00, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_004[13] = { 0x7b, 0x22, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x22, 0x3a, 0x30, 0x7d, 0x00 };
+-static const guint8 mm_sit_parity_pay_005[14] = { 0x7b, 0x22, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x22, 0x3a, 0x31, 0x7d, 0x00 };
+-static const guint8 mm_sit_parity_pay_006[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x93, 0xff, 0xff, 0xff, 0x99, 0xff, 0xff, 0xff, 0x9f, 0xff, 0xff, 0xff, 0xa7, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01 };
+-static const guint8 mm_sit_parity_pay_007[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x8e, 0xff, 0xff, 0xff, 0x98, 0xff, 0xff, 0xff, 0xa2, 0xff, 0xff, 0xff, 0xac, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x01 };
+-static const guint8 mm_sit_parity_pay_008[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x80, 0xff, 0xff, 0xff, 0x8a, 0xff, 0xff, 0xff, 0x94, 0xff, 0xff, 0xff, 0x9e, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x01 };
+-static const guint8 mm_sit_parity_pay_009[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x97, 0xff, 0xff, 0xff, 0xa6, 0xff, 0xff, 0xff, 0xb5, 0xff, 0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x01 };
+-static const guint8 mm_sit_parity_pay_010[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00 };
+-static const guint8 mm_sit_parity_pay_011[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0xfd, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x05, 0x01 };
+-static const guint8 mm_sit_parity_pay_012[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x92, 0xff, 0xff, 0xff, 0xa6, 0xff, 0xff, 0xff, 0xb0, 0xff, 0xff, 0xff, 0xbf, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x06, 0x01 };
+-static const guint8 mm_sit_parity_pay_013[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x07, 0x00 };
+-static const guint8 mm_sit_parity_pay_014[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x08, 0x00 };
+-static const guint8 mm_sit_parity_pay_015[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x09, 0x00 };
+-static const guint8 mm_sit_parity_pay_016[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_017[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_018[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_019[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_020[178] = { 0xb8, 0x0b, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x0e, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x40, 0x42, 0x0f, 0x00, 0x60, 0xe3, 0x16, 0x00, 0x80, 0x84, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x64, 0x00, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x88, 0x13, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x20, 0x4e, 0x00, 0x00, 0x50, 0xc3, 0x00, 0x00, 0xf8, 0x24, 0x01, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x40, 0x0d, 0x03, 0x00, 0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_021[50] = { 0x07, 0x00, 0x11, 0x02, 0x11, 0x00, 0xff, 0x01, 0x03, 0x11, 0x03, 0x11, 0x00, 0xff, 0x00, 0x04, 0x11, 0x04, 0x11, 0x00, 0xff, 0x01, 0x12, 0x11, 0x1b, 0x11, 0x00, 0xff, 0x01, 0x1c, 0x11, 0x1e, 0x11, 0x00, 0xff, 0x00, 0x1f, 0x11, 0x28, 0x11, 0x00, 0xff, 0x01, 0x29, 0x11, 0x2b, 0x11, 0x00, 0xff, 0x00 };
+-static const guint8 mm_sit_parity_pay_022[17] = { 0x10, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xf1, 0x10, 0xff, 0xff, 0x89, 0xb0, 0x01, 0x40, 0xff };
+-static const guint8 mm_sit_parity_pay_023[2] = { 0x02, 0x05 };
+-static const guint8 mm_sit_parity_pay_024[57] = { 0x08, 0x00, 0x11, 0x02, 0x11, 0x00, 0xff, 0x01, 0x03, 0x11, 0x03, 0x11, 0x00, 0xff, 0x00, 0x04, 0x11, 0x04, 0x11, 0x00, 0xff, 0x01, 0x12, 0x11, 0x1b, 0x11, 0x00, 0xff, 0x01, 0x1c, 0x11, 0x1e, 0x11, 0x00, 0xff, 0x00, 0x1f, 0x11, 0x28, 0x11, 0x00, 0xff, 0x01, 0x29, 0x11, 0x2b, 0x11, 0x00, 0xff, 0x00, 0x2c, 0x11, 0x2f, 0x11, 0x00, 0xff, 0x01 };
+-static const guint8 mm_sit_parity_pay_025[10] = { 0x33, 0x30, 0x32, 0x32, 0x32, 0x30, 0x00, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_026[2] = { 0x00, 0x01 };
+-static const guint8 mm_sit_parity_pay_027[312] = { 0x7b, 0x22, 0x61, 0x6c, 0x6c, 0x6f, 0x77, 0x65, 0x64, 0x50, 0x6c, 0x6d, 0x6e, 0x4c, 0x69, 0x73, 0x74, 0x22, 0x3a, 0x5b, 0x5d, 0x2c, 0x22, 0x62, 0x61, 0x72, 0x72, 0x65, 0x64, 0x50, 0x6c, 0x6d, 0x6e, 0x4c, 0x69, 0x73, 0x74, 0x22, 0x3a, 0x5b, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x31, 0x2c, 0x35, 0x32, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x34, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x30, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x37, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x37, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x32, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x33, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x32, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x33, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x31, 0x2c, 0x35, 0x30, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x31, 0x2c, 0x35, 0x32, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x30, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x36, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x31, 0x2c, 0x34, 0x38, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x31, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x30, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x35, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x33, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x34, 0x39, 0x2c, 0x34, 0x39, 0x2c, 0x33, 0x35, 0x2c, 0x35, 0x35, 0x2c, 0x35, 0x35, 0x2c, 0x34, 0x39, 0x2c, 0x35, 0x34, 0x2c, 0x35, 0x36, 0x2c, 0x35, 0x36, 0x2c, 0x35, 0x33, 0x2c, 0x34, 0x38, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x33, 0x2c, 0x35, 0x37, 0x2c, 0x33, 0x35, 0x5d, 0x7d, 0x00 };
+-static const guint8 mm_sit_parity_pay_028[11] = { 0x7b, 0x22, 0x6d, 0x6f, 0x64, 0x65, 0x22, 0x3a, 0x30, 0x7d, 0x00 };
+-static const guint8 mm_sit_parity_pay_029[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x95, 0xff, 0xff, 0xff, 0x99, 0xff, 0xff, 0xff, 0x9f, 0xff, 0xff, 0xff, 0xa7, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01 };
+-static const guint8 mm_sit_parity_pay_030[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x8d, 0xff, 0xff, 0xff, 0x97, 0xff, 0xff, 0xff, 0xa1, 0xff, 0xff, 0xff, 0xab, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x01 };
+-static const guint8 mm_sit_parity_pay_031[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x05, 0x00 };
+-static const guint8 mm_sit_parity_pay_032[55] = { 0xb8, 0x0b, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x80, 0xff, 0xff, 0xff, 0x8a, 0xff, 0xff, 0xff, 0x94, 0xff, 0xff, 0xff, 0x9e, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x06, 0x01 };
+-static const guint8 mm_sit_parity_pay_033[4] = { 0x01, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_034[4] = { 0xf8, 0x01, 0x04, 0x00 };
+-static const guint8 mm_sit_parity_pay_035[2] = { 0x01, 0x01 };
+-static const guint8 mm_sit_parity_pay_036[10] = { 0x00, 0x02, 0x97, 0x01, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_037[10] = { 0x00, 0x02, 0xf3, 0x01, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_038[19] = { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x0b, 0x04, 0x16, 0x17, 0x1e, 0x00, 0x00, 0x03, 0x00 };
+-static const guint8 mm_sit_parity_pay_039[10] = { 0x00, 0x02, 0x20, 0x04, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_040[4] = { 0x03, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_041[10] = { 0x00, 0x02, 0xcd, 0x04, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_042[17] = { 0x10, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xff, 0x33, 0xff, 0xff, 0x89, 0x01, 0x01, 0x01, 0x00 };
+-static const guint8 mm_sit_parity_pay_043[10] = { 0x33, 0x30, 0x32, 0x35, 0x30, 0x30, 0x00, 0x00, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_044[2] = { 0x6b, 0x1c };
+-static const guint8 mm_sit_parity_pay_045[4] = { 0x0a, 0x0a, 0x0a, 0x0a };
+-static const guint8 mm_sit_parity_pay_046[2] = { 0x01, 0x02 };
+-static const guint8 mm_sit_parity_pay_047[10] = { 0x00, 0x02, 0xa2, 0x03, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+-static const guint8 mm_sit_parity_pay_048[2] = { 0x00, 0x02 };
+-static const guint8 mm_sit_parity_pay_049[19] = { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x0b, 0x04, 0x16, 0x17, 0x1f, 0x00, 0x00, 0x03, 0x00 };
+-static const guint8 mm_sit_parity_pay_050[10] = { 0x00, 0x02, 0x24, 0x05, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+-
+-/* ch 0xf5 -- logical stack 0. 124 requests. */
+-static const MMSitParityRequest mm_sit_parity_requests_stack0[] = {
+-    { 0x090b, MM_SIT_PARITY_PHASE_BOOT, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=2.795 SET_DEBUG_TRACE */
+-    { 0x0404, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 12, mm_sit_parity_pay_001 }, /* t=2.803 SEND_SGC_VALUE */
+-    { 0x0c20, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_002 }, /* t=2.804 SIT_SET_GPS_LOCK_MODE */
+-    { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=2.806 SIT_SET_GPS_NFW_STATUS */
+-    { 0x0c20, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_002 }, /* t=3.596 SIT_SET_GPS_LOCK_MODE */
+-    { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=3.599 SIT_SET_GPS_NFW_STATUS */
+-    { 0x0c20, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_002 }, /* t=4.597 SIT_SET_GPS_LOCK_MODE */
+-    { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=4.642 SIT_SET_GPS_NFW_STATUS */
+-    { 0x0903, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=5.474 ? */
+-    { 0x0711, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.845 GET_PS_SERVICE */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.862 ? */
+-    { 0x0413, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.863 ? */
+-    { 0x097b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 13, mm_sit_parity_pay_004 }, /* t=5.865 ? */
+-    { 0x0403, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.866 GET_DEV_ID */
+-    { 0x097e, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 13, mm_sit_parity_pay_004 }, /* t=5.868 ? */
+-    { 0x096d, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 14, mm_sit_parity_pay_005 }, /* t=5.871 ? */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_006 }, /* t=5.873 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_007 }, /* t=5.876 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_008 }, /* t=5.878 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_009 }, /* t=5.880 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_010 }, /* t=5.883 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_011 }, /* t=5.885 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_012 }, /* t=5.887 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_013 }, /* t=5.889 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_014 }, /* t=5.892 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.895 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=5.896 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_006 }, /* t=5.898 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.900 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_007 }, /* t=5.902 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_008 }, /* t=5.903 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_009 }, /* t=5.906 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_010 }, /* t=5.908 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_011 }, /* t=5.911 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_012 }, /* t=5.915 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_013 }, /* t=5.918 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_014 }, /* t=5.922 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=5.923 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_016 }, /* t=5.931 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_017 }, /* t=5.933 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_018 }, /* t=5.936 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_019 }, /* t=5.938 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_020 }, /* t=5.941 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_016 }, /* t=5.946 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_017 }, /* t=5.949 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_018 }, /* t=5.951 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_019 }, /* t=5.953 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_020 }, /* t=5.957 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0106, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 50, mm_sit_parity_pay_021 }, /* t=5.984 ? */
+-    { 0x0107, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=5.993 ? */
+-    { 0x0810, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.001 GET_STACK_STATUS */
+-    { 0x0400, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 17, mm_sit_parity_pay_022 }, /* t=6.206 GET_IMSI */
+-    { 0x0c01, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_023 }, /* t=6.496 SIT_GET_LPP_SUPL_REQ_ECID_INFO */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.498 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.503 GET_VOICE_REGISTRATION */
+-    { 0x0106, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 57, mm_sit_parity_pay_024 }, /* t=6.540 ? */
+-    { 0x0107, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=6.550 ? */
+-    { 0x090d, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_MCCMNC, 10, mm_sit_parity_pay_025 }, /* t=6.645 SET_OPEN_CARRIER_INFO */
+-    { 0x0c01, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_023 }, /* t=6.647 SIT_GET_LPP_SUPL_REQ_ECID_INFO */
+-    { 0x0957, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.649 GET_DEVICE_SERVICE */
+-    { 0x0761, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.663 ? */
+-    { 0x070c, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.207 GET_CELL_INFO_LIST */
+-    { 0x0625, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_STACK, 2, mm_sit_parity_pay_026 }, /* t=7.264 SET_MOBILE_DATA_STATE */
+-    { 0x091b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.303 GET_VOICE_OPERATION */
+-    { 0x0106, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 57, mm_sit_parity_pay_024 }, /* t=7.309 ? */
+-    { 0x0107, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=7.314 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.826 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.836 GET_VOICE_REGISTRATION */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=8.052 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=8.057 GET_VOICE_REGISTRATION */
+-    { 0x1307, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=8.956 ? */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.642 ? */
+-    { 0x0760, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 11, mm_sit_parity_pay_028 }, /* t=9.646 ? */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.684 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.861 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.867 GET_VOICE_REGISTRATION */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_029 }, /* t=9.892 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_030 }, /* t=9.907 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_008 }, /* t=9.909 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_010 }, /* t=9.916 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_031 }, /* t=9.921 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.923 GET_VOICE_REGISTRATION */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_032 }, /* t=9.923 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.925 ? */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_013 }, /* t=9.926 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.927 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_014 }, /* t=9.928 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=9.930 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0760, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 11, mm_sit_parity_pay_028 }, /* t=9.931 ? */
+-    { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=9.932 SET_VONR_CAPA */
+-    { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.936 ? */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.938 ? */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.940 ? */
+-    { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=9.993 SET_VONR_CAPA */
+-    { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.996 ? */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.999 ? */
+-    { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.020 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.030 GET_VOICE_REGISTRATION */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.034 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.037 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+-    { 0x0c20, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_002 }, /* t=10.150 SIT_SET_GPS_LOCK_MODE */
+-    { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=10.152 SIT_SET_GPS_NFW_STATUS */
+-    { 0x0d3a, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=10.325 ? */
+-    { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=10.366 SET_VONR_CAPA */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.369 ? */
+-    { 0x0d0b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_036 }, /* t=10.377 ? */
+-    { 0x0d39, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=10.378 ? */
+-    { 0x0d0b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_037 }, /* t=10.469 ? */
+-    { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.471 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+-    { 0x0d3c, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=10.471 ? */
+-    { 0x0d3b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=10.521 ? */
+-    { 0x0d17, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_WALLCLOCK, 19, mm_sit_parity_pay_038 }, /* t=10.572 ? */
+-    { 0x0d17, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_WALLCLOCK, 19, mm_sit_parity_pay_038 }, /* t=10.614 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.620 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.627 GET_VOICE_REGISTRATION */
+-    { 0x0d3a, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_026 }, /* t=10.697 ? */
+-    { 0x0d3c, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_026 }, /* t=10.697 ? */
+-    { 0x0d39, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=11.025 ? */
+-    { 0x0d0b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_039 }, /* t=11.026 ? */
+-    { 0x0d3b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=11.039 ? */
+-    { 0x091a, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_040 }, /* t=11.153 SET_VOICE_OPERATION */
+-    { 0x0d0b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_041 }, /* t=11.198 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=11.229 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=11.235 GET_VOICE_REGISTRATION */
+-};
+-
+-/* ch 0xf6 -- logical stack 1. 122 requests. */
+-static const MMSitParityRequest mm_sit_parity_requests_stack1[] = {
+-    { 0x0c20, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_002 }, /* t=2.804 SIT_SET_GPS_LOCK_MODE */
+-    { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=2.805 SIT_SET_GPS_NFW_STATUS */
+-    { 0x0903, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=5.564 ? */
+-    { 0x0711, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.843 GET_PS_SERVICE */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.941 ? */
+-    { 0x0413, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.944 ? */
+-    { 0x0403, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.947 GET_DEV_ID */
+-    { 0x097b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 13, mm_sit_parity_pay_004 }, /* t=5.954 ? */
+-    { 0x096d, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 14, mm_sit_parity_pay_005 }, /* t=5.954 ? */
+-    { 0x097e, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 13, mm_sit_parity_pay_004 }, /* t=5.956 ? */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_006 }, /* t=5.966 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_007 }, /* t=5.969 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_008 }, /* t=5.971 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_009 }, /* t=5.974 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.976 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0c01, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_023 }, /* t=5.978 SIT_GET_LPP_SUPL_REQ_ECID_INFO */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_010 }, /* t=5.979 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_011 }, /* t=5.986 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.987 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_012 }, /* t=5.992 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_013 }, /* t=5.995 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_014 }, /* t=5.997 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=6.000 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_006 }, /* t=6.004 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_007 }, /* t=6.017 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_008 }, /* t=6.021 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_009 }, /* t=6.032 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_010 }, /* t=6.035 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_011 }, /* t=6.038 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_012 }, /* t=6.040 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_013 }, /* t=6.042 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_014 }, /* t=6.044 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=6.046 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_016 }, /* t=6.051 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_017 }, /* t=6.054 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_018 }, /* t=6.056 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_019 }, /* t=6.058 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_020 }, /* t=6.061 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_016 }, /* t=6.065 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_017 }, /* t=6.068 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_018 }, /* t=6.071 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_019 }, /* t=6.072 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0944, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 178, mm_sit_parity_pay_020 }, /* t=6.074 SET_LINK_CAPA_REPORT_CRITERIA */
+-    { 0x0810, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.077 GET_STACK_STATUS */
+-    { 0x0400, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 17, mm_sit_parity_pay_042 }, /* t=6.173 GET_IMSI */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.497 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.520 GET_VOICE_REGISTRATION */
+-    { 0x0106, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 57, mm_sit_parity_pay_024 }, /* t=6.554 ? */
+-    { 0x0107, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=6.558 ? */
+-    { 0x0957, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.652 GET_DEVICE_SERVICE */
+-    { 0x0761, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=6.662 ? */
+-    { 0x090d, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_MCCMNC, 10, mm_sit_parity_pay_043 }, /* t=6.698 SET_OPEN_CARRIER_INFO */
+-    { 0x0c01, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_023 }, /* t=6.702 SIT_GET_LPP_SUPL_REQ_ECID_INFO */
+-    { 0x070c, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.210 GET_CELL_INFO_LIST */
+-    { 0x091b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.250 GET_VOICE_OPERATION */
+-    { 0x0625, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_STACK, 2, mm_sit_parity_pay_026 }, /* t=7.265 SET_MOBILE_DATA_STATE */
+-    { 0x0106, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 57, mm_sit_parity_pay_024 }, /* t=7.314 ? */
+-    { 0x0107, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=7.317 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.361 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.367 GET_VOICE_REGISTRATION */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.374 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.378 GET_VOICE_REGISTRATION */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.384 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.389 GET_VOICE_REGISTRATION */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.396 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.402 GET_VOICE_REGISTRATION */
+-    { 0x0625, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_STACK, 2, mm_sit_parity_pay_035 }, /* t=7.793 SET_MOBILE_DATA_STATE */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.825 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=7.833 GET_VOICE_REGISTRATION */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=8.042 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=8.051 GET_VOICE_REGISTRATION */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.644 ? */
+-    { 0x0760, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 11, mm_sit_parity_pay_028 }, /* t=9.647 ? */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.684 ? */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.932 ? */
+-    { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.018 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.040 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.046 GET_VOICE_REGISTRATION */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=10.133 ? */
+-    { 0x0760, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 11, mm_sit_parity_pay_028 }, /* t=10.149 ? */
+-    { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=10.155 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.271 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_029 }, /* t=10.272 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_030 }, /* t=10.280 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_008 }, /* t=10.282 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.284 GET_VOICE_REGISTRATION */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_010 }, /* t=10.284 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_031 }, /* t=10.286 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_032 }, /* t=10.288 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.289 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_013 }, /* t=10.291 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_014 }, /* t=10.293 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.295 GET_VOICE_REGISTRATION */
+-    { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=10.295 SET_SIGNAL_REPORT_CRITERIA */
+-    { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=10.368 SET_VONR_CAPA */
+-    { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.370 ? */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.372 ? */
+-    { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=10.375 SET_VONR_CAPA */
+-    { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.377 ? */
+-    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.379 ? */
+-    { 0x0c14, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_044 }, /* t=10.439 ? */
+-    { 0x0605, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_045 }, /* t=10.439 ? */
+-    { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.473 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+-    { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.476 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+-    { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.618 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.627 GET_VOICE_REGISTRATION */
+-    { 0x091a, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_040 }, /* t=10.821 SET_VOICE_OPERATION */
+-    { 0x0d3a, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=10.848 ? */
+-    { 0x0d39, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=10.899 ? */
+-    { 0x0d0b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_047 }, /* t=10.899 ? */
+-    { 0x0d3c, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=10.907 ? */
+-    { 0x0d3b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=10.954 ? */
+-    { 0x0d3a, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_048 }, /* t=11.016 ? */
+-    { 0x0d3c, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_048 }, /* t=11.016 ? */
+-    { 0x0d3c, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.020 ? */
+-    { 0x0d3b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.071 ? */
+-    /*
+-     * AIMS_SET_CALL_WAITING. A supplementary-service setting, not a step in
+-     * bringing up a context -- and stack 0 carries the same message in the
+-     * RADIO phase (see above). The capture put it either side of the ask by
+-     * jitter alone: 666ms before it on 0xf5, 258ms before it on 0xf6. Left in
+-     * PRE_PDN it is on the critical path to the IMS request, where a reply the
+-     * CP sat on cost stack 1 ten seconds and stack 0 nothing.
+-     */
+-    { 0x0d17, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_WALLCLOCK, 19, mm_sit_parity_pay_049 }, /* t=11.074 ? */
+-    { 0x0d3b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.200 ? */
+-    { 0x0d39, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.285 ? */
+-    { 0x0d0b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_050 }, /* t=11.288 ? */
+-    { 0x0703, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=11.318 QUERY_NETWORK_SELECTION_MODE */
+-    { 0x0700, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=11.322 GET_VOICE_REGISTRATION */
+-};
+-
+-/* The table for `stack`, and how many rows it has. Stacks beyond the captured
+- * two fall back to stack 0's, which is what a single-table build did for every
+- * stack. */
+-static inline const MMSitParityRequest *
+-mm_sit_parity_requests_for_stack (guint stack, gsize *out_n)
+-{
+-    if (stack == 1) {
+-        *out_n = G_N_ELEMENTS (mm_sit_parity_requests_stack1);
+-        return mm_sit_parity_requests_stack1;
+-    }
+-    *out_n = G_N_ELEMENTS (mm_sit_parity_requests_stack0);
+-    return mm_sit_parity_requests_stack0;
+-}
+-
+-#endif /* MM_SIT_BOOT_PARITY_H */
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index 466ae5ca..cb44487f 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -6,7 +6,7 @@
+ 
+ #include "mm-log-object.h"
+ #include "mm-sit-client.h"
+-#include "mm-sit-boot-parity.h"
++#include "mm-sit-boot-config.h"
+ #include "mm-sit-cp.h"
+ 
+ enum {
+@@ -3584,32 +3584,44 @@ setup_reattach_ready (MMSitClient  *self,
+  * on its own -- the modem passes it, NULL otherwise.
+  */
+ GByteArray *
+-mm_sit_client_build_parity_request (MMSitClient              *self,
+-                                    const MMSitParityRequest *req,
++mm_sit_client_build_boot_request (MMSitClient              *self,
++                                    const MMSitBootRequest *req,
+                                     const gchar              *mccmnc,
+                                     GError                  **error)
+ {
+     g_autofree guint8 *body = NULL;
+-    gsize              len = 4 + req->len;
++    g_autofree guint8 *built = NULL;
++    gsize              payload_len = req->len;
++    gsize              len;
++
++    /* A request whose payload is derived rather than stated. */
++    if (req->sub == MM_SIT_BOOT_SUB_BUILD) {
++        built = mm_sit_boot_build_payload (req, &payload_len);
++        if (!built)
++            return NULL;
++    }
+ 
++    len = 4 + payload_len;
+     body = g_malloc0 (len);
+-    if (req->payload)
++    if (built)
++        memcpy (body + 4, built, payload_len);
++    else if (req->payload)
+         memcpy (body + 4, req->payload, req->len);
+ 
+     switch (req->sub) {
+-    case MM_SIT_PARITY_SUB_MCCMNC:
++    case MM_SIT_BOOT_SUB_MCCMNC:
+         /* Nothing to name the subscription with yet; the CP gets it next time. */
+         if (!mccmnc || !mccmnc[0] || strlen (mccmnc) >= req->len)
+             return NULL;
+         memset (body + 4, 0, req->len);
+         memcpy (body + 4, mccmnc, strlen (mccmnc));
+         break;
+-    case MM_SIT_PARITY_SUB_STACK:
++    case MM_SIT_BOOT_SUB_STACK:
+         if (req->len < 1)
+             return NULL;
+         body[4] = (guint8) self->priv->stack;
+         break;
+-    case MM_SIT_PARITY_SUB_WALLCLOCK: {
++    case MM_SIT_BOOT_SUB_WALLCLOCK: {
+         /*
+          * Six bytes of UTC at payload+9: yy mm dd HH MM SS, yy = year - 2000,
+          * each a plain byte rather than BCD.
+@@ -3631,7 +3643,8 @@ mm_sit_client_build_parity_request (MMSitClient              *self,
+         body[4 + 14] = (guint8) g_date_time_get_second (now);
+         break;
+     }
+-    case MM_SIT_PARITY_SUB_NONE:
++    case MM_SIT_BOOT_SUB_BUILD:
++    case MM_SIT_BOOT_SUB_NONE:
+     default:
+         break;
+     }
+@@ -3640,7 +3653,7 @@ mm_sit_client_build_parity_request (MMSitClient              *self,
+      * The AIMS stack requests name their stack in payload byte 1, 1-based, and
+      * the table does not cover it.
+      *
+-     * mm-sit-boot-parity.h is a verbatim replay of one cold boot captured on
++     * mm-sit-boot-config.h is a verbatim replay of one cold boot captured on
+      * **one stack**, and its own header says so. STACK_START (0x0d39),
+      * STACK_STOP (0x0d3a), 0x0d3b and 0x0d3c all carry the stack, so replaying
+      * them unmodified sent stack 0's index on both stacks: on ch 0xf6 we were
+@@ -3719,10 +3732,10 @@ preamble_step (GTask *task)
+     PreambleContext          *ctx = g_task_get_task_data (task);
+     g_autoptr(GByteArray)     request = NULL;
+     g_autoptr(GError)         error = NULL;
+-    const MMSitParityRequest *table;
++    const MMSitBootRequest *table;
+     gsize                     n_table = 0;
+ 
+-    table = mm_sit_parity_requests_for_stack (self->priv->stack, &n_table);
++    table = mm_sit_boot_requests (&n_table);
+     if (g_get_monotonic_time () >= ctx->deadline_us) {
+         mm_obj_dbg (self->priv->port, "pdn preamble: out of budget after %u ms with "
+                     "%u row(s) to go; going on to the context",
+@@ -3732,13 +3745,14 @@ preamble_step (GTask *task)
+         return;
+     }
+     while (ctx->index < n_table) {
+-        const MMSitParityRequest *req = &table[ctx->index];
++        const MMSitBootRequest *req = &table[ctx->index];
+ 
+-        if (req->phase != MM_SIT_PARITY_PHASE_PRE_PDN) {
++        if (req->phase != MM_SIT_BOOT_PHASE_PRE_PDN ||
++            !mm_sit_boot_request_wanted (req, self->priv->stack)) {
+             ctx->index++;
+             continue;
+         }
+-        request = mm_sit_client_build_parity_request (self, req, NULL, &error);
++        request = mm_sit_client_build_boot_request (self, req, NULL, &error);
+         ctx->index++;
+         if (request)
+             break;
+diff --git a/src/plugins/samsung-sit/mm-sit-client.h b/src/plugins/samsung-sit/mm-sit-client.h
+index eeadb446..ec7aad3a 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.h
++++ b/src/plugins/samsung-sit/mm-sit-client.h
+@@ -5,7 +5,7 @@
+ #define MM_SIT_CLIENT_H
+ 
+ #include "mm-port-serial-sit.h"
+-#include "mm-sit-boot-parity.h"
++#include "mm-sit-boot-config.h"
+ 
+ /*
+  * A data PDN the CP would not create, carrying the cause it gave. On this CP
+@@ -591,7 +591,7 @@ gboolean mm_sit_client_connect_data_finish (MMSitClient        *self,
+  * the same allocator, which is the part that must not be bypassed.
+  */
+ /*
+- * Replay the boot-parity PRE_PDN block -- what stock sends between its last
++ * Replay the PRE_PDN block -- what stock sends between its last
+  * data profile and its IMS context. Advisory throughout; it cannot fail.
+  */
+ void     mm_sit_client_run_pdn_preamble        (MMSitClient        *self,
+@@ -604,8 +604,8 @@ gboolean mm_sit_client_run_pdn_preamble_finish (MMSitClient        *self,
+ 
+ /* Build one boot-parity row; `mccmnc` supplies the one substitution the client
+  * cannot make itself, and may be NULL. */
+-GByteArray *mm_sit_client_build_parity_request (MMSitClient              *self,
+-                                                const MMSitParityRequest *req,
++GByteArray *mm_sit_client_build_boot_request (MMSitClient              *self,
++                                                const MMSitBootRequest *req,
+                                                 const gchar              *mccmnc,
+                                                 GError                  **error);
+ 
+diff --git a/src/plugins/samsung-sit/mm-sit-ims.c b/src/plugins/samsung-sit/mm-sit-ims.c
+index f209fd91..0e6e6507 100644
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -756,7 +756,7 @@ sequence_step (GTask *task)
+          * our AP->CP stream against stock's on identical firmware left this as
+          * the divergence at the point of the request: 59% of stock's order on
+          * ch 0xf5 and 31% on 0xf6, with the tail of both missing exactly this
+-         * block. See MM_SIT_PARITY_PHASE_PRE_PDN.
++         * block. See MM_SIT_BOOT_PHASE_PRE_PDN.
+          *
+          * Advisory: a refused row is still a row the CP saw, so this cannot
+          * fail the context.
+diff --git a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+index 9fe96e5a..860a54c4 100644
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -10,6 +10,7 @@
+ 
+ #include "mm-log.h"
+ #include "mm-port-serial-sit.h"
++#include "mm-sit-boot-config.h"
+ #include "mm-sit-carrier-config.h"
+ #include "mm-sit-client.h"
+ #include "mm-sit-cp.h"
+@@ -2985,7 +2986,7 @@ ims_retry_peer_ready (gint fd, GIOCondition condition, ImsRetryPeer *peer)
+     case 0x0d07: /* AIMS_HIDDEN_MENU */
+         break;
+     /*
+-     * The boot-parity PRE_PDN preamble, replayed from STEP_PREAMBLE, and the
++     * The PRE_PDN preamble, replayed from STEP_PREAMBLE, and the
+      * indication filter and display state re-asserted from
+      * STEP_REASSERT_FILTER once the context is up. Both are advisory in the
+      * plugin and this test is about the retry ladder, so a plain success is
+@@ -3372,6 +3373,88 @@ test_ims_config_user_agent (void)
+                      "Google Pixel9a Android 17 CP2A.260705.006");
+ }
+ 
++/*
++ * The cell-broadcast request is built from the 3GPP TS 23.041 channel table
++ * rather than replayed, so that it is right in a country whose operator was
++ * never captured. These are the bytes stock sends, and the derivation has to
++ * reproduce them exactly: every channel carrying a real alert enabled, every
++ * test and exercise channel disabled.
++ */
++static void
++test_boot_cell_broadcast_is_derived (void)
++{
++    static const guint8 expected[] = {
++        0x08,
++        0x00, 0x11, 0x02, 0x11, 0x00, 0xff, 0x01,  /* 4352-4354 ETWS       on  */
++        0x03, 0x11, 0x03, 0x11, 0x00, 0xff, 0x00,  /* 4355      ETWS test  off */
++        0x04, 0x11, 0x04, 0x11, 0x00, 0xff, 0x01,  /* 4356      ETWS other on  */
++        0x12, 0x11, 0x1b, 0x11, 0x00, 0xff, 0x01,  /* 4370-4379 CMAS       on  */
++        0x1c, 0x11, 0x1e, 0x11, 0x00, 0xff, 0x00,  /* 4380-4382 test/exer  off */
++        0x1f, 0x11, 0x28, 0x11, 0x00, 0xff, 0x01,  /* 4383-4392 CMAS 2nd   on  */
++        0x29, 0x11, 0x2b, 0x11, 0x00, 0xff, 0x00,  /* 4393-4395 test 2nd   off */
++        0x2c, 0x11, 0x2f, 0x11, 0x00, 0xff, 0x01,  /* 4396-4399 CMAS more  on  */
++    };
++    const MMSitBootRequest *table;
++    gsize                   n_table = 0, i, len = 0;
++    g_autofree guint8      *built = NULL;
++
++    table = mm_sit_boot_requests (&n_table);
++    g_assert_nonnull (table);
++    g_assert_cmpuint (n_table, >, 0);
++
++    for (i = 0; i < n_table; i++) {
++        if (table[i].sub != MM_SIT_BOOT_SUB_BUILD)
++            continue;
++        built = mm_sit_boot_build_payload (&table[i], &len);
++        break;
++    }
++    g_assert_nonnull (built);
++    g_assert_cmpuint (len, ==, G_N_ELEMENTS (expected));
++    g_assert_cmpmem (built, len, expected, G_N_ELEMENTS (expected));
++}
++
++/* Three requests go to stack 0 only; stock does that in all five captures. */
++static void
++test_boot_primary_only_requests (void)
++{
++    const MMSitBootRequest *table;
++    gsize                   n_table = 0, i;
++    guint                   primary = 0;
++
++    table = mm_sit_boot_requests (&n_table);
++    for (i = 0; i < n_table; i++) {
++        if (table[i].stacks != MM_SIT_BOOT_STACKS_PRIMARY)
++            continue;
++        primary++;
++        g_assert_true (mm_sit_boot_request_wanted (&table[i], 0));
++        g_assert_false (mm_sit_boot_request_wanted (&table[i], 1));
++    }
++    g_assert_cmpuint (primary, ==, 3);
++
++    /* Everything else belongs on both. */
++    for (i = 0; i < n_table; i++) {
++        if (table[i].stacks == MM_SIT_BOOT_STACKS_PRIMARY)
++            continue;
++        g_assert_true (mm_sit_boot_request_wanted (&table[i], 0));
++        g_assert_true (mm_sit_boot_request_wanted (&table[i], 1));
++    }
++}
++
++/* Every entry says what it configures; an unnamed one is a replay again. */
++static void
++test_boot_requests_are_named (void)
++{
++    const MMSitBootRequest *table;
++    gsize                   n_table = 0, i;
++
++    table = mm_sit_boot_requests (&n_table);
++    for (i = 0; i < n_table; i++) {
++        g_assert_nonnull (table[i].what);
++        g_assert_cmpuint (strlen (table[i].what), >, 0);
++    }
++}
++
++
+ int
+ main (int argc,
+       char **argv)
+@@ -3418,6 +3501,9 @@ main (int argc,
+     g_test_add_func ("/MM/sit/decode/carrier-sim-info", test_parse_carrier_sim_info);
+     g_test_add_func ("/MM/sit/carrier-config/resolve", test_carrier_config_resolver);
+     g_test_add_func ("/MM/sit/carrier-config/reference-database", test_carrier_config_reference_database);
++    g_test_add_func ("/MM/sit/boot/cell-broadcast-is-derived", test_boot_cell_broadcast_is_derived);
++    g_test_add_func ("/MM/sit/boot/primary-only-requests", test_boot_primary_only_requests);
++    g_test_add_func ("/MM/sit/boot/requests-are-named", test_boot_requests_are_named);
+     g_test_add_func ("/MM/sit/port/command-and-indication", test_port_command_and_indication);
+     g_test_add_func ("/MM/sit/port/stale-response", test_port_drops_a_stale_response);
+     g_test_add_func ("/MM/sit/port/queued-commands", test_port_answers_queued_commands);

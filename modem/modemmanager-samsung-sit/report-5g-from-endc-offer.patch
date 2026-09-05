@@ -1,0 +1,180 @@
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index 5977f8d..af1cc1f 100644
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -89,6 +89,13 @@ struct _MMBroadbandModemSamsungSitPrivate {
+      * and how many radio cycles it has spent trying to shake it loose. */
+     guint        search_watchdog_id;
+     guint        search_retries;
++    /* The access technology the last signal report measured, kept because the
++     * 5G the registration offers has to be published alongside it rather than
++     * instead of it. See publish_access_tech(). */
++    MMModemAccessTechnology signal_act;
++    /* The serving cell's 5G NSA offer, from the registration response. */
++    gboolean     endc_available;
++    gboolean     dcnr_restricted;
+ };
+ 
+ typedef struct {
+@@ -360,6 +367,31 @@ sit_registration_state (const MMSitRegistration *registration)
+     return state;
+ }
+ 
++/*
++ * Android shows 5G from the network's EN-DC offer, not from an active NR
++ * carrier: NR_STATE_NOT_RESTRICTED means "this cell will give you 5G", and the
++ * indicator appears before any NR leg exists. The signal report's RAT mask only
++ * gains its NR bit once a secondary carrier is actually carrying something,
++ * which on a SIM with no data never happens -- so publishing the mask alone
++ * hides 5G everywhere Android would show it.
++ */
++static MMModemAccessTechnology
++decorate_access_tech (MMBroadbandModemSamsungSit *self,
++                      MMModemAccessTechnology     act)
++{
++    if (self->priv->endc_available && !self->priv->dcnr_restricted)
++        act |= MM_MODEM_ACCESS_TECHNOLOGY_5GNR;
++    return act;
++}
++
++static void
++publish_access_tech (MMBroadbandModemSamsungSit *self)
++{
++    mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
++                                               decorate_access_tech (self, self->priv->signal_act),
++                                               MM_MODEM_ACCESS_TECHNOLOGY_ANY);
++}
++
+ /* 0x0701 covers the packet-switched domain only. The three states move together
+  * because the CP reports one packet-service registration for whichever RAT it is
+  * on, rather than separate GPRS/EPS/5GS views. */
+@@ -374,6 +406,17 @@ update_ps_registration (MMBroadbandModemSamsungSit *self,
+     if (self->priv->ims)
+         mm_sit_ims_update_registration (self->priv->ims, registration);
+ 
++    if (self->priv->endc_available != registration->endc_available ||
++        self->priv->dcnr_restricted != registration->dcnr_restricted) {
++        self->priv->endc_available  = registration->endc_available;
++        self->priv->dcnr_restricted = registration->dcnr_restricted;
++        mm_obj_info (self, "network 5G NSA (EN-DC) offer: %s",
++                     !registration->endc_available ? "not advertised" :
++                     registration->dcnr_restricted ? "advertised but restricted for this subscriber" :
++                     "available");
++        publish_access_tech (self);
++    }
++
+     /* Registered again: forget the rejections, so a later one gets the full
+      * retry budget rather than inheriting an exhausted one. */
+     if (registration->registered) {
+@@ -1344,8 +1387,10 @@ sit_indication (MMSitClient              *client,
+         if (sit_signal_get_quality (&signal, &quality))
+             mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
+         act = sit_rat_mask_to_access_technology (signal.rat_mask);
+-        mm_iface_modem_update_access_technologies (
+-            MM_IFACE_MODEM (self), act, MM_MODEM_ACCESS_TECHNOLOGY_ANY);
++        self->priv->signal_act = act;
++        publish_access_tech (self);
++        /* IMS is gated on what the radio is measurably on, so it gets the mask
++         * itself rather than the 5G the network merely offers. */
+         if (self->priv->ims)
+             mm_sit_ims_update_access_tech (self->priv->ims, act);
+     }
+@@ -2238,6 +2283,7 @@ load_access_technologies_ready (MMSitClient  *client,
+                                 GAsyncResult *res,
+                                 GTask        *task)
+ {
++    MMBroadbandModemSamsungSit *self;
+     MMSitSignal signal;
+     GError     *error = NULL;
+ 
+@@ -2246,8 +2292,16 @@ load_access_technologies_ready (MMSitClient  *client,
+         g_object_unref (task);
+         return;
+     }
++    /*
++     * This reports with a mask of ANY, so whatever it returns replaces the
++     * whole value -- including the 5G the registration offered. Decorate it
++     * the same way publish_access_tech() does, or the poll silently undoes the
++     * indication a few seconds later.
++     */
++    self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
++    self->priv->signal_act = sit_rat_mask_to_access_technology (signal.rat_mask);
+     g_task_set_task_data (task,
+-                          GUINT_TO_POINTER ((guint) sit_rat_mask_to_access_technology (signal.rat_mask)),
++                          GUINT_TO_POINTER ((guint) decorate_access_tech (self, self->priv->signal_act)),
+                           NULL);
+     g_task_return_boolean (task, TRUE);
+     g_object_unref (task);
+diff --git a/src/plugins/samsung-sit/mm-sit-protocol.c b/src/plugins/samsung-sit/mm-sit-protocol.c
+index cf68eed..a2d34f8 100644
+--- a/src/plugins/samsung-sit/mm-sit-protocol.c
++++ b/src/plugins/samsung-sit/mm-sit-protocol.c
+@@ -1376,6 +1376,18 @@ mm_sit_message_parse_carrier_sim_info (const MMSitMessage  *message,
+     return TRUE;
+ }
+ 
++/*
++ * Frame offsets of the 5G NSA bytes in a registration response; see
++ * mm_sit_message_parse_registration(). These are the vendor's payload offsets
++ * plus twelve, because mm_sit_message_get_data() hands out the whole frame --
++ * the eight-byte header and the reserved word included -- while the vendor's
++ * adapter indexes from the payload proper.
++ */
++#define REG_ENDC_AVAILABLE  51
++#define REG_DCNR_RESTRICTED 52
++#define REG_NR_AVAILABLE    53
++#define REG_NR_MIN_LEN      54
++
+ gboolean
+ mm_sit_message_parse_registration (const MMSitMessage *message,
+                                    MMSitRegistration  *out_registration,
+@@ -1399,6 +1411,27 @@ mm_sit_message_parse_registration (const MMSitMessage *message,
+     out_registration->state            = reg.state;
+     out_registration->radio_technology = reg.radio_technology;
+     out_registration->registered       = reg.registered ? TRUE : FALSE;
++
++    /*
++     * The codec does not model the three 5G NSA bytes, so read them here.
++     * They come from ProtocolNetDataRegStateAdapter in the vendor's own
++     * vendor.radio.protocol.sit.stream.so -- IsEndcAvailable(),
++     * IsDcNrRestricted() and IsNrAvailable() each compare one byte against 1.
++     * Two sanity checks pin the offsets down, because the adapter counts from
++     * the payload while 'data' here is the whole frame: GetImsVops() reads the
++     * frame's byte 45, which is the VoPS this function already reports, and
++     * getChannelNumber() reads a 32-bit field twelve past its own base, which
++     * lands on the serving cell's EARFCN (900 on a B2 carrier, 3200 on B7).
++     */
++    out_registration->endc_available  = FALSE;
++    out_registration->dcnr_restricted = FALSE;
++    out_registration->nr_available    = FALSE;
++    if (data && len >= REG_NR_MIN_LEN) {
++        out_registration->endc_available  = (data[REG_ENDC_AVAILABLE] == 1);
++        out_registration->dcnr_restricted = (data[REG_DCNR_RESTRICTED] == 1);
++        out_registration->nr_available    = (data[REG_NR_AVAILABLE] == 1);
++    }
++
+     switch (reg.vops_support) {
+     case SAMSUNG_SIT_VOPS_SUPPORT_SUPPORTED:
+         out_registration->vops_support = MM_SIT_VOPS_SUPPORT_SUPPORTED;
+diff --git a/src/plugins/samsung-sit/mm-sit-protocol.h b/src/plugins/samsung-sit/mm-sit-protocol.h
+index b558d3e..9e76827 100644
+--- a/src/plugins/samsung-sit/mm-sit-protocol.h
++++ b/src/plugins/samsung-sit/mm-sit-protocol.h
+@@ -329,6 +329,17 @@ typedef struct {
+     guint8   radio_technology;
+     gboolean registered;
+     MMSitVopsSupport vops_support;
++    /*
++     * What the serving cell offers for 5G NSA. 'endc_available' is the network
++     * advertising EN-DC -- the UE may add a secondary NR carrier here -- and
++     * 'dcnr_restricted' the network withdrawing it for this subscriber.
++     * 'nr_available' is the CP's own summary of the two. None of them says an
++     * NR carrier is actually up; that only shows in the signal report's RAT
++     * mask, and only once there is data to carry.
++     */
++    gboolean endc_available;
++    gboolean dcnr_restricted;
++    gboolean nr_available;
+ } MMSitRegistration;
+ 
+ /* Reported for a cause the CP says it does not have. */
