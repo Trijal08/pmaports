@@ -1,0 +1,215 @@
+Trim the elementary-file pass to what stock actually reads
+
+r49's pass read every record of every file, which overshot stock badly --
+206 SIM_IO exchanges on ch 0xf5 against its 121, and 190 against 167 on 0xf6:
+
+    cmd=0xb2 file=0x6f3c   stock 0   ours 31
+    cmd=0xb2 file=0x6f3b   stock 0   ours 25
+    cmd=0xc0 file=0x6f07   stock 0   ours 4     (the plugin reads IMSI itself)
+
+Stock reads each file once -- GET_RESPONSE plus a single read -- and reads
+every record only of the operator-name tables, EF_PNN (0x6fc5) and EF_OPL
+(0x6fc6), which is where the bulk of its volume comes from.
+
+So read_ef() gains a data-pass cap, the list marks those two as full reads, and
+the nine files the plugin reads for its own purposes (IMSI, MSISDN, 0x6f46,
+0x6f60, 0x6f61, 0x6f3e, 0x6f3f, 0x6fad, 0x6fb7) come out of it: listing them
+read each one twice where stock reads it once. 37 files becomes 29.
+
+Measured on hardware at r50: ch 0xf5 206 -> 123 against stock's 121, ch 0xf6
+190 -> 132 against 167.
+
+An earlier draft of this revision also stopped an IMS context claiming the data
+subscription, on the grounds that stock sends SET_PREFERRED_DATA_MODEM twice
+for a whole boot where we sent it seven times. That is reverted and not part of
+this patch: the `00` it removed is a frame stock does send, our `00` came from
+exactly that IMS-context claim, and the boot it shipped on registered neither
+stack. The frame count is still wrong and wants fixing from the other
+direction -- send stock's `00` then `01` once, deliberately -- rather than by
+removing a claim whose comment records a measurement behind it.
+
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -1115,6 +1115,14 @@
+     /* Transparent: bytes still to read. Records: the next record number. */
+     guint        remaining;
+     guint        next_record;
++    /*
++     * Stop after this many data passes, 0 meaning the whole file. The parity
++     * pass uses 1: stock issues GET_RESPONSE plus a single read for most files
++     * and reads every record only of the name tables, so reading everything
++     * overshot it -- 31 records of EF_SMS (0x6f3c) and 25 of 0x6f3b where
++     * stock reads none at all.
++     */
++    guint        max_data_passes;
+ } ReadEfContext;
+ 
+ static void
+@@ -1231,6 +1239,13 @@
+         sim_io.command = MM_SIT_SIM_IO_GET_RESPONSE;
+         sim_io.p3      = 15;
+         ready = (GAsyncReadyCallback) read_ef_info_ready;
++    } else if (ctx->max_data_passes && ctx->passes > ctx->max_data_passes) {
++        /* Capped: hand back what came in rather than failing. */
++        g_task_return_pointer (task,
++                               g_byte_array_free_to_bytes (g_steal_pointer (&ctx->data)),
++                               (GDestroyNotify) g_bytes_unref);
++        g_object_unref (task);
++        return;
+     } else if (!ctx->remaining) {
+         g_task_return_pointer (task,
+                                g_byte_array_free_to_bytes (g_steal_pointer (&ctx->data)),
+@@ -1273,14 +1288,15 @@
+     mm_sit_client_command (self, request, 10, g_task_get_cancellable (task), ready, task);
+ }
+ 
+-void
+-mm_sit_client_read_ef (MMSitClient        *self,
+-                       guint16             file_id,
+-                       const guint16      *path,
+-                       guint               path_len,
+-                       GCancellable       *cancellable,
+-                       GAsyncReadyCallback callback,
+-                       gpointer            user_data)
++static void
++read_ef_capped (MMSitClient        *self,
++                guint16             file_id,
++                const guint16      *path,
++                guint               path_len,
++                guint               max_data_passes,
++                GCancellable       *cancellable,
++                GAsyncReadyCallback callback,
++                gpointer            user_data)
+ {
+     ReadEfContext *ctx;
+     GTask         *task;
+@@ -1296,6 +1312,7 @@
+     ctx = g_slice_new0 (ReadEfContext);
+     ctx->file_id  = file_id;
+     ctx->path_len = path_len;
++    ctx->max_data_passes = max_data_passes;
+     memcpy (ctx->path, path, path_len * sizeof (guint16));
+     ctx->data = g_byte_array_new ();
+     g_task_set_task_data (task, ctx, (GDestroyNotify) read_ef_context_free);
+@@ -1303,6 +1320,18 @@
+     read_ef_step (task);
+ }
+ 
++void
++mm_sit_client_read_ef (MMSitClient        *self,
++                       guint16             file_id,
++                       const guint16      *path,
++                       guint               path_len,
++                       GCancellable       *cancellable,
++                       GAsyncReadyCallback callback,
++                       gpointer            user_data)
++{
++    read_ef_capped (self, file_id, path, path_len, 0, cancellable, callback, user_data);
++}
++
+ GBytes *
+ mm_sit_client_read_ef_finish (MMSitClient  *self,
+                               GAsyncResult *res,
+@@ -3729,6 +3758,7 @@
+      *
+      * A bearer connect names it as its own first step, so this is only for the
+      * paths that do not go through one. A no-op when the CP already knows.
++     *
+      */
+     if (self->priv->cp)
+         mm_sit_cp_prefer_data_stack (self->priv->cp, self->priv->stack);
+@@ -4203,12 +4233,35 @@
+  * Nothing is kept. The files the plugin actually uses are read by the code that
+  * needs them; this exists so the CP sees the traffic it sees on stock.
+  */
+-static const guint16 boot_ef_files[] = {
+-    0x2fe2, 0x6f40, 0x6fc9, 0x6fad, 0x6fca, 0x6f11, 0x6fcb, 0x6f13,
+-    0x6f46, 0x6fcd, 0x6fc5, 0x6fc6, 0x6f38, 0x6f16, 0x6f15, 0x6f3e,
+-    0x6f3f, 0x6f60, 0x6f61, 0x6f62, 0x6fd9, 0x6f7b, 0x6f05, 0x2f05,
+-    0x6f3c, 0x6fe5, 0x6f43, 0x6fe7, 0x6fc7, 0x6f14, 0x6f18, 0x6f3b,
+-    0x6f02, 0x6f04, 0x6f03, 0x6f07, 0x6f09,
++/*
++ * Stock reads each of these once: GET_RESPONSE plus a single read. Only the
++ * operator-name tables are read record by record, which is where the bulk of
++ * its SIM_IO volume comes from (EF_OPL 50 reads, EF_PNN 20-49).
++ *
++ * Reading every record of everything overshot stock badly -- 206 exchanges
++ * against its 121, with 31 records of EF_SMS (0x6f3c) and 25 of 0x6f3b that
++ * stock never reads at all -- so `records` picks the two that want the whole
++ * file and the rest stop after one pass.
++ *
++ * Files the plugin reads for its own purposes are deliberately absent: 0x6f07
++ * (IMSI), 0x6f40 (MSISDN), 0x6f46, 0x6f60, 0x6f61, 0x6f3e, 0x6f3f, 0x6fad and
++ * 0x6fb7 are read by the code that needs them, and listing them here read each
++ * one twice where stock reads it once.
++ */
++typedef struct {
++    guint16  file_id;
++    gboolean records; /* read every record, not just the first pass */
++} BootEf;
++
++static const BootEf boot_ef_files[] = {
++    { 0x2fe2, FALSE }, { 0x6fc9, FALSE }, { 0x6fca, FALSE }, { 0x6f11, FALSE },
++    { 0x6fcb, FALSE }, { 0x6f13, FALSE }, { 0x6fcd, FALSE },
++    { 0x6fc5, TRUE  }, { 0x6fc6, TRUE  },
++    { 0x6f38, FALSE }, { 0x6f16, FALSE }, { 0x6f15, FALSE }, { 0x6f62, FALSE },
++    { 0x6fd9, FALSE }, { 0x6f7b, FALSE }, { 0x6f05, FALSE }, { 0x2f05, FALSE },
++    { 0x6f3c, FALSE }, { 0x6fe5, FALSE }, { 0x6f43, FALSE }, { 0x6fe7, FALSE },
++    { 0x6fc7, FALSE }, { 0x6f14, FALSE }, { 0x6f18, FALSE }, { 0x6f3b, FALSE },
++    { 0x6f02, FALSE }, { 0x6f04, FALSE }, { 0x6f03, FALSE }, { 0x6f09, FALSE },
+ };
+ 
+ typedef struct {
+@@ -4236,16 +4289,17 @@
+ {
+     MMSitClient   *self = g_task_get_source_object (task);
+     BootEfContext *ctx = g_task_get_task_data (task);
+-    guint16        file_id;
++    const BootEf  *ef;
+ 
+     if (ctx->index >= G_N_ELEMENTS (boot_ef_files)) {
+         g_task_return_boolean (task, TRUE);
+         g_object_unref (task);
+         return;
+     }
+-    file_id = boot_ef_files[ctx->index++];
+-    mm_sit_client_read_ef (self, file_id, NULL, 0, g_task_get_cancellable (task),
+-                           (GAsyncReadyCallback) boot_ef_ready, task);
++    ef = &boot_ef_files[ctx->index++];
++    read_ef_capped (self, ef->file_id, NULL, 0, ef->records ? 0 : 1,
++                    g_task_get_cancellable (task),
++                    (GAsyncReadyCallback) boot_ef_ready, task);
+ }
+ 
+ void
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -2424,11 +2424,12 @@
+         /*
+          * The elementary-file pass. One GET_RESPONSE each, every one refused
+          * with 6a82 as a card that lacks the file would, so read_ef() gives up
+-         * after a single exchange and the count here is the file count. A card
+-         * that *has* them answers 9000 and read_ef() then reads the records,
+-         * which is where stock's 121-167 SIM_IO exchanges come from.
++         * after a single exchange and the count here is the file count. On a
++         * card that has them, every file but the two operator-name tables stops
++         * after one data pass -- reading all records of all of them overshot
++         * stock by 85 exchanges.
+          */
+-#define BOOT_EF_FILES 37
++#define BOOT_EF_FILES 29
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+@@ -2438,10 +2439,7 @@
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+-        MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+-        MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+-        MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+-        MM_SIT_MESSAGE_SIM_IO,
++        MM_SIT_MESSAGE_SIM_IO, MM_SIT_MESSAGE_SIM_IO,
+         /*
+          * The UICC access-control probe that closes the boot batch: three
+          * opens by AID that the card refuses, one with no AID that yields a

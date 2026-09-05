@@ -1,0 +1,219 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-ims.c b/src/plugins/samsung-sit/mm-sit-ims.c
+index 0e452df..ea36801 100644
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -47,6 +47,15 @@
+  * provisioning attempts per lifecycle; the CP manages SIP retries itself. */
+ #define MAX_PROVISIONING_ATTEMPTS 3
+ 
++/*
++ * How long a RAT that cannot carry IMS is tolerated before the stack is torn
++ * down. On a dual-SIM device the two stacks share the radio, so the arbiter
++ * parks this one on UMTS for twenty to forty seconds at a time while the other
++ * SIM transmits. Re-registering costs about ten seconds, and the phone cannot
++ * be called for any of them, so a dip that short is worth sitting out.
++ */
++#define RAT_GRACE_SECS 60
++
+ typedef enum {
+     IMS_STATE_STOPPED,
+     IMS_STATE_STARTING,
+@@ -83,6 +92,16 @@ struct _MMSitImsPrivate {
+     /* Remembered so learning the operator, or the radio registering, can start
+      * what the RAT alone could not. */
+     MMModemAccessTechnology last_act;
++    /*
++     * The radio technology the registration response reports, which is the one
++     * the network actually granted. `last_act` comes from the signal
++     * indication's RAT mask, and that is a measurement: on a dual-SIM device it
++     * loses its LTE bit for as long as the arbiter has the radio parked on the
++     * other stack, leaving only a WCDMA neighbour behind. That reads as a
++     * reselection to UMTS and it is not one -- the UE is still EPS-registered
++     * throughout -- so the measurement may add a RAT here but never remove one.
++     */
++    guint8                  reg_rat;
+     /* The modem's own registration -- the radio being up and settled. Distinct
+      * from `registered` below, which is the CP's IMS/SIP registration. */
+     gboolean                net_registered;
+@@ -102,6 +121,8 @@ struct _MMSitImsPrivate {
+ 
+     GCancellable *cancellable;
+     guint         retry_id;
++    /* Pending teardown for a RAT that cannot carry IMS; see RAT_GRACE_SECS. */
++    guint         rat_grace_id;
+     guint         provisioning_failures;
+ };
+ 
+@@ -195,6 +216,13 @@ act_supports_ims (MMModemAccessTechnology act)
+                      MM_MODEM_ACCESS_TECHNOLOGY_5GNR));
+ }
+ 
++static gboolean
++reg_rat_supports_ims (guint8 rat)
++{
++    return rat == MM_SIT_REGISTRATION_RAT_LTE ||
++           rat == MM_SIT_REGISTRATION_RAT_NR5G;
++}
++
+ static void
+ clear_retry (MMSitIms *self)
+ {
+@@ -204,6 +232,15 @@ clear_retry (MMSitIms *self)
+     }
+ }
+ 
++static void
++clear_rat_grace (MMSitIms *self)
++{
++    if (self->priv->rat_grace_id) {
++        g_source_remove (self->priv->rat_grace_id);
++        self->priv->rat_grace_id = 0;
++    }
++}
++
+ static gboolean
+ retry_cb (MMSitIms *self)
+ {
+@@ -1027,18 +1064,48 @@ indication_cb (MMSitClient        *client,
+     }
+ }
+ 
++static gboolean
++rat_grace_expired (MMSitIms *self)
++{
++    self->priv->rat_grace_id = 0;
++    mm_obj_dbg (self, "IMS still has no supporting RAT after %u s; stopping IMS",
++                (guint) RAT_GRACE_SECS);
++    mm_sit_ims_stop (self);
++    return G_SOURCE_REMOVE;
++}
++
+ void
+ mm_sit_ims_update_access_tech (MMSitIms                *self,
+                                MMModemAccessTechnology  act)
+ {
+     gboolean possible;
++    gboolean rat_ok;
++    gboolean vops_ok;
+ 
+     g_return_if_fail (MM_IS_SIT_IMS (self));
+ 
+-    possible = act_supports_ims (act) &&
+-               self->priv->vops_support != MM_SIT_VOPS_SUPPORT_UNSUPPORTED;
++    rat_ok = act_supports_ims (act) || reg_rat_supports_ims (self->priv->reg_rat);
++    vops_ok = self->priv->vops_support != MM_SIT_VOPS_SUPPORT_UNSUPPORTED;
++    possible = rat_ok && vops_ok;
+     self->priv->last_act = act;
+ 
++    if (possible && self->priv->rat_grace_id) {
++        clear_rat_grace (self);
++        /*
++         * The RAT came back inside the grace period, so the stack we declined
++         * to tear down is the one we still want. The CP may have let the SIP
++         * registration go while we were away, though, and nothing else ever
++         * asks for it again -- so in that case stop here and let the restart
++         * below run the provisioning sequence from the top.
++         */
++        if (self->priv->state == IMS_STATE_STARTED && !self->priv->registered) {
++            mm_obj_dbg (self, "IMS lost its registration off-RAT; restarting");
++            mm_sit_ims_stop (self);
++        } else {
++            mm_obj_dbg (self, "supporting RAT returned within the grace period; keeping IMS");
++        }
++    }
++
+     if (possible && self->priv->state == IMS_STATE_STOPPED) {
+         ensure_device_identity (self);
+         if (!self->priv->have_identity) {
+@@ -1064,9 +1131,27 @@ mm_sit_ims_update_access_tech (MMSitIms                *self,
+         return;
+     }
+ 
+-    if (!possible && self->priv->state != IMS_STATE_STOPPED) {
+-        mm_obj_dbg (self, "IMS unavailable on this RAT or network; stopping IMS");
++    if (possible || self->priv->state == IMS_STATE_STOPPED)
++        return;
++
++    /*
++     * Only a missing RAT is worth waiting out. VoPS is the network telling us
++     * there is no IMS voice service here, which is a statement and not a gap in
++     * our own measurements, so honour it at once.
++     */
++    if (!vops_ok) {
++        clear_rat_grace (self);
++        mm_obj_dbg (self, "IMS unavailable on this network; stopping IMS");
+         mm_sit_ims_stop (self);
++        return;
++    }
++
++    if (!self->priv->rat_grace_id) {
++        mm_obj_dbg (self, "IMS unavailable on this RAT; stopping IMS in %u s unless it returns",
++                    (guint) RAT_GRACE_SECS);
++        self->priv->rat_grace_id = g_timeout_add_seconds (RAT_GRACE_SECS,
++                                                          (GSourceFunc) rat_grace_expired,
++                                                          self);
+     }
+ }
+ 
+@@ -1100,6 +1185,8 @@ mm_sit_ims_update_registration (MMSitIms                *self,
+                                  const MMSitRegistration *registration)
+ {
+     MMSitVopsSupport support;
++    guint8           rat;
++    gboolean         changed = FALSE;
+ 
+     g_return_if_fail (MM_IS_SIT_IMS (self));
+     g_return_if_fail (registration != NULL);
+@@ -1109,14 +1196,21 @@ mm_sit_ims_update_registration (MMSitIms                *self,
+      * while MM core still reports the previous registered state. */
+     if (!registration->registered)
+         mm_sit_ims_set_registered (self, FALSE);
++    rat = registration->registered ? registration->radio_technology : 0;
++    if (self->priv->reg_rat != rat) {
++        self->priv->reg_rat = rat;
++        changed = TRUE;
++    }
+     support = registration->registered ? registration->vops_support : MM_SIT_VOPS_SUPPORT_UNKNOWN;
+     if (self->priv->vops_support != support) {
+         self->priv->vops_support = support;
++        changed = TRUE;
+         mm_obj_info (self, "network IMS voice support (VoPS): %s",
+                       support == MM_SIT_VOPS_SUPPORT_SUPPORTED ? "supported" :
+                       support == MM_SIT_VOPS_SUPPORT_UNSUPPORTED ? "unsupported" : "unknown");
+-        mm_sit_ims_update_access_tech (self, self->priv->last_act);
+     }
++    if (changed)
++        mm_sit_ims_update_access_tech (self, self->priv->last_act);
+     /* MM may already be REGISTERED through CS, so a newly registered packet
+      * service need not produce another modem-state notification. */
+     mm_sit_ims_set_registered (self, registration->registered);
+@@ -1233,6 +1327,7 @@ mm_sit_ims_stop (MMSitIms *self)
+     g_return_if_fail (MM_IS_SIT_IMS (self));
+ 
+     clear_retry (self);
++    clear_rat_grace (self);
+     self->priv->provisioning_failures = 0;
+     if (self->priv->cancellable) {
+         g_cancellable_cancel (self->priv->cancellable);
+@@ -1308,6 +1403,7 @@ dispose (GObject *object)
+     MMSitIms *self = MM_SIT_IMS (object);
+ 
+     clear_retry (self);
++    clear_rat_grace (self);
+     if (self->priv->cancellable) {
+         g_cancellable_cancel (self->priv->cancellable);
+         g_clear_object (&self->priv->cancellable);
+diff --git a/src/plugins/samsung-sit/mm-sit-protocol.h b/src/plugins/samsung-sit/mm-sit-protocol.h
+index b3e99a5..b558d3e 100644
+--- a/src/plugins/samsung-sit/mm-sit-protocol.h
++++ b/src/plugins/samsung-sit/mm-sit-protocol.h
+@@ -314,6 +314,9 @@ typedef struct {
+ /* The registration responses' radio-technology numbering (distinct from the
+  * scan's, see MM_SIT_SCAN_RAT_LTE). */
+ #define MM_SIT_REGISTRATION_RAT_LTE 14
++/* Standalone 5G. An NSA carrier stays registered as LTE, which is what IMS
++ * cares about anyway: the anchor is the LTE leg either way. */
++#define MM_SIT_REGISTRATION_RAT_NR5G 20
+ 
+ typedef enum {
+     MM_SIT_VOPS_SUPPORT_UNKNOWN,

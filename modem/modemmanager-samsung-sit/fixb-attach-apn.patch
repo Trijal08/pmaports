@@ -1,0 +1,122 @@
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index a87d4855..cbcd8a39 100644
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -947,6 +947,36 @@ handle_registration_failed (MMBroadbandModemSamsungSit *self,
+         return;
+     }
+ 
++    /*
++     * Cause 10 (implicitly detached) on the home PLMN is the CP's own attach
++     * giving up, not a network decision -- it makes its burst of attempts and
++     * parks, and the radio cycle below is what restarts it. The cycle spends
++     * the attach APN the CP keeps until told otherwise, which is fine while it
++     * is retrying the same attach, but once the retries are spent the CP parks
++     * with the APN gone and the next attach fails with cause 19. Re-apply it
++     * when the radio comes back up so the parked state still carries one.
++     */
++    if (failure.cause == MM_SIT_REJECT_CAUSE_IMPLICITLY_DETACHED &&
++        self->priv->reject_retries == REJECT_RETRY_MAX - 1 &&
++        self->priv->initial_eps_bearer_settings) {
++        MMBearerProperties *properties = g_object_ref (self->priv->initial_eps_bearer_settings);
++        MMSitApnAuth        auth;
++        g_autoptr(GError)   auth_error = NULL;
++        MMSitClient        *client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
++
++        if (client && mm_sit_apn_auth_from_properties (properties, &auth, &auth_error)) {
++            mm_obj_dbg (self, "re-applying the initial attach APN after the last attach retry");
++            mm_sit_client_set_initial_attach_apn (
++                client, mm_bearer_properties_get_apn (properties) ?: "",
++                mm_sit_pdp_type_from_ip_family (mm_bearer_properties_get_ip_type (properties)),
++                &auth,
++                NULL,
++                NULL,
++                NULL);
++        }
++        g_object_unref (properties);
++    }
++
+     delay = reject_retry_delays_secs[self->priv->reject_retries];
+     mm_obj_dbg (self, "scheduling attach retry in %u s", delay);
+     self->priv->reject_retry_id = g_timeout_add_seconds (delay,
+@@ -2590,11 +2620,14 @@ power_up_radio (GTask *task)
+ }
+ 
+ static void
+-power_up_carrier_config_ready (MMBroadbandModemSamsungSit *self,
+-                               GAsyncResult               *res,
+-                               GTask                      *task)
++attach_apn_from_settings_ready (MMBroadbandModemSamsungSit *self,
++                                GAsyncResult               *res,
++                                GTask                      *task)
+ {
+-    g_autoptr(GError) error = NULL;
++    g_autoptr(MMBearerProperties) properties = NULL;
++    MMSitApnAuth                  auth;
++    g_autoptr(GError)             error = NULL;
++    MMSitClient                  *client;
+ 
+     if (!mm_broadband_modem_samsung_sit_ensure_carrier_config_finish (self, res, &error))
+         mm_obj_warn (self, "couldn't provision carrier configuration before radio-on: %s",
+@@ -2608,18 +2641,48 @@ power_up_carrier_config_ready (MMBroadbandModemSamsungSit *self,
+      * policy.
+      */
+     if (!self->priv->initial_eps_bearer_settings) {
+-        MMSitApnAuth  auth = { 0 };
+-        MMSitClient  *client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
++        MMSitApnAuth auth0 = { 0 };
+ 
++        client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+         if (client) {
+             mm_obj_dbg (self, "no initial attach APN configured; letting the network choose");
+-            mm_sit_client_set_initial_attach_apn (client, "", MM_SIT_PDP_TYPE_IPV4V6, &auth, NULL,
++            mm_sit_client_set_initial_attach_apn (client, "", MM_SIT_PDP_TYPE_IPV4V6, &auth0, NULL,
+                                                   (GAsyncReadyCallback) default_attach_apn_ready,
+                                                   task);
+             return;
+         }
+     }
+-    power_up_radio (task);
++
++    /*
++     * A configured attach APN is only meaningful if it is still in force when
++     * the radio goes on. The CP keeps it until told otherwise, but it is lost
++     * with every CP re-init, and the modem can be re-enabled with the radio
++     * already on -- the power_up path above never runs again for it. Re-send
++     * it before the radio starts searching, so the first attach carries the
++     * APN. Without this the CP attaches with none and the ESM piggyback fails
++     * (3GPP cause 19), leaving no default bearer for SETUP_DATA_CALL to reuse
++     * (cause 133).
++     */
++    properties = g_object_ref (self->priv->initial_eps_bearer_settings);
++    if (!mm_sit_apn_auth_from_properties (properties, &auth, &error)) {
++        mm_obj_warn (self, "couldn't re-apply the initial attach APN: %s", error->message);
++        power_up_radio (task);
++        return;
++    }
++    client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
++    if (!client) {
++        power_up_radio (task);
++        return;
++    }
++    mm_obj_dbg (self, "re-applying initial attach APN '%s' before radio-on",
++                mm_bearer_properties_get_apn (properties) ?: "");
++    mm_sit_client_set_initial_attach_apn (
++        client, mm_bearer_properties_get_apn (properties) ?: "",
++        mm_sit_pdp_type_from_ip_family (mm_bearer_properties_get_ip_type (properties)),
++        &auth,
++        NULL,
++        (GAsyncReadyCallback) default_attach_apn_ready,
++        task);
+ }
+ 
+ static void
+@@ -2635,7 +2700,7 @@ power_up_boot_config_ready (MMSitClient  *client,
+         mm_obj_warn (self, "couldn't send boot configuration before radio-on: %s",
+                      error->message);
+     mm_broadband_modem_samsung_sit_ensure_carrier_config (
+-        self, (GAsyncReadyCallback) power_up_carrier_config_ready, task);
++        self, (GAsyncReadyCallback) attach_apn_from_settings_ready, task);
+ }
+ 
+ static void

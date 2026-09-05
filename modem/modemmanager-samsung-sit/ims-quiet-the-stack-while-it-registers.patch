@@ -1,0 +1,163 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Fri, 7 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: stop talking to a stack that is registering IMS
+
+Android's grant-to-registration interval is 0.7-2.5 s on all ten stack-boots
+of the 2026-11-06 captures, and its IMS SETUP is answered in 0.24-2.52 s.
+Our Fizz stack already sits inside both. Telus does not: 13.0 s and 14.3 s
+on two boots, with the stack completely silent throughout -- we finish
+pushing 50 ms after the grant and nothing moves either way until the
+registration indication lands.
+
+Two things we put on that stack in exactly that window, and Android does
+not:
+
+  0x0740 SET_PREFERRED_DATA_MODEM.  Android sends it two or three times at
+  3.6-7.2 s and never again -- in particular never once an IMS context
+  exists.  We sent it as the unconditional first step of every bearer
+  connect, so a connect arriving after the IMS grant re-announced a
+  preference the CP already held, 50 ms after that grant, both boots.  It
+  is now sent on a change only, which is what the other sender,
+  mm_sit_cp_prefer_data_stack(), has always done.
+
+  0x0955 GET_NITZ_TIME.  Android never sends it at all.  We sent one per
+  stack about two seconds after each grant, because the Time interface
+  asked the CP on demand.  It no longer needs to: the CP pushes
+  NITZ_TIME_RECEIVED (0x0905) on every arrival, handle_nitz_time() already
+  parses it, and it now keeps the value so both vfuncs can be answered from
+  it.  The query stays as the fallback for a CP that has not pushed one yet.
+
+Neither is proven to cause the wait -- the captures show only that the
+silence begins at the 0x0740 -- so this is the experiment that decides it.
+If the interval does not move, the next suspects are the messages Android
+sends in that window and we never do: 0x0605, 0x0c14, 0x0d0b and 0x0d62.
+diff -ruN mm68/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c f72/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-06 23:23:03.686346289 -0500
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-06 23:21:09.719397330 -0500
+@@ -90,6 +90,11 @@
+      * is what load reports, and in turn what the core compares a new request
+      * against to decide whether it is a change worth a power cycle. */
+     MMBearerProperties *initial_eps_bearer_settings;
++    /* The last network time the CP pushed, so the Time interface can be
++     * answered without asking for one. */
++    MMSitNitzTime        nitz;
++    gboolean             have_nitz;
++
+     /* ims.db, cached from the carrier-config mapping at construction: the
+      * pre-radio-on path needs the carrier's APN list from it, and by then the
+      * mapping property is no longer convenient to re-derive. */
+@@ -809,6 +814,10 @@
+         return;
+     }
+     mm_obj_dbg (self, "CP pushed a network time: %s", iso8601);
++    /* Keep it: the Time interface is then answered from here rather than by
++     * asking the CP, which is what stock does. See modem_time_load_network_time(). */
++    self->priv->nitz = time;
++    self->priv->have_nitz = TRUE;
+     mm_iface_modem_time_update_network_time (MM_IFACE_MODEM_TIME (self), iso8601);
+ 
+     tz = mm_network_timezone_new ();
+@@ -6256,6 +6265,26 @@
+     GTask                      *task;
+ 
+     task = g_task_new (iface, NULL, callback, user_data);
++
++    /*
++     * Answer from the last pushed NITZ when there is one. The CP sends
++     * NITZ_TIME_RECEIVED (0x0905) on every arrival and handle_nitz_time()
++     * keeps it, so the query adds nothing but a frame -- and stock never
++     * sends GET_NITZ_TIME at all, where we were putting one on each stack a
++     * couple of seconds after its IMS grant, inside the window stock uses to
++     * register.
++     */
++    if (self->priv->have_nitz) {
++        g_autofree gchar *iso8601 = mm_sit_nitz_time_to_iso8601 (&self->priv->nitz, &error);
++
++        if (iso8601) {
++            g_task_return_pointer (task, g_steal_pointer (&iso8601), g_free);
++            g_object_unref (task);
++            return;
++        }
++        g_clear_error (&error);
++    }
++
+     client = mm_broadband_modem_samsung_sit_peek_client (self, &error);
+     if (!client) {
+         g_task_return_error (task, error);
+@@ -6308,6 +6337,19 @@
+     GTask                      *task;
+ 
+     task = g_task_new (iface, NULL, callback, user_data);
++
++    /* As modem_time_load_network_time(): the pushed NITZ carries the offset
++     * too, so the query is only for a CP that has not pushed one yet. */
++    if (self->priv->have_nitz) {
++        MMNetworkTimezone *tz = mm_network_timezone_new ();
++
++        mm_network_timezone_set_offset (tz, self->priv->nitz.timezone_quarter_hours * 15);
++        mm_network_timezone_set_dst_offset (tz, self->priv->nitz.daylight_saving_hours * 60);
++        g_task_return_pointer (task, tz, g_object_unref);
++        g_object_unref (task);
++        return;
++    }
++
+     client = mm_broadband_modem_samsung_sit_peek_client (self, &error);
+     if (!client) {
+         g_task_return_error (task, error);
+diff -ruN mm68/src/plugins/samsung-sit/mm-sit-client.c f72/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-06 23:23:03.690398809 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-06 23:18:12.783117537 -0500
+@@ -3526,6 +3526,23 @@
+         return;
+     }
+ 
++    /*
++     * Naming the data stack again when the CP already holds that answer is
++     * not free. Stock sends SET_PREFERRED_DATA_MODEM two or three times, all
++     * of them inside the first seven seconds of a boot, and never again --
++     * in particular never once an IMS context exists. We sent it as the
++     * unconditional first step of every bearer connect, which on both
++     * captured boots put one on stack 0 within 50 ms of that stack's IMS
++     * grant, at the head of a 13-14 s wait for a registration stock answers
++     * in 0.7-2.5 s.
++     *
++     * So it is sent on a change and skipped otherwise, which is what
++     * mm_sit_cp_prefer_data_stack() has always done for the other sender.
++     */
++    if (ctx->step == CONNECT_STEP_PREFERRED_MODEM &&
++        mm_sit_cp_data_stack_is (self->priv->cp, self->priv->stack))
++        ctx->step++;
++
+     /* The IMS context is the attach context; re-pointing it would tear down
+      * the very PDN this connect is for. */
+     if (ctx->cp && ctx->step == CONNECT_STEP_ATTACH_APN)
+diff -ruN mm68/src/plugins/samsung-sit/mm-sit-cp.c f72/src/plugins/samsung-sit/mm-sit-cp.c
+--- a/src/plugins/samsung-sit/mm-sit-cp.c	2026-11-06 23:23:03.681237939 -0500
++++ b/src/plugins/samsung-sit/mm-sit-cp.c	2026-11-06 23:18:12.782917715 -0500
+@@ -186,6 +186,13 @@
+     self->data_pref = (gint) stack;
+ }
+ 
++/* Whether the CP has already been told that @stack owns mobile data. */
++gboolean
++mm_sit_cp_data_stack_is (MMSitCp *self, guint stack)
++{
++    return self && stack < 2 && self->data_pref == (gint) stack;
++}
++
+ static void
+ prepare_complete (MMSitCp *self, const GError *error)
+ {
+diff -ruN mm68/src/plugins/samsung-sit/mm-sit-cp.h f72/src/plugins/samsung-sit/mm-sit-cp.h
+--- a/src/plugins/samsung-sit/mm-sit-cp.h	2026-11-06 23:23:03.681261849 -0500
++++ b/src/plugins/samsung-sit/mm-sit-cp.h	2026-11-06 23:18:12.782939065 -0500
+@@ -26,6 +26,9 @@
+ void mm_sit_cp_forget_sim_slot_status (MMSitCp *self);
+ 
+ void mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack);
++
++/* Whether the CP already believes @stack owns mobile data. */
++gboolean mm_sit_cp_data_stack_is (MMSitCp *self, guint stack);
+ void mm_sit_cp_note_data_stack   (MMSitCp *self, guint stack);
+ gboolean mm_sit_cp_data_reserved (MMSitCp *self, guint8 cid);
+ void mm_sit_cp_commit_data (MMSitCp *self, guint8 cid);

@@ -1,0 +1,150 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-sit-cp.c
+--- a/src/plugins/samsung-sit/mm-sit-cp.c
++++ b/src/plugins/samsung-sit/mm-sit-cp.c
+@@ -9,6 +9,7 @@
+     GHashTable *data_cids; /* CID -> 1 pending, 2 connected */
+     gboolean ready;
+     gboolean mapping_sent;
++    gint data_pref;        /* stack last named to the CP, -1 if never */
+     gboolean secondary_off;
+     guint attempts;
+     MMSitLogicalSlotMapping mapping[2];
+@@ -41,6 +42,7 @@
+ static void
+ mm_sit_cp_init (MMSitCp *self)
+ {
++    self->data_pref = -1;
+     self->data_cids = g_hash_table_new (g_direct_hash, g_direct_equal);
+ }
+ 
+@@ -101,6 +103,48 @@
+     return self->clients[stack];
+ }
+ 
++/*
++ * Name the stack that owns mobile data to the CP (SET_PREFERRED_DATA_MODEM).
++ *
++ * This has to be in place *before* anything asks for a PDN. The stock stack
++ * sends it twice during boot and re-asserts it seconds before it sets up its
++ * IMS context; we only ever sent it as the first step of a data bearer
++ * connect, which on a captured boot landed twelve seconds *after* the IMS
++ * SETUP_DATA_CALL had already been answered. That answer came back cause=0
++ * and empty -- no address, no P-CSCF -- where the stock stack's carries both
++ * on a byte-identical request, so the context was created without the CP
++ * having been told which stack the data subscription belongs to.
++ *
++ * Called before a PDN is asked for, so the CP is never asked to create a
++ * context without knowing who owns data. That is what the stock stack does --
++ * it re-asserts the preference three seconds before its own IMS context --
++ * and is why this is not done once at coordinator-ready time, where there is
++ * no live port to send on. A bearer connect names it separately as its own
++ * first step, so this is the IMS path's counterpart to that.
++ *
++ * Sent on stack 0's client because that is where the capture shows it, and
++ * the payload names the stack rather than the port it arrives on. Only on a
++ * change: the CP is told once and then left alone.
++ *
++ * Fire and forget. If the CP refuses there is nothing useful to do about it
++ * here, and the caller is in the middle of something else.
++ */
++void
++mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack)
++{
++    g_autoptr(GByteArray) request = NULL;
++
++    if (stack >= 2 || !self->clients[0] || self->data_pref == (gint) stack)
++        return;
++
++    request = mm_sit_request_new_set_preferred_modem (
++        mm_sit_client_next_token (self->clients[0]), stack);
++    if (!request)
++        return;
++    self->data_pref = (gint) stack;
++    mm_sit_client_command (self->clients[0], request, 10, NULL, NULL, NULL);
++}
++
+ static void
+ prepare_complete (MMSitCp *self, const GError *error)
+ {
+@@ -318,6 +362,11 @@
+         return FALSE;
+     }
+     g_hash_table_insert (self->data_cids, GUINT_TO_POINTER ((guint) cid), GUINT_TO_POINTER (1));
++    /*
++     * The preference is not sent from here. A bearer connect already names it
++     * as its own first step (CONNECT_STEP_PREFERRED_MODEM), so doing it on the
++     * claim as well put a second, unexpected frame ahead of that one.
++     */
+     return TRUE;
+ }
+ 
+diff --git a/src/plugins/samsung-sit/mm-sit-cp.h b/src/plugins/samsung-sit/mm-sit-cp.h
+--- a/src/plugins/samsung-sit/mm-sit-cp.h
++++ b/src/plugins/samsung-sit/mm-sit-cp.h
+@@ -19,6 +19,8 @@
+ /* Reservations cover pending connects as well as connected internet contexts.
+  * Internal IMS setup does not claim the internet-data preference. */
+ gboolean mm_sit_cp_claim_data (MMSitCp *self, guint stack, guint8 cid, GError **error);
++/* Name the stack that owns mobile data to the CP; a no-op if unchanged. */
++void mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack);
+ gboolean mm_sit_cp_data_reserved (MMSitCp *self, guint8 cid);
+ void mm_sit_cp_commit_data (MMSitCp *self, guint8 cid);
+ void mm_sit_cp_release_data (MMSitCp *self, guint8 cid);
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -3359,6 +3359,20 @@
+         return;
+     }
+ 
++    /*
++     * The CP has to know which stack owns the data subscription before it is
++     * asked to create a context. Captured on hardware: with the preference
++     * still unsent, this call was answered cause=0 and empty -- no assigned
++     * address, no P-CSCF -- where the stock stack's answer to a byte-identical
++     * request carries both. The stock stack re-asserts the preference seconds
++     * before its own IMS context, which is what this mirrors.
++     *
++     * A bearer connect names it as its own first step, so this is only for the
++     * paths that do not go through one. A no-op when the CP already knows.
++     */
++    if (self->priv->cp)
++        mm_sit_cp_prefer_data_stack (self->priv->cp, self->priv->stack);
++
+     ctx = g_new0 (SetupContext, 1);
+     ctx->cid = cid;
+     ctx->apn = g_strdup (apn);
+diff --git a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -8,6 +8,7 @@
+ #include <sys/socket.h>
+ #include <unistd.h>
+ 
++#include "mm-log.h"
+ #include "mm-port-serial-sit.h"
+ #include "mm-sit-carrier-config.h"
+ #include "mm-sit-client.h"
+@@ -3251,6 +3252,22 @@
+ {
+     g_test_init (&argc, &argv, NULL);
+ 
++    /*
++     * Without this, mm_obj_warn() and mm_obj_err() jump to a NULL
++     * log_backend: it is a static function pointer that only mm_log_setup()
++     * ever assigns, and _mm_log() filters debug messages out before reaching
++     * it but not warnings. Any code under test that warns therefore crashes
++     * the binary rather than printing, which is how a warning in the SIT
++     * timeout handler became a SIGSEGV in dsds/secondary-connect -- the one
++     * test that lets a command time out.
++     */
++    {
++        g_autoptr(GError) error = NULL;
++
++        if (!mm_log_setup ("ERR", NULL, FALSE, FALSE, FALSE, FALSE, &error))
++            g_error ("cannot set up logging: %s", error->message);
++    }
++
+     g_test_add_func ("/MM/sit/parse/header", test_parse_header);
+     g_test_add_func ("/MM/sit/parse/invalid", test_parse_invalid);
+     g_test_add_func ("/MM/sit/message-id/names", test_message_id_names);

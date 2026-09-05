@@ -1,0 +1,376 @@
+diff --git a/src/plugins/samsung-sit/mm-call-samsung-sit.c b/src/plugins/samsung-sit/mm-call-samsung-sit.c
+index ca47d97c..7385fd00 100644
+--- a/src/plugins/samsung-sit/mm-call-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-call-samsung-sit.c
+@@ -161,11 +161,22 @@ call_start (MMBaseCall          *_self,
+      * by number. */
+     if (call_is_ims (self)) {
+         mm_obj_dbg (self, "starting IMS call");
+-        mm_sit_ims_dial (mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem)),
+-                         mm_gdbus_call_get_number (MM_GDBUS_CALL (self)),
+-                         cancellable,
+-                         (GAsyncReadyCallback) ims_dial_ready,
+-                         task);
++        {
++            MMSitIms *ims = mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem));
++
++            mm_sit_ims_dial (ims,
++                             mm_gdbus_call_get_number (MM_GDBUS_CALL (self)),
++                             cancellable,
++                             (GAsyncReadyCallback) ims_dial_ready,
++                             task);
++            /*
++             * Android's order after the dial: the frame time, then the setup
++             * media state.  Both go out behind the dial request because the
++             * SIT port serialises commands.
++             */
++            mm_sit_ims_set_frame_time (ims);
++            mm_sit_ims_media_state (ims, MM_SIT_IMS_MEDIA_SETUP);
++        }
+         return;
+     }
+ 
+@@ -330,10 +341,77 @@ mm_call_samsung_sit_new (MMBaseModem     *modem,
+     return call;
+ }
+ 
++/*
++ * Tell the CP what the call's media is doing, at every state change.
++ *
++ * Android raises AIMS_MEDIA_STATE_IND throughout a call and the CP answers
++ * nothing; we never sent it at all.  Without it the CP publishes no CallInfo
++ * block, and the AoC -- which learns the call's codec, session and sample
++ * rate from that block and from nowhere else -- sits logging "Unknown codec
++ * type (0xffffffff)" for the whole call with the downlink silent.
++ *
++ * CS calls are left alone: this is an IMS message and the CP has no IMS
++ * session to describe for them.
++ */
++static void
++notify_media_state (MMCallSamsungSit *self)
++{
++    MMSitIms   *ims;
++    MMCallState state;
++    guint8      media;
++
++    if (!self->priv->modem || !call_is_ims (self))
++        return;
++
++    state = mm_gdbus_call_get_state (MM_GDBUS_CALL (self));
++    switch (state) {
++    case MM_CALL_STATE_DIALING:
++        /*
++         * Not from here: ModemManager marks the call dialing before the DIAL
++         * request goes out, so announcing it here describes a call's media to
++         * the CP before the call exists.  Android's order is DIAL, then the
++         * frame time, then the setup state -- so call_dial() sends it.
++         */
++        return;
++    case MM_CALL_STATE_RINGING_OUT:
++    case MM_CALL_STATE_RINGING_IN:
++        media = MM_SIT_IMS_MEDIA_ALERTING;
++        break;
++    case MM_CALL_STATE_ACTIVE:
++        media = MM_SIT_IMS_MEDIA_CONNECTED;
++        break;
++    case MM_CALL_STATE_TERMINATED:
++        media = MM_SIT_IMS_MEDIA_ENDED;
++        break;
++    default:
++        /* Nothing observed on the wire for the other states. */
++        return;
++    }
++
++    ims = mm_broadband_modem_samsung_sit_peek_ims (MM_BROADBAND_MODEM_SAMSUNG_SIT (self->priv->modem));
++    if (!ims)
++        return;
++
++    mm_sit_ims_media_state (ims, media);
++
++    /* Android gives the CP its RTP thresholds just after the connected state. */
++    if (media == MM_SIT_IMS_MEDIA_CONNECTED)
++        mm_sit_ims_set_rtp_threshold (ims);
++}
++
++static void
++state_changed (MMCallSamsungSit *self,
++               GParamSpec       *pspec,
++               gpointer          user_data)
++{
++    notify_media_state (self);
++}
++
+ static void
+ mm_call_samsung_sit_init (MMCallSamsungSit *self)
+ {
+     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, MM_TYPE_CALL_SAMSUNG_SIT, MMCallSamsungSitPrivate);
++    g_signal_connect (self, "notify::state", G_CALLBACK (state_changed), NULL);
+ }
+ 
+ static void
+diff --git a/src/plugins/samsung-sit/mm-port-serial-sit.c b/src/plugins/samsung-sit/mm-port-serial-sit.c
+index 064f0bb5..dc46cb71 100644
+--- a/src/plugins/samsung-sit/mm-port-serial-sit.c
++++ b/src/plugins/samsung-sit/mm-port-serial-sit.c
+@@ -1,6 +1,9 @@
+ /* SPDX-License-Identifier: GPL-2.0-or-later */
+ /* Copyright (C) 2026 The ModemManager authors */
+ 
++#include <ModemManager.h>
++#include <mm-errors-types.h>
++
+ #include "mm-log-object.h"
+ #include "mm-port-serial-sit.h"
+ 
+@@ -274,6 +277,53 @@ mm_port_serial_sit_command_finish (MMPortSerialSit  *self,
+     return g_task_propagate_pointer (G_TASK (res), error);
+ }
+ 
++static void
++indication_sent (MMPortSerialSit *self,
++                 GAsyncResult    *res,
++                 gpointer         user_data)
++{
++    g_autoptr(GByteArray)  discard = NULL;
++    g_autoptr(GError)      error = NULL;
++
++    discard = mm_port_serial_command_finish (MM_PORT_SERIAL (self), res, &error);
++    /*
++     * An indication is answered by nothing, so the serial layer always ends
++     * in a timeout.  That is the expected outcome, not a failure; anything
++     * else is worth a line.
++     */
++    if (error && !g_error_matches (error, MM_SERIAL_ERROR, MM_SERIAL_ERROR_RESPONSE_TIMEOUT))
++        mm_obj_dbg (self, "could not send SIT indication: %s", error->message);
++}
++
++/*
++ * Send a frame the CP will not answer.
++ *
++ * Indications the AP raises at the CP (AIMS_MEDIA_STATE_IND is the one we
++ * need) carry no token and get no response, so they must not go through
++ * mm_port_serial_sit_command(): that pushes the frame's token onto
++ * pending_tokens, and a token of zero there would swallow the matching of a
++ * later real response.  The write itself still happens immediately; only the
++ * wait is pointless, so it is given the shortest timeout the serial layer
++ * takes and its result is dropped.
++ */
++void
++mm_port_serial_sit_send_indication (MMPortSerialSit *self,
++                                    GByteArray      *frame)
++{
++    g_return_if_fail (MM_IS_PORT_SERIAL_SIT (self));
++    g_return_if_fail (frame != NULL);
++    g_return_if_fail (frame->len >= MM_SIT_HEADER_SIZE);
++
++    mm_port_serial_command (MM_PORT_SERIAL (self),
++                            frame,
++                            1,
++                            FALSE,
++                            FALSE,
++                            NULL,
++                            (GAsyncReadyCallback) indication_sent,
++                            NULL);
++}
++
+ void
+ mm_port_serial_sit_command (MMPortSerialSit     *self,
+                             GByteArray          *request,
+diff --git a/src/plugins/samsung-sit/mm-port-serial-sit.h b/src/plugins/samsung-sit/mm-port-serial-sit.h
+index f600db87..52bdb51f 100644
+--- a/src/plugins/samsung-sit/mm-port-serial-sit.h
++++ b/src/plugins/samsung-sit/mm-port-serial-sit.h
+@@ -46,6 +46,9 @@ guint mm_port_serial_sit_add_unsolicited_handler (MMPortSerialSit
+ void  mm_port_serial_sit_remove_unsolicited_handler (MMPortSerialSit *self,
+                                                       guint            handler_id);
+ 
++void          mm_port_serial_sit_send_indication (MMPortSerialSit *self,
++                                                 GByteArray      *frame);
++
+ void          mm_port_serial_sit_command        (MMPortSerialSit     *self,
+                                                  GByteArray          *request,
+                                                  guint32              timeout_seconds,
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index 90a2e9a2..9e1a83da 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -456,6 +456,15 @@ mm_sit_client_command (MMSitClient        *self,
+                                 task);
+ }
+ 
++/* Send a frame the CP does not answer; see the port layer for why. */
++void
++mm_sit_client_send_indication (MMSitClient *self,
++                               GByteArray  *frame)
++{
++    g_return_if_fail (MM_IS_SIT_CLIENT (self));
++    mm_port_serial_sit_send_indication (self->priv->port, frame);
++}
++
+ MMSitMessage *
+ mm_sit_client_command_finish (MMSitClient   *self,
+                               GAsyncResult  *res,
+diff --git a/src/plugins/samsung-sit/mm-sit-client.h b/src/plugins/samsung-sit/mm-sit-client.h
+index 0c445681..a909c23b 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.h
++++ b/src/plugins/samsung-sit/mm-sit-client.h
+@@ -87,6 +87,9 @@ void          mm_sit_client_command        (MMSitClient        *self,
+                                             GCancellable       *cancellable,
+                                             GAsyncReadyCallback callback,
+                                             gpointer            user_data);
++void     mm_sit_client_send_indication (MMSitClient *self,
++                                        GByteArray  *frame);
++
+ MMSitMessage *mm_sit_client_command_finish (MMSitClient        *self,
+                                             GAsyncResult       *res,
+                                             GError            **error);
+diff --git a/src/plugins/samsung-sit/mm-sit-ims.c b/src/plugins/samsung-sit/mm-sit-ims.c
+index b06d775d..ba0b5904 100644
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -754,6 +754,117 @@ send_simple (MMSitIms            *self,
+                            (GAsyncReadyCallback) send_ready, task);
+ }
+ 
++/*
++ * `MEDIA_STATE_IND` (0x0d30) -- tell the CP what the call's media is doing.
++ *
++ * Android raises this at every call-state change and the CP answers nothing.
++ * We never sent it, and the CP never published the CallInfo block the AoC
++ * waits on to learn the call's codec, which is why a call could connect
++ * perfectly and still carry no audio.  The state values are the ones observed
++ * on this hardware: setup 2, alerting 4, connected 0, ended 6.
++ */
++static void
++fire_and_forget_ready (MMSitClient  *client,
++                       GAsyncResult *res,
++                       gpointer      user_data)
++{
++    g_autoptr(MMSitMessage) response = NULL;
++    g_autoptr(GError)       error = NULL;
++    g_autofree gchar       *what = user_data;
++
++    response = mm_sit_client_command_finish (client, res, &error);
++    if (error)
++        mm_obj_dbg (client, "IMS %s failed: %s", what, error->message);
++}
++
++/*
++ * Send a request whose answer we do not act on.  These exist because Android
++ * sends them and the CP's media pipeline does not start without them being
++ * tried; nothing in ModemManager consumes the response.
++ */
++static void
++send_media_request (MMSitIms    *self,
++                    guint8      *frame,
++                    gsize        len,
++                    SamsungSitStatus status,
++                    const gchar *what)
++{
++    g_autoptr(GByteArray) request = NULL;
++
++    if (status != SAMSUNG_SIT_STATUS_OK) {
++        mm_obj_dbg (self, "could not build IMS %s: %s", what,
++                    samsung_sit_status_name (status));
++        return;
++    }
++    request = g_byte_array_sized_new (len);
++    g_byte_array_append (request, frame, len);
++    samsung_sit_buf_free (frame, len);
++
++    mm_obj_dbg (self, "IMS %s", what);
++    mm_sit_client_command (self->priv->client, request, 10, NULL,
++                           (GAsyncReadyCallback) fire_and_forget_ready,
++                           g_strdup (what));
++}
++
++/*
++ * `SET_FRAME_TIME` (0x0d0b). Android sends this as the next frame after the
++ * dial, before the call connects, and the CP answers later with a FRAME_TIME
++ * indication -- which komodo never produces, one of the signs its media
++ * pipeline never starts.
++ */
++void
++mm_sit_ims_set_frame_time (MMSitIms *self)
++{
++    guint8          *frame = NULL;
++    gsize            len = 0;
++    SamsungSitStatus status;
++
++    g_return_if_fail (MM_IS_SIT_IMS (self));
++    status = samsung_aims_build_set_frame_time (mm_sit_client_next_token (self->priv->client),
++                                                &frame, &len);
++    send_media_request (self, frame, len, status, "set frame time");
++}
++
++/* `SET_RTP_THRESHOLD` (0x0d72), sent as the call becomes active. */
++void
++mm_sit_ims_set_rtp_threshold (MMSitIms *self)
++{
++    guint8          *frame = NULL;
++    gsize            len = 0;
++    SamsungSitStatus status;
++
++    g_return_if_fail (MM_IS_SIT_IMS (self));
++    status = samsung_aims_build_set_rtp_threshold (mm_sit_client_next_token (self->priv->client),
++                                                   &frame, &len);
++    send_media_request (self, frame, len, status, "set RTP threshold");
++}
++
++void
++mm_sit_ims_media_state (MMSitIms *self,
++                        guint8    state)
++{
++    g_autoptr(GByteArray)  frame_array = NULL;
++    guint8                *frame = NULL;
++    gsize                  len = 0;
++    SamsungSitStatus       status;
++
++    g_return_if_fail (MM_IS_SIT_IMS (self));
++
++    status = samsung_aims_build_media_state_ind (state, &frame, &len);
++    if (status != SAMSUNG_SIT_STATUS_OK) {
++        mm_obj_dbg (self, "could not build IMS media state %u: %s",
++                    state, samsung_sit_status_name (status));
++        return;
++    }
++
++    frame_array = g_byte_array_sized_new (len);
++    g_byte_array_append (frame_array, frame, len);
++    samsung_sit_buf_free (frame, len);
++
++    mm_obj_dbg (self, "IMS media state %u", state);
++    mm_sit_client_send_indication (self->priv->client, frame_array);
++}
++
+ void
+ mm_sit_ims_dial (MMSitIms            *self,
+                  const gchar         *number,
+diff --git a/src/plugins/samsung-sit/mm-sit-ims.h b/src/plugins/samsung-sit/mm-sit-ims.h
+index ca276fde..a5d97ea2 100644
+--- a/src/plugins/samsung-sit/mm-sit-ims.h
++++ b/src/plugins/samsung-sit/mm-sit-ims.h
+@@ -121,6 +121,23 @@ const gchar *mm_sit_ims_get_associated_uris (MMSitIms *self);
+  * protocol: different requests, different ids, its own call numbering. The
+  * Voice interface picks between them on [`mm_sit_ims_is_registered`].
+  */
++/*
++ * AIMS media states, as observed on this hardware across a VoLTE call:
++ * setup just after the dial, alerting before it connects, connected as it
++ * becomes active, ended at hangup.  Values are what the CP was sent, not
++ * names it told us.
++ */
++#define MM_SIT_IMS_MEDIA_SETUP     2
++#define MM_SIT_IMS_MEDIA_ALERTING  4
++#define MM_SIT_IMS_MEDIA_CONNECTED 0
++#define MM_SIT_IMS_MEDIA_ENDED     6
++
++void     mm_sit_ims_set_frame_time    (MMSitIms *self);
++void     mm_sit_ims_set_rtp_threshold (MMSitIms *self);
++
++void     mm_sit_ims_media_state   (MMSitIms            *self,
++                                   guint8               state);
++
+ void     mm_sit_ims_dial          (MMSitIms            *self,
+                                    const gchar         *number,
+                                    GCancellable        *cancellable,

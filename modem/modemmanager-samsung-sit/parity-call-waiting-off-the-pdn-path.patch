@@ -1,0 +1,106 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Wed, 5 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: keep call waiting off the path to the IMS PDN,
+ and bound the preamble
+
+AIMS_SET_CALL_WAITING is a supplementary-service setting, not a step in
+bringing up a context, and the table already carries it in the RADIO phase
+for stack 0. It landed in PRE_PDN for stack 1 because of where it fell in
+one captured Android boot -- 666ms before that stack's SETUP_DATA_CALL on
+0xf5 against 258ms on 0xf6 -- so a phase boundary drawn through timing
+jitter put the same message on the critical path for one SIM and off it for
+the other.
+
+It cost exactly what that implies. On stack 1 the CP sat on the reply and
+released it only when our own timeout wrote again, 10332ms later, and the
+IMS request waited behind it; stack 0 sent the same message in the radio
+phase and had its reply in 32ms. Both stacks then asked 10.5s apart where
+stock asks 94ms apart.
+
+Phase it like stack 0, and stop the preamble being able to do this again:
+the block is advisory by construction -- preamble_ready has always carried
+on past a refused row -- so a per-row timeout of 10s was never right for
+something stock finishes in 518ms. Give it a budget and a short row
+timeout, and go on to the context when either runs out.
+
+--- a/src/plugins/samsung-sit/mm-sit-boot-parity.h
++++ b/src/plugins/samsung-sit/mm-sit-boot-parity.h
+@@ -371,7 +371,15 @@
+     { 0x0d3c, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_048 }, /* t=11.016 ? */
+     { 0x0d3c, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.020 ? */
+     { 0x0d3b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.071 ? */
+-    { 0x0d17, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_WALLCLOCK, 19, mm_sit_parity_pay_049 }, /* t=11.074 ? */
++    /*
++     * AIMS_SET_CALL_WAITING. A supplementary-service setting, not a step in
++     * bringing up a context -- and stack 0 carries the same message in the
++     * RADIO phase (see above). The capture put it either side of the ask by
++     * jitter alone: 666ms before it on 0xf5, 258ms before it on 0xf6. Left in
++     * PRE_PDN it is on the critical path to the IMS request, where a reply the
++     * CP sat on cost stack 1 ten seconds and stack 0 nothing.
++     */
++    { 0x0d17, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_WALLCLOCK, 19, mm_sit_parity_pay_049 }, /* t=11.074 ? */
+     { 0x0d3b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.200 ? */
+     { 0x0d39, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_046 }, /* t=11.285 ? */
+     { 0x0d0b, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_050 }, /* t=11.288 ? */
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -3678,8 +3678,19 @@
+  * before the request, so a refused row is still a row the CP saw, and nothing
+  * here may fail the context that follows.
+  */
++/*
++ * Stock runs this whole block in 518ms on ch 0xf5 and 618ms on 0xf6, so give it
++ * a budget a few times that and no more. Nothing here may delay the context
++ * that follows: every row is advisory, and a row whose reply the CP sits on
++ * must cost the request that matters nothing. Per row, stock is never silent
++ * for more than 124ms with a request outstanding during boot.
++ */
++#define PREAMBLE_BUDGET_MS   2000
++#define PREAMBLE_ROW_TIMEOUT 1
++
+ typedef struct {
+-    guint index;
++    guint  index;
++    gint64 deadline_us;
+ } PreambleContext;
+ 
+ static void preamble_step (GTask *task);
+@@ -3710,6 +3721,14 @@
+     gsize                     n_table = 0;
+ 
+     table = mm_sit_parity_requests_for_stack (self->priv->stack, &n_table);
++    if (g_get_monotonic_time () >= ctx->deadline_us) {
++        mm_obj_dbg (self->priv->port, "pdn preamble: out of budget after %u ms with "
++                    "%u row(s) to go; going on to the context",
++                    (guint) PREAMBLE_BUDGET_MS, (guint) (n_table - ctx->index));
++        g_task_return_boolean (task, TRUE);
++        g_object_unref (task);
++        return;
++    }
+     while (ctx->index < n_table) {
+         const MMSitParityRequest *req = &table[ctx->index];
+ 
+@@ -3734,7 +3753,8 @@
+         return;
+     }
+ 
+-    mm_sit_client_command (self, request, 10, g_task_get_cancellable (task),
++    mm_sit_client_command (self, request, PREAMBLE_ROW_TIMEOUT,
++                           g_task_get_cancellable (task),
+                            (GAsyncReadyCallback) preamble_ready, task);
+ }
+ 
+@@ -3746,8 +3766,12 @@
+ {
+     GTask *task;
+ 
++    PreambleContext *ctx;
++
+     task = g_task_new (self, cancellable, callback, user_data);
+-    g_task_set_task_data (task, g_new0 (PreambleContext, 1), g_free);
++    ctx = g_new0 (PreambleContext, 1);
++    ctx->deadline_us = g_get_monotonic_time () + (PREAMBLE_BUDGET_MS * 1000);
++    g_task_set_task_data (task, ctx, g_free);
+     preamble_step (task);
+ }
+ 

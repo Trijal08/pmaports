@@ -1,0 +1,92 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -677,6 +677,54 @@
+     return FALSE;
+ }
+ 
++/* A delivered PDU on its way up, owned by the idle below. */
++typedef struct {
++    MMBroadbandModemSamsungSit *self;
++    MMSmsPart                  *part;
++} TakePartContext;
++
++static void
++take_part_context_free (TakePartContext *ctx)
++{
++    g_clear_object (&ctx->self);
++    g_slice_free (TakePartContext, ctx);
++}
++
++/*
++ * Hand the part to the core.
++ *
++ * A delivery report is matched to the message it belongs to by its reference,
++ * and the reference is only recorded when the SEND_SMS response completes. The
++ * CP answers the send and reports the delivery in the same batch, so handling
++ * the report straight out of the indication runs it while the send's
++ * completion is still queued: nothing claims that reference yet, the match
++ * fails, and the report lands as a stray inbound message while the message it
++ * belonged to is never marked delivered. Observed exactly that way -- report
++ * for reference 237 taken at 21:59:09, "SMS part accepted, message reference
++ * 237" in the same second but after it.
++ *
++ * So let the main loop drain first. A GTask completes at G_PRIORITY_DEFAULT
++ * and this runs at G_PRIORITY_DEFAULT_IDLE, which is lower, so an already
++ * queued send completion is guaranteed to record its reference before the
++ * report looks for it. The acknowledgement does not wait for any of this.
++ */
++static gboolean
++take_part_idle (TakePartContext *ctx)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_iface_modem_messaging_take_part (MM_IFACE_MODEM_MESSAGING (ctx->self),
++                                             mm_broadband_modem_create_sms (MM_BROADBAND_MODEM (ctx->self)),
++                                             ctx->part,
++                                             MM_SMS_STATE_RECEIVED,
++                                             MM_SMS_STORAGE_ME,
++                                             &error))
++        mm_obj_warn (ctx->self, "couldn't store the delivered SMS: %s", error->message);
++
++    take_part_context_free (ctx);
++    return G_SOURCE_REMOVE;
++}
++
+ static void
+ handle_new_sms (MMBroadbandModemSamsungSit *self,
+                 const MMSitMessage         *message)
+@@ -685,6 +733,7 @@
+     MMSitSmsDeliver    deliver;
+     MMSmsPart         *part;
+     MMSitClient       *client;
++    TakePartContext   *ctx;
+ 
+     if (!mm_sit_message_parse_new_sms (message, &deliver, &error)) {
+         mm_obj_warn (self, "couldn't parse a delivered SMS: %s", error->message);
+@@ -704,17 +753,16 @@
+     part = mm_sms_part_3gpp_new_from_binary_pdu (SMS_PART_INVALID_INDEX,
+                                                  deliver.pdu, deliver.pdu_len,
+                                                  self, FALSE, &error);
+-    if (!part)
++    if (!part) {
+         mm_obj_warn (self, "couldn't parse the delivered SMS PDU: %s", error->message);
+-    /* A delivery report goes through the same door: the core matches it to the
+-     * message it belongs to by its reference and marks that one delivered. */
+-    else if (!mm_iface_modem_messaging_take_part (MM_IFACE_MODEM_MESSAGING (self),
+-                                                  mm_broadband_modem_create_sms (MM_BROADBAND_MODEM (self)),
+-                                                  part,
+-                                                  MM_SMS_STATE_RECEIVED,
+-                                                  MM_SMS_STORAGE_ME,
+-                                                  &error))
+-        mm_obj_warn (self, "couldn't store the delivered SMS: %s", error->message);
++    } else {
++        /* A delivery report goes through the same door, and has to wait for
++         * the main loop -- see take_part_idle(). */
++        ctx = g_slice_new0 (TakePartContext);
++        ctx->self = g_object_ref (self);
++        ctx->part = part;
++        g_idle_add ((GSourceFunc) take_part_idle, ctx);
++    }
+ 
+ ack:
+     /* Acknowledge either way: a message the core could not take is still one

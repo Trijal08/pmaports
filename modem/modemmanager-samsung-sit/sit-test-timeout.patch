@@ -1,0 +1,20 @@
+diff --git a/src/plugins/meson.build b/src/plugins/meson.build
+index ec46bd53..4d47be8c 100644
+--- a/src/plugins/meson.build
++++ b/src/plugins/meson.build
+@@ -61,7 +61,14 @@ if enable_tests and plugins_options['samsung-sit']
+     dependencies: [libhelpers_dep, libport_dep, sqlite3_dep, samsung_sit_ffi_dep],
+     c_args: ['-DMM_SIT_IMS_RETRY_TIMEOUT_SECS=1'],
+   )
+-  test('samsung-sit-protocol', samsung_sit_protocol_test, timeout: 60)
++  # The suite waits on real timers -- the IMS provisioning retry chain alone is
++  # ten attempts, compressed to a second each by the define above, and the DSDS
++  # mapping tests wait out their own settle delays. That is a minute of sleeping
++  # in a sixty second budget before the machine is even considered, so it times
++  # out on anything slower than the author's desktop (a cross build runs this
++  # binary under emulation). Give it room; a passing run still takes the same
++  # time it always did.
++  test('samsung-sit-protocol', samsung_sit_protocol_test, timeout: 300)
+ endif
+ 
+ # never include static libs as deps when building
