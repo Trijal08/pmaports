@@ -1,0 +1,178 @@
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index 753fc5be..a87d4855 100644
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -1220,6 +1220,52 @@ setup_carrier_config_finish (MMIfaceModem  *self,
+     return g_task_propagate_boolean (G_TASK (res), error);
+ }
+ 
++static void setup_carrier_config (MMIfaceModem        *iface,
++                                  const gchar         *imsi,
++                                  const gchar         *carrier_config_database,
++                                  GAsyncReadyCallback  callback,
++                                  gpointer             user_data);
++
++typedef struct {
++    GAsyncReadyCallback callback;
++    gpointer            user_data;
++    gchar              *database;
++} EnsureCarrierConfigContext;
++
++static void
++ensure_carrier_config_context_free (EnsureCarrierConfigContext *ctx)
++{
++    g_free (ctx->database);
++    g_free (ctx);
++}
++
++static void
++carrier_sim_info_queried (MMSitClient  *client,
++                          GAsyncResult *res,
++                          gpointer      user_data)
++{
++    GTask *task = user_data;
++
++    MMBroadbandModemSamsungSit *self;
++    MMSitCarrierSimInfo        *info = NULL;
++    g_autoptr(GError)           error = NULL;
++    EnsureCarrierConfigContext *ctx;
++
++    self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
++    ctx = g_task_get_task_data (task);
++
++    info = mm_sit_client_query_carrier_sim_info_finish (client, res, &error);
++    if (!info) {
++        g_task_return_error (task, g_steal_pointer (&error));
++        g_object_unref (task);
++        return;
++    }
++    g_object_unref (task);
++    setup_carrier_config (MM_IFACE_MODEM (self), info->imsi,
++                          ctx->database, ctx->callback, ctx->user_data);
++    g_free (info);
++}
++
+ void
+ mm_broadband_modem_samsung_sit_ensure_carrier_config (MMBroadbandModemSamsungSit *self,
+                                                        GAsyncReadyCallback          callback,
+@@ -1254,14 +1300,34 @@ mm_broadband_modem_samsung_sit_ensure_carrier_config (MMBroadbandModemSamsungSit
+     if (self->priv->carrier_config_ready)
+         invalidate_carrier_config (self);
+ 
+-    if (!database || !database[0] || !imsi || !imsi[0]) {
++    if (!database || !database[0]) {
+         task = g_task_new (self, NULL, callback, user_data);
+         g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
+-                                 "Samsung carrier configuration requires a database and SIM identity");
++                                 "Samsung carrier configuration requires a database");
+         g_object_unref (task);
+         return;
+     }
+ 
++    /* The SIM object's IMSI load can lose the CP's park/wake race during
++     * enabling, so it may be empty even with a provisioned SIM.  The CP still
++     * holds the identity -- ask it directly before giving up. */
++    if (!imsi || !imsi[0]) {
++        EnsureCarrierConfigContext *ctx;
++
++        ctx = g_new0 (EnsureCarrierConfigContext, 1);
++        ctx->callback = callback;
++        ctx->user_data = user_data;
++        ctx->database = g_steal_pointer (&database);
++
++        task = g_task_new (self, NULL, NULL, NULL);
++        g_task_set_task_data (task, ctx,
++                              (GDestroyNotify) ensure_carrier_config_context_free);
++        mm_sit_client_query_carrier_sim_info (self->priv->client, NULL,
++                                              (GAsyncReadyCallback) carrier_sim_info_queried,
++                                              task);
++        return;
++    }
++
+     setup_carrier_config (MM_IFACE_MODEM (self), imsi, database, callback, user_data);
+ }
+ 
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index d5dd1846..d0736e63 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -295,6 +295,61 @@ mm_sit_client_get_carrier_sim_info (MMSitClient         *self,
+     return TRUE;
+ }
+ 
++/* The CP pushes CARRIER_CONFIG_SIM_INFO during boot; a client that opens
++ * after that burst has an empty cache.  The record is re-queried: the CP
++ * answers status 22 when it holds no record, in which case this errors and
++ * the caller falls back as before. */
++static void
++query_carrier_sim_info_ready (MMSitClient  *self,
++                              GAsyncResult *res,
++                              GTask        *task)
++{
++    g_autoptr(MMSitMessage) response = NULL;
++    g_autoptr(GError)       error = NULL;
++    MMSitCarrierSimInfo     info;
++
++    response = mm_sit_client_command_finish (self, res, &error);
++    if (response &&
++        mm_sit_message_parse_carrier_sim_info (response, &info, NULL)) {
++        self->priv->carrier_sim_info = info;
++        self->priv->has_carrier_sim_info = TRUE;
++        g_task_return_pointer (task,
++                               g_memdup (&info, sizeof (info)),
++                               g_free);
++    } else
++        g_task_return_error (task,
++                             error ? g_steal_pointer (&error)
++                                   : g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                                  "SIT CARRIER_CONFIG_SIM_INFO response is not parseable"));
++    g_object_unref (task);
++}
++
++void
++mm_sit_client_query_carrier_sim_info (MMSitClient         *self,
++                                      GCancellable        *cancellable,
++                                      GAsyncReadyCallback  callback,
++                                      gpointer             user_data)
++{
++    g_autoptr(GByteArray) request = NULL;
++
++    g_return_if_fail (MM_IS_SIT_CLIENT (self));
++
++    request = mm_sit_request_new_query (MM_SIT_MESSAGE_CARRIER_CONFIG_SIM_INFO,
++                                        mm_sit_client_next_token (self));
++    mm_sit_client_command (self, request, 5, cancellable,
++                           (GAsyncReadyCallback) query_carrier_sim_info_ready,
++                           g_task_new (self, cancellable, callback, user_data));
++}
++
++MMSitCarrierSimInfo *
++mm_sit_client_query_carrier_sim_info_finish (MMSitClient   *self,
++                                             GAsyncResult  *res,
++                                             GError       **error)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), NULL);
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
+ gboolean
+ mm_sit_client_radio_state_trusted (MMSitClient *self)
+ {
+diff --git a/src/plugins/samsung-sit/mm-sit-client.h b/src/plugins/samsung-sit/mm-sit-client.h
+index 785f9912..dd18d747 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.h
++++ b/src/plugins/samsung-sit/mm-sit-client.h
+@@ -62,6 +62,13 @@ void     mm_sit_client_get_device_identity (MMSitClient  *self,
+ 
+ gboolean mm_sit_client_get_carrier_sim_info (MMSitClient         *self,
+                                              MMSitCarrierSimInfo *out_info);
++void     mm_sit_client_query_carrier_sim_info        (MMSitClient         *self,
++                                                      GCancellable        *cancellable,
++                                                      GAsyncReadyCallback  callback,
++                                                      gpointer             user_data);
++MMSitCarrierSimInfo *mm_sit_client_query_carrier_sim_info_finish (MMSitClient   *self,
++                                                                  GAsyncResult  *res,
++                                                                  GError       **error);
+ gboolean mm_sit_client_radio_state_trusted  (MMSitClient         *self);
+ 
+ /* The next request token. Public because AIMS frames are built outside this
