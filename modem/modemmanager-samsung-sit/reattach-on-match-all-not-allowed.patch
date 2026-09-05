@@ -1,0 +1,93 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index d14f8ec6..2aa9ef15 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -40,6 +40,9 @@ struct _MMSitClientPrivate {
+     gchar               *device_os_name;
+     gchar               *device_os_version;
+     gboolean             radio_state_trusted;
++    /* When the radio was last cycled to re-attach, so a run of failing connects
++     * cycles it once rather than once per attempt. */
++    gint64               last_reattach;
+     /* AID of the subscription application, cached from the last SIM status so
+      * file reads can address it the way the downstream RIL does. */
+     guint8               sim_aid[MM_SIT_MAX_AID_LENGTH];
+@@ -2622,6 +2625,69 @@ connect_registration_ready (MMSitClient *self,
+     ctx->retry_id = g_timeout_add_seconds (2, (GSourceFunc) connect_retry, task);
+ }
+ 
++/*
++ * "No URSP rule matched and the catch-all is not allowed": what the CP answers
++ * when the attach it is living on named no APN. SET_INITIAL_ATTACH_APN has been
++ * accepted by then -- the CP only carries an attach APN into its *next* attach,
++ * so nothing this connect can send will rescue it. A radio cycle will: it
++ * re-attaches with the APN the CP now holds. Safe here because it happens long
++ * after the bring-up window, where an OFF instead wedges the CP.
++ *
++ * The cycle runs detached from the connect that diagnosed it, and that attempt
++ * still fails: taking the radio down under core drops registration, which
++ * cancels the connect task in flight. The attempt after it -- core and NM both
++ * retry within seconds -- meets a CP attached with the APN and comes up.
++ */
++#define CAUSE_MATCH_ALL_RULE_NOT_ALLOWED 2253
++/* Long enough that a burst of failing attempts cycles the radio once. */
++#define REATTACH_MIN_INTERVAL_SECS 60
++
++static void
++reattach_on_ready (MMSitClient  *self,
++                   GAsyncResult *res,
++                   gpointer      unused)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_sit_client_set_radio_state_finish (self, res, &error))
++        mm_obj_warn (self->priv->port, "couldn't bring the radio back up to re-attach: %s",
++                     error->message);
++    g_object_unref (self);
++}
++
++static void
++reattach_off_ready (MMSitClient  *self,
++                    GAsyncResult *res,
++                    gpointer      unused)
++{
++    g_autoptr(GError) error = NULL;
++
++    /* A refused OFF is not fatal: the ON is the half that has to land. */
++    if (!mm_sit_client_set_radio_state_finish (self, res, &error))
++        mm_obj_dbg (self->priv->port, "couldn't take the radio down to re-attach: %s",
++                    error->message);
++
++    mm_sit_client_set_radio_state (self, MM_SIT_RADIO_STATE_ON, NULL,
++                                   (GAsyncReadyCallback) reattach_on_ready, NULL);
++}
++
++static void
++schedule_reattach (MMSitClient *self)
++{
++    gint64 now = g_get_monotonic_time () / G_USEC_PER_SEC;
++
++    if (self->priv->last_reattach &&
++        now - self->priv->last_reattach < REATTACH_MIN_INTERVAL_SECS)
++        return;
++
++    self->priv->last_reattach = now;
++    mm_obj_msg (self->priv->port,
++                "the CP is attached with no APN (cause %u); cycling the radio to re-attach",
++                CAUSE_MATCH_ALL_RULE_NOT_ALLOWED);
++    mm_sit_client_set_radio_state (g_object_ref (self), MM_SIT_RADIO_STATE_OFF, NULL,
++                                   (GAsyncReadyCallback) reattach_off_ready, NULL);
++}
++
+ static void
+ connect_setup_ready (MMSitClient *self,
+                      GAsyncResult *res,
+@@ -2655,6 +2721,8 @@ connect_setup_ready (MMSitClient *self,
+ 
+     ctx->setup_attempts++;
+     if (ctx->setup_attempts >= 6) {
++        if (ctx->call.cause == CAUSE_MATCH_ALL_RULE_NOT_ALLOWED)
++            schedule_reattach (self);
+         g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                  "SIT data call returned no address after 6 attempts (cause %u)",
+                                  ctx->call.cause);

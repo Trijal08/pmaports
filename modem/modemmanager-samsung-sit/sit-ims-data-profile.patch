@@ -1,0 +1,117 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index 7925d5a7..352de3db 100644
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -3038,15 +3038,74 @@ disconnect_normal_ready (MMSitClient  *self,
+ typedef struct {
+     guint8        cid;
+     gboolean      cid_kept;
++    gchar        *apn;
++    MMSitPdpType  pdp;
++    guint32       apn_types;
+     MMSitDataCall call;
+ } SetupContext;
+ 
+ static void
+ setup_context_free (SetupContext *ctx)
+ {
++    g_free (ctx->apn);
+     g_free (ctx);
+ }
+ 
++static void setup_data_call_ready (MMSitClient  *self,
++                                   GAsyncResult *res,
++                                   GTask        *task);
++
++/*
++ * SETUP_DATA_CALL names a DNN; SET_DATA_PROFILE is what tells the CP that DNN
++ * exists. Without the profile the CP has nothing to match the request against
++ * and refuses it with cause 2253, "no URSP rule matched and the catch-all is
++ * not allowed" -- the same answer it gives for an attach that named no APN, and
++ * the reason that cause was read as an attach problem for so long.
++ *
++ * mm_sit_client_connect_data has always sent the profile first
++ * (CONNECT_STEP_DATA_PROFILE); this entry point did not, so the one caller that
++ * uses it -- the IMS stack, for the ims PDN -- could never bring its context up
++ * on a network whose policy does not permit a catch-all. Downstream sends the
++ * whole profile list at boot, which is why Android has the ims profile in place
++ * long before anything asks for that PDN.
++ *
++ * HW-confirmed: `mm-sit-tool connect ims` (which goes through connect_data)
++ * brought the same PDN up on the same CP seconds after the IMS path had been
++ * refused, and the CP announced "IMS Registered" as soon as it did.
++ */
++static void
++setup_profile_ready (MMSitClient  *self,
++                     GAsyncResult *res,
++                     GTask        *task)
++{
++    g_autoptr(MMSitMessage) response = NULL;
++    g_autoptr(GByteArray)   request = NULL;
++    SetupContext           *ctx = g_task_get_task_data (task);
++    GError                 *error = NULL;
++
++    response = mm_sit_client_command_finish (self, res, &error);
++    if (!response || !message_check_success (response, &error)) {
++        cid_release (self, ctx->cid);
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    request = mm_sit_request_new_setup_data_call (mm_sit_client_next_token (self), ctx->cid,
++                                                  ctx->apn, ctx->pdp, ctx->apn_types, NULL, &error);
++    if (!request) {
++        cid_release (self, ctx->cid);
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    /* The CP takes its time on a fresh context -- the captured ims activation
++     * ran to about 600 ms and a retry ladder belongs to the caller, not here. */
++    mm_sit_client_command (self, request, 30, g_task_get_cancellable (task),
++                           (GAsyncReadyCallback) setup_data_call_ready, task);
++}
++
+ static void
+ setup_data_call_ready (MMSitClient  *self,
+                        GAsyncResult *res,
+@@ -3097,6 +3156,7 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
+     g_autoptr(GByteArray)  request = NULL;
+     SetupContext          *ctx;
+     GTask                 *task;
++    MMSitApnAuth           auth = { 0 };
+     GError                *error = NULL;
+     guint8                 cid;
+ 
+@@ -3111,10 +3171,14 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
+ 
+     ctx = g_new0 (SetupContext, 1);
+     ctx->cid = cid;
++    ctx->apn = g_strdup (apn);
++    ctx->pdp = pdp;
++    ctx->apn_types = apn_types;
+     g_task_set_task_data (task, ctx, (GDestroyNotify) setup_context_free);
+ 
+-    request = mm_sit_request_new_setup_data_call (mm_sit_client_next_token (self), cid, apn, pdp,
+-                                                  apn_types, NULL, &error);
++    /* Register the profile before asking for the context; see setup_profile_ready. */
++    request = mm_sit_request_new_set_data_profile (mm_sit_client_next_token (self), apn, pdp,
++                                                   apn_types, &auth, &error);
+     if (!request) {
+         cid_release (self, cid);
+         g_task_return_error (task, error);
+@@ -3122,10 +3186,8 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
+         return;
+     }
+ 
+-    /* The CP takes its time on a fresh context -- the captured ims activation
+-     * ran to about 600 ms and a retry ladder belongs to the caller, not here. */
+-    mm_sit_client_command (self, request, 30, cancellable,
+-                           (GAsyncReadyCallback) setup_data_call_ready, task);
++    mm_sit_client_command (self, request, 10, cancellable,
++                           (GAsyncReadyCallback) setup_profile_ready, task);
+ }
+ 
+ gboolean
