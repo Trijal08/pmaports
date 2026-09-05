@@ -1,0 +1,217 @@
+diff --git a/crates/exynos-modem/src/gipc.rs b/crates/exynos-modem/src/gipc.rs
+index ce72cb2..9a2bb29 100644
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -12,16 +12,24 @@
+ //! everything and decodes only what it can usefully log.
+ 
+ use std::collections::HashSet;
+-use std::path::Path;
++use std::fs;
++use std::path::{Path, PathBuf};
+ use std::sync::Mutex;
+ 
+ use prost::Message;
+ 
+ use crate::chan::{self, Handler};
+ use crate::pb::gipc::{GipcMessage, ModemTemperatureSetRequest};
++use crate::pb::{UecapFileMessageResult, UecapFileReadRequest, UecapFileReadResponse};
+ 
+ /// `service` of gems.gtemperature, whose payload we decode for the log line.
+ const SVC_GTEMPERATURE: u32 = 0x4b10_e343;
++/// The CP's UE-capability/carrier file fetch, moved here from the GEMS
++/// `ModemSvcMessage` path (oem.rs, message_id 12): same `UecapFileReadRequest`
++/// payload, wrapped in the GIPC envelope. Unanswered, the CP retries forever
++/// (seq climbing) and the PDN setup is refused (cause 133/2253), so the modem
++/// registers but no data call gets an address.
++const SVC_UECAP_FILE: u32 = 0xe62d_33e2;
+ /// Every service the stock daemon dispatches, recovered by walking its GIPC
+ /// tables in /vendor/bin/shared_modem_platform (see
+ /// docs/subsystems/modem/reference/cpif-channels.md). The names are compiled
+@@ -52,8 +60,8 @@ const TYPE_REQUEST: u32 = 0;
+ const TYPE_RESPONSE: u32 = 1;
+ 
+ /// Serve the GIPC channel forever (see [`chan::run`]).
+-pub fn run(dev: &Path, verbose: bool) {
+-    let g = Gipc::new(verbose);
++pub fn run(dev: &Path, uecap_dir: PathBuf, verbose: bool) {
++    let g = Gipc::new(uecap_dir, verbose);
+     eprintln!(
+         "gipc: serving {}{}",
+         dev.display(),
+@@ -63,6 +71,7 @@ pub fn run(dev: &Path, verbose: bool) {
+ }
+ 
+ pub struct Gipc {
++    uecap_dir: PathBuf,
+     verbose: bool,
+     /// (service, method) pairs already reported, so a service we do not decode
+     /// is named once rather than every time it arrives.
+@@ -80,13 +89,105 @@ impl Handler for Gipc {
+ }
+ 
+ impl Gipc {
+-    pub fn new(verbose: bool) -> Gipc {
++    pub fn new(uecap_dir: PathBuf, verbose: bool) -> Gipc {
+         Gipc {
++            uecap_dir,
+             verbose,
+             seen: Mutex::new(HashSet::new()),
+         }
+     }
+ 
++    /// Map a requested filename to a path under the uecap dir. Only a bare
++    /// `<name>.binarypb` is allowed -- no separators, no traversal. (Same rule
++    /// as the GEMS path in oem.rs.)
++    fn resolve(&self, filename: &str) -> Option<PathBuf> {
++        if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
++            return None;
++        }
++        if !filename.ends_with(".binarypb") {
++            return None;
++        }
++        Some(self.uecap_dir.join(filename))
++    }
++
++    /// Serve one `UecapFileReadRequest` as one GIPC response per block, mirroring
++    /// the GEMS `handle_uecap`. The request's `file_dir` is ignored here (it
++    /// arrives as 1, not UECAP_PATH=3, over this channel); the filename is
++    /// whitelisted to uecap `.binarypb` regardless.
++    ///
++    /// ponytail: response wrapping is inferred, not captured -- bare
++    /// UecapFileReadResponse in the payload, sequence incrementing per block
++    /// from the request's. If the CP keeps retrying, the alternatives to try
++    /// are a UecapFileMessage wrapper and/or a fixed sequence.
++    fn serve_uecap_file(&self, req: &GipcMessage) -> Vec<Vec<u8>> {
++        let payload = req.payload.as_deref().unwrap_or(&[]);
++        let rr = match UecapFileReadRequest::decode(payload) {
++            Ok(r) => r,
++            Err(e) => {
++                eprintln!("gipc: uecap request decode failed: {}", e);
++                return Vec::new();
++            }
++        };
++        let Some(path) = self.resolve(&rr.file_name) else {
++            eprintln!("gipc: rejected uecap file request {:?}", rr.file_name);
++            return Vec::new();
++        };
++        let data = match fs::read(&path) {
++            Ok(d) => d,
++            Err(e) => {
++                eprintln!("gipc: read {}: {}", path.display(), e);
++                return Vec::new();
++            }
++        };
++        // ponytail: cap the GIPC block so one uecap frame + one SIT control frame
++        // both fit the 4096-byte FMT ring. At the CP's requested 4000 a single
++        // frame fills the ring (space ~47), starving ModemManager's control
++        // channel (ch 0xf5) during connect -> SETUP_DATA_CALL times out. The
++        // response carries offset+last_block so smaller blocks reassemble fine.
++        // Raise if a CP ever rejects sub-4000 blocks.
++        let block = (rr.block_size as usize).max(1).min(2048);
++        let n = data.len();
++        let base = req.sequence.unwrap_or(0);
++        let mut frames = Vec::new();
++        let mut offset = 0usize;
++        let mut i = 0u32;
++        loop {
++            let remaining = n - offset;
++            let len = remaining.min(block);
++            let last = len == remaining;
++            let resp = UecapFileReadResponse {
++                offset: offset as u32,
++                data: data[offset..offset + len].to_vec(),
++                result: Some(UecapFileMessageResult::UfmSuccess as i32),
++                last_block: last,
++            };
++            frames.push(
++                GipcMessage {
++                    r#type: Some(TYPE_RESPONSE),
++                    endpoint: req.endpoint,
++                    service: req.service,
++                    method: req.method,
++                    payload: Some(resp.encode_to_vec()),
++                    sequence: Some(base.wrapping_add(i)),
++                }
++                .encode_to_vec(),
++            );
++            offset += len;
++            i += 1;
++            if last {
++                break;
++            }
++        }
++        eprintln!(
++            "gipc: served {} ({} bytes) in {} block(s) of {}",
++            rr.file_name,
++            n,
++            frames.len(),
++            block
++        );
++        frames
++    }
++
+     /// Decode one frame and return the encoded replies (0 or 1).
+     pub fn handle(&self, frame: &[u8]) -> Vec<Vec<u8>> {
+         let req = match GipcMessage::decode(frame) {
+@@ -114,6 +215,13 @@ impl Gipc {
+             return Vec::new();
+         }
+ 
++        // The uecap/carrier file fetch needs a real answer (the file bytes),
++        // not the empty ack the other services get.
++        if req.service == Some(SVC_UECAP_FILE) {
++            self.log(&req);
++            return self.serve_uecap_file(&req);
++        }
++
+         self.log(&req);
+ 
+         vec![GipcMessage {
+@@ -227,18 +335,22 @@ mod tests {
+     /// The point of the handler: our ack must be the stock daemon's ack.
+     #[test]
+     fn acks_byte_for_byte_like_stock() {
+-        let replies = Gipc::new(false).handle(TEMP_REPORT);
++        let replies = Gipc::new(PathBuf::from("/nonexistent"), false).handle(TEMP_REPORT);
+         assert_eq!(replies.len(), 1);
+         assert_eq!(replies[0], TEMP_ACK);
+     }
+ 
+     #[test]
+     fn responses_are_not_acked() {
+-        assert!(Gipc::new(false).handle(TEMP_ACK).is_empty());
++        assert!(Gipc::new(PathBuf::from("/nonexistent"), false)
++            .handle(TEMP_ACK)
++            .is_empty());
+     }
+ 
+     #[test]
+     fn garbage_is_dropped_not_answered() {
+-        assert!(Gipc::new(false).handle(&[0xff, 0xff, 0xff]).is_empty());
++        assert!(Gipc::new(PathBuf::from("/nonexistent"), false)
++            .handle(&[0xff, 0xff, 0xff])
++            .is_empty());
+     }
+ }
+diff --git a/crates/exynos-modem/src/main.rs b/crates/exynos-modem/src/main.rs
+index 565bc29..7064f2e 100644
+--- a/crates/exynos-modem/src/main.rs
++++ b/crates/exynos-modem/src/main.rs
+@@ -187,12 +187,14 @@ fn main() {
+     // so no early request is lost.
+     if let Some(dev) = cfg.oem.resolve(DEFAULT_OEM_DEV) {
+         let sd = state_dir.clone();
++        let ud = uecap_dir.clone();
+         handles.push(thread::spawn(move || {
+-            oem::run(&dev, uecap_dir, sd, verbose)
++            oem::run(&dev, ud, sd, verbose)
+         }));
+     }
+     if let Some(dev) = cfg.gipc.resolve(DEFAULT_GIPC_DEV) {
+-        handles.push(thread::spawn(move || gipc::run(&dev, verbose)));
++        let ud = uecap_dir.clone();
++        handles.push(thread::spawn(move || gipc::run(&dev, ud, verbose)));
+     }
+     if let Some(dev) = cfg.radioext.resolve(DEFAULT_RADIOEXT_DEV) {
+         handles.push(thread::spawn(move || radioext::run(&dev, verbose)));
