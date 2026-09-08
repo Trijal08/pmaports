@@ -1,0 +1,47 @@
+# Maintainer: Steffen Deusch <steffen@deusch.me>
+pkgname=carrier-settings-tool
+pkgver=0.1.0_git20260731
+pkgrel=0
+pkgdesc="Offline converter for Google's CarrierSettings protobufs into ims.db"
+url="https://git.deusch.me/pixel-mainline/exynos-modem"
+# Build-host tool, never installed on a device. The firmware-google-* aports are
+# pmb:cross-native, so their makedepends are installed into the *native* chroot
+# -- this has to exist for that architecture, not the phone's. Split out of the
+# exynos-modem aport for exactly that reason: one APKBUILD builds one arch, so
+# an aarch64 package cannot also produce an x86_64 subpackage.
+#
+# "all" rather than a single arch: pmaports resolves this dependency against the
+# arch of the package that names it (aarch64), while the build itself happens in
+# the native chroot. Restricting it to x86_64 makes it resolve as "dependency
+# not found". Building it natively needs no cross toolchain -- Arch.native()
+# short-circuits cpu_emulation_required().
+arch="all"
+license="GPL-2.0-or-later"
+makedepends="cargo cargo-auditable"
+options="!check net"
+
+_commit="3a333898041239d943f396a40552801542ef3ae8"
+source="exynos-modem-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz"
+builddir="$srcdir/exynos-modem"
+
+prepare() {
+	default_prepare
+
+	# The workspace pins a static-musl aarch64 target for the initramfs
+	# binaries; drop it so cargo builds for CTARGET.
+	rm -f .cargo/config.toml
+	RUSTC_WRAPPER= cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	# Only the converter; the daemons in this workspace are device-side.
+	RUSTC_WRAPPER= cargo auditable build --release --frozen -p carrier-settings
+}
+
+package() {
+	install -Dm755 target/release/carrier-settings-tool -t "$pkgdir/usr/bin"
+}
+
+sha512sums="
+227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-3a333898041239d943f396a40552801542ef3ae8.tar.gz
+"
