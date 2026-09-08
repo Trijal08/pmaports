@@ -1,0 +1,58 @@
+# Maintainer: Steffen Deusch <steffen@deusch.me>
+pkgname=carrier-settings-tool
+pkgver=0.1.0_git20260731
+pkgrel=0
+pkgdesc="Offline converter for Google's CarrierSettings protobufs into ims.db"
+url="https://git.deusch.me/pixel-mainline/exynos-modem"
+# Build-host tool, never installed on a device. The firmware-google-* aports are
+# pmb:cross-native, so their makedepends are installed into the *native* chroot
+# -- this has to exist for that architecture, not the phone's. Split out of the
+# exynos-modem aport for exactly that reason: one APKBUILD builds one arch, so
+# an aarch64 package cannot also produce an x86_64 subpackage.
+#
+# "all" rather than a single arch: pmaports resolves this dependency against the
+# arch of the package that names it (aarch64), while the build itself happens in
+# the native chroot. Restricting it to x86_64 makes it resolve as "dependency
+# not found". Building it natively needs no cross toolchain -- Arch.native()
+# short-circuits cpu_emulation_required().
+arch="all"
+license="GPL-2.0-or-later"
+makedepends="cargo cargo-auditable"
+# !pmb:crossdirect keeps this out of pmbootstrap's cross-compiler setup.
+# When a foreign-arch package names this as a makedepend, the dependency
+# walk computes the cross mode against *that* package's arch while the
+# build itself resolves to the native one, and init_compiler then asks for
+# a cross toolchain targeting the host (gcc-x86_64), which cannot exist.
+# This branch returns QEMU_ONLY, which is not "enabled", so that setup is
+# skipped entirely -- and the build is native anyway, so nothing is emulated.
+options="!check !pmb:crossdirect net"
+
+_commit="9cee4624713f6a0029e451790c8d2e2db642e809"
+source="exynos-modem-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz
+	apn-list-in-ims-db.patch
+"
+builddir="$srcdir/exynos-modem"
+
+prepare() {
+	default_prepare
+
+	# The workspace pins a static-musl aarch64 target for the initramfs
+	# binaries; drop it so cargo builds for CTARGET.
+	rm -f .cargo/config.toml
+	RUSTC_WRAPPER= cargo fetch --target="$CTARGET" --locked
+}
+
+build() {
+	# Only the converter; the daemons in this workspace are device-side.
+	RUSTC_WRAPPER= cargo auditable build --release --frozen -p carrier-settings
+}
+
+package() {
+	install -Dm755 target/release/carrier-settings-tool -t "$pkgdir/usr/bin"
+}
+
+
+sha512sums="
+9239384d823a9f62f5129398ef023cc2732b9874bbac949f793ee72589b278c0c92d0f63244888115a5f3c4cd1779a76c3f7bd63e2a1b925d64d56fe251cbe9a  exynos-modem-9cee4624713f6a0029e451790c8d2e2db642e809.tar.gz
+653ae863f6770b420cfd7a2d40d8398fb6e86f209ab10d3ee1125e5a98c8c56668af1f1f995e56211900595b8e19abbf0b79144c27a8bbba84ef7fea19343377  apn-list-in-ims-db.patch
+"
