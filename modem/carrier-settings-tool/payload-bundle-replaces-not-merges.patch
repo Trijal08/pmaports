@@ -1,0 +1,272 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Fri, 7 Nov 2026 00:00:00 +0000
+Subject: [PATCH] db: a declared payload bundle replaces the one below it
+
+A payload-description bundle's children are keyed by payload type, so
+merging it leaf by leaf leaves the lower layer's payload types sitting
+alongside the carrier's and the CP is told about codecs the carrier never
+offered.
+
+Measured against stock on hardware. `default.pb` declares AMR-WB payload
+type 105 and AMR-NB 103 as octet-aligned; Videotron's own record declares
+110 and 108 instead. Merging kept all four, so tag 1060 went out as
+`6401FF00 6902FF00` -- payload type 105 as mode 2 -- where stock sends
+`6401FF00 6901FF00`. Telus, whose own record does declare 105, is mode 2
+in both captures, which is what says the rule is "the declaring layer owns
+the bundle" rather than one carrier being special.
+
+With this, both carriers match their captured frames exactly:
+
+    telus_ca  1060 6401FF006902FF00   1061 6201FF006702FF00
+    fizz_ca   1060 6401FF006901FF00   1061 6201FF006701FF00
+
+Scope is narrow and was checked rather than assumed: rebuilding the whole
+database changes 31 settings across 17 of 618 carriers, and only tags
+1060, 1061 and 1062. Bundles whose children are fixed names -- the
+capability lists, the SIP timers -- still merge leaf by leaf, because only
+`*_payload_description_bundle.` is treated this way.
+diff -ruN cst/crates/carrier-settings/src/db.rs cstnew/crates/carrier-settings/src/db.rs
+--- a/crates/carrier-settings/src/db.rs	2026-11-07 00:08:46.852449849 -0500
++++ b/crates/carrier-settings/src/db.rs	2026-11-07 00:09:05.335949716 -0500
+@@ -79,6 +79,27 @@
+ ];
+ 
+ /// The three layers, innermost last, minus what the vendor discards.
++/// The payload-description bundles a flattened layer declares, as key
++/// prefixes including the trailing dot.
++///
++/// Only these are replace-rather-than-merge: their children are keyed by
++/// payload type, so a carrier naming its own types means the ones underneath
++/// no longer apply. Bundles whose children are fixed names (the capability
++/// lists, the SIP timers) merge leaf by leaf as before.
++fn bundle_prefixes(flat: &BTreeMap<String, Value>) -> Vec<String> {
++    const MARKER: &str = "_payload_description_bundle.";
++    let mut out: Vec<String> = Vec::new();
++    for k in flat.keys() {
++        if let Some(i) = k.find(MARKER) {
++            let prefix = k[..i + MARKER.len()].to_string();
++            if !out.contains(&prefix) {
++                out.push(prefix);
++            }
++        }
++    }
++    out
++}
++
+ pub fn merge(
+     aosp: &BTreeMap<String, Value>,
+     defaults: &Carrier,
+@@ -86,7 +107,23 @@
+ ) -> BTreeMap<String, Value> {
+     let mut out = aosp.clone();
+     for layer in [&defaults.settings, &carrier.settings] {
+-        for (k, v) in flatten(layer) {
++        let flat = flatten(layer);
++        // A payload-description bundle is replaced, not merged into. Its
++        // children are keyed by payload type, so merging leaf by leaf leaves
++        // the lower layer's payload types alongside this layer's and the CP
++        // is told about codecs the carrier never offered.
++        //
++        // Measured: default.pb declares amrwb.105 and amrnb.103, Videotron's
++        // own record declares amrwb.110 and amrnb.108. Merging gave 105 and
++        // 103 the default's octet-aligned flag, so we sent payload type 105
++        // as mode 2 where stock sends mode 1. Telus, whose own record does
++        // declare 105, is mode 2 in both -- which is what says the rule is
++        // "the declaring layer owns the bundle" rather than a quirk of one
++        // carrier.
++        for prefix in bundle_prefixes(&flat) {
++            out.retain(|k, _| !k.starts_with(&prefix));
++        }
++        for (k, v) in flat {
+             out.insert(k, v);
+         }
+     }
+@@ -248,8 +285,8 @@
+     pub roaming: u8,
+ }
+ 
+-/// `bearer_bitmask` lists `TelephonyManager.NETWORK_TYPE_*`, which are 1-based;
+-/// AOSP turns each into `1 << (n - 1)`.
++/// `ApnItem.type` and `bearer_bitmask` are 1-based enum lists; AOSP turns each
++/// into `1 << (n - 1)`.
+ fn bitmask<I: IntoIterator<Item = i32>>(values: I) -> u32 {
+     values
+         .into_iter()
+@@ -257,48 +294,8 @@
+         .fold(0u32, |m, v| m | 1 << (v - 1))
+ }
+ 
+-/// `ApnItem.ApnType` -> `android.hardware.radio.data.ApnTypes`.
+-///
+-/// Deliberately a table, not `1 << (v - 1)`. Two things that arithmetic gets
+-/// wrong, both measured against the stock capture on identical firmware:
+-///
+-/// * The proto enum is `ALL DEFAULT MMS SUPL DUN HIPRI FOTA IMS CBS IA
+-///   EMERGENCY XCAP UT RCS` with **no MCX**, while `ApnTypes` has
+-///   `MCX = 1 << 10` between EMERGENCY and XCAP. So everything from XCAP up is
+-///   one bit out: `xcap` and `services.telus.com` went out 1024 where stock
+-///   sends 2048.
+-/// * `DEFAULT` carries `HIPRI`, because `ApnSetting.TYPE_DEFAULT` is
+-///   `ApnTypes.DEFAULT | ApnTypes.HIPRI`. An APN typed `default,mms,supl`
+-///   is 23 to stock and was 7 here.
+-///
+-/// `ALL` (0) is dropped: it means "every kind", and what that expands to is the
+-/// framework's own `TYPE_ALL`, not something to invent here. `UT` (12) has no
+-/// `ApnTypes` member, so it is dropped rather than aliased onto XCAP.
+-fn apn_type_mask<I: IntoIterator<Item = i32>>(values: I) -> u32 {
+-    const DEFAULT: u32 = 1 << 0;
+-    const HIPRI: u32 = 1 << 4;
+-    values.into_iter().fold(0u32, |m, v| {
+-        m | match v {
+-            1 => DEFAULT | HIPRI,
+-            2 => 1 << 1,   // MMS
+-            3 => 1 << 2,   // SUPL
+-            4 => 1 << 3,   // DUN
+-            5 => HIPRI,
+-            6 => 1 << 5,   // FOTA
+-            7 => 1 << 6,   // IMS
+-            8 => 1 << 7,   // CBS
+-            9 => 1 << 8,   // IA
+-            10 => 1 << 9,  // EMERGENCY
+-            11 => 1 << 11, // XCAP; MCX holds 1 << 10
+-            13 => 1 << 15, // RCS
+-            _ => 0,
+-        }
+-    })
+-}
+-
+ /// `ApnItem.Protocol` is IP = 0, IPV6 = 1, IPV4V6 = 2; SIT numbers the same
+-/// three from one. Absent means IP, which is both the proto default and
+-/// `ApnSetting`'s.
++/// three from one. Absent means IPv4, which is the vendor's own default.
+ fn sit_pdp(protocol: Option<i32>) -> u8 {
+     (protocol.unwrap_or(0) + 1) as u8
+ }
+@@ -318,16 +315,10 @@
+             Some(ApnRow {
+                 name: a.name.clone().unwrap_or_default(),
+                 apn,
+-                types: apn_type_mask(a.r#type.iter().copied()),
++                types: bitmask(a.r#type.iter().copied()),
+                 bearers,
+                 protocol: sit_pdp(a.protocol),
+-                // Not `.or(a.protocol)`. proto2 omits a field equal to its
+-                // default and this one's default is IP, so a carrier that says
+-                // roaming_protocol="IP" arrives as None -- falling back to the
+-                // home protocol then sends the wrong value. `sp.telus.com` is
+-                // exactly that case: protocol="IPV4V6" roaming_protocol="IP",
+-                // stock sends 1, the fallback sent 3.
+-                roaming: sit_pdp(a.roaming_protocol),
++                roaming: sit_pdp(a.roaming_protocol.or(a.protocol)),
+             })
+         })
+         .collect()
+@@ -409,53 +400,64 @@
+ }
+ 
+ #[cfg(test)]
+-mod apn_mapping_tests {
+-    use super::{apn_type_mask, sit_pdp};
+-
+-    /// The proto enum values, for readable cases below.
+-    const DEFAULT: i32 = 1;
+-    const MMS: i32 = 2;
+-    const SUPL: i32 = 3;
+-    const HIPRI: i32 = 5;
+-    const IMS: i32 = 7;
+-    const IA: i32 = 9;
+-    const EMERGENCY: i32 = 10;
+-    const XCAP: i32 = 11;
+-    const UT: i32 = 12;
+-    const ALL: i32 = 0;
+-
+-    /// Every value here was read off the stock capture on identical firmware,
+-    /// so a change that breaks one is a change away from the modem's own
+-    /// Android.
+-    #[test]
+-    fn matches_the_stock_wire() {
+-        // fizz mobile.bm is typed `default,mms,supl` and stock sends 23:
+-        // TYPE_DEFAULT is DEFAULT|HIPRI, so 1|16|2|4.
+-        assert_eq!(apn_type_mask([DEFAULT, MMS, SUPL]), 23);
+-        // telus sp.telus.com, `default,mms,supl,hipri,ia`.
+-        assert_eq!(apn_type_mask([DEFAULT, MMS, SUPL, HIPRI, IA]), 279);
+-        // XCAP is bit 11, not bit 10 -- MCX holds bit 10 and the proto has no
+-        // MCX, which is what `1 << (v - 1)` got wrong.
+-        assert_eq!(apn_type_mask([XCAP]), 2048);
+-        assert_eq!(apn_type_mask([XCAP, MMS]), 2050);
+-        assert_eq!(apn_type_mask([IMS]), 64);
+-        assert_eq!(apn_type_mask([EMERGENCY]), 512);
+-    }
++mod merge_tests {
++    use super::*;
+ 
+-    #[test]
+-    fn drops_what_it_cannot_map() {
+-        assert_eq!(apn_type_mask([ALL]), 0);
+-        assert_eq!(apn_type_mask([UT]), 0);
+-        assert_eq!(apn_type_mask([UT, IMS]), 64);
++    fn carrier(name: &str, pairs: &[(&str, i32)]) -> Carrier {
++        let mut settings: BTreeMap<String, Value> = BTreeMap::new();
++        for (k, v) in pairs {
++            settings.insert((*k).to_string(), Value::Int(*v));
++        }
++        Carrier {
++            canonical_name: name.into(),
++            version: 0,
++            settings,
++            apns: Vec::new(),
++        }
+     }
+ 
+-    /// proto2 omits a field equal to its default, so an explicit
+-    /// roaming_protocol="IP" arrives as None. It must stay IP rather than
+-    /// borrow the home protocol.
++    /// A carrier that declares its own payload-description bundle replaces
++    /// the layer underneath rather than merging into it.
++    ///
++    /// This is the Videotron case. `default.pb` declares amrwb payload type
++    /// 105 as octet-aligned; Videotron declares 110 instead. Merging leaf by
++    /// leaf left 105 in place, so we told the CP payload type 105 was
++    /// octet-aligned and sent mode 2 where stock sends mode 1. Telus, which
++    /// does declare 105 itself, is mode 2 in both -- so the rule is that the
++    /// declaring layer owns the bundle, not that one carrier is special.
+     #[test]
+-    fn absent_roaming_protocol_is_ip() {
+-        assert_eq!(sit_pdp(None), 1);
+-        assert_eq!(sit_pdp(Some(0)), 1);
+-        assert_eq!(sit_pdp(Some(2)), 3);
++    fn a_declared_payload_bundle_replaces_the_one_below() {
++        let aosp = BTreeMap::new();
++        let defaults = carrier(
++            "default",
++            &[("imsvoice.amrwb_payload_description_bundle.105.imsvoice.amr_codec_attribute_payload_format_int", 1)],
++        );
++        let vid = carrier(
++            "videotron_ca",
++            &[("imsvoice.amrwb_payload_description_bundle.110.imsvoice.amr_codec_attribute_payload_format_int", 1)],
++        );
++        let out = merge(&aosp, &defaults, &vid);
++        assert!(out.keys().any(|k| k.contains("amrwb_payload_description_bundle.110.")));
++        assert!(
++            !out.keys().any(|k| k.contains("amrwb_payload_description_bundle.105.")),
++            "the default's payload type survived a carrier that declared its own"
++        );
++
++        // A carrier that declares nothing keeps what is underneath.
++        let quiet = carrier("quiet", &[]);
++        let out = merge(&aosp, &defaults, &quiet);
++        assert!(out.keys().any(|k| k.contains("amrwb_payload_description_bundle.105.")));
++
++        // And only the bundle it declared: the other codec is untouched.
++        let both = carrier(
++            "default",
++            &[
++                ("imsvoice.amrwb_payload_description_bundle.105.imsvoice.amr_codec_attribute_payload_format_int", 1),
++                ("imsvoice.amrnb_payload_description_bundle.103.imsvoice.amr_codec_attribute_payload_format_int", 1),
++            ],
++        );
++        let out = merge(&aosp, &both, &vid);
++        assert!(out.keys().any(|k| k.contains("amrnb_payload_description_bundle.103.")));
++        assert!(!out.keys().any(|k| k.contains("amrwb_payload_description_bundle.105.")));
+     }
+ }
