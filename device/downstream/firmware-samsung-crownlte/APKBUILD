@@ -1,32 +1,29 @@
-# Archived: unmaintained
-maintainer=""
+maintainer="Thorben T. <r00t@constancy.org>"
 pkgname=firmware-samsung-crownlte
 pkgver=3
 pkgrel=0
+_commit="e1494313c7223c0bb39a9c9f91b3f68bdcd204e7"
 pkgdesc="Firmware for the Samsung Galaxy Note 9"
 url="https://github.com/rom4nik/android_vendor_samsung"
 arch="aarch64"
 license="proprietary"
 options="!check !archcheck !strip !spdx !tracedeps pmb:cross-native"
-
-# Source
-_commit="e1494313c7223c0bb39a9c9f91b3f68bdcd204e7"
-_wifi_files="bcmdhd_sta.bin_b2 bcmdhd_clm.blob nvram.txt_r02a_b2"
-_firmware_files="bcm4361B2_semco.hcd mfc_fw.bin"
-
-for _file in $_wifi_files; do
-	source="$source $pkgname-$_commit-$_file::$url/raw/$_commit/universal9810-common/proprietary/vendor/etc/wifi/$_file"
-done
-for _file in $_firmware_files; do
-	source="$source $pkgname-$_commit-$_file::$url/raw/$_commit/crownlte/proprietary/vendor/firmware/$_file"
-done
-
+source="$pkgname-$_commit-bcmdhd_sta.bin_b2::https://github.com/rom4nik/android_vendor_samsung/raw/$_commit/universal9810-common/proprietary/vendor/etc/wifi/bcmdhd_sta.bin_b2
+	$pkgname-$_commit-bcmdhd_clm.blob::https://github.com/rom4nik/android_vendor_samsung/raw/$_commit/universal9810-common/proprietary/vendor/etc/wifi/bcmdhd_clm.blob
+	$pkgname-$_commit-nvram.txt_r02a_b2::https://github.com/rom4nik/android_vendor_samsung/raw/$_commit/universal9810-common/proprietary/vendor/etc/wifi/nvram.txt_r02a_b2
+	$pkgname-$_commit-bcm4361B2_semco.hcd::https://github.com/rom4nik/android_vendor_samsung/raw/$_commit/crownlte/proprietary/vendor/firmware/bcm4361B2_semco.hcd
+	$pkgname-$_commit-mfc_fw.bin::https://github.com/rom4nik/android_vendor_samsung/raw/$_commit/crownlte/proprietary/vendor/firmware/mfc_fw.bin
+"
 
 package() {
+	local wifi_files
+	wifi_files="bcmdhd_sta.bin_b2 bcmdhd_clm.blob nvram.txt_r02a_b2"
+	local firmware_files
+	firmware_files="bcm4361B2_semco.hcd mfc_fw.bin"
 	local file
-	for file in $_wifi_files $_firmware_files; do
+	for file in $wifi_files $firmware_files; do
 		 install -Dm644 "$srcdir/$pkgname-$_commit-$file" \
-			"$pkgdir/lib/firmware/postmarketos/$file"
+			"$pkgdir/usr/lib/firmware/postmarketos/$file"
 	done
 }
 
