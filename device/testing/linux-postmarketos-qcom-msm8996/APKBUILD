@@ -3,7 +3,7 @@ maintainer="Yassine Oudjana (Tooniis) <y.oudjana@protonmail.com>"
 _flavor="postmarketos-qcom-msm8996"
 pkgname=linux-$_flavor
 pkgver=6.19.5
-pkgrel=0
+pkgrel=1
 pkgdesc="Kernel close to mainline with extra patches for Qualcomm MSM8996 devices"
 arch="aarch64"
 _carch="arm64"
@@ -16,13 +16,16 @@ options="!strip !check !tracedeps
 makedepends="
 	bison
 	clang
+	elfutils-dev
 	findutils
 	flex
-	installkernel
+	linux-headers
 	lld
 	llvm
 	openssl-dev
+	pahole
 	perl
+	postmarketos-installkernel
 	python3
 	zstd
 "
@@ -56,11 +59,11 @@ package() {
 	make modules_install dtbs_install \
 		ARCH="$_carch" \
 		LLVM=1 \
-		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_PATH="$pkgdir"/usr \
 		INSTALL_MOD_STRIP=1 \
 		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
 }
 sha512sums="
 dd30dd113ad9f0b4ab3771ea655de2becce7ddaf5066d2f860b7bb1eb78573137313191d9da740b152348f9f89894ace2bb94fb195e340f7b6dabedeebbc929f  linux-v6.19.5-msm8996.tar.gz
-6a1e3a18fb454378ef5569a6951426d118144985c9028e663f46d28cde6784723296601d3756176045e22d706a9195938804c6a82f02fcf548e18d2e66c35b27  config-postmarketos-qcom-msm8996.aarch64
+7bdcab27adf381fe8ffca7eac4dbb4aef9a3e74c16631dc1af3d1410c884d6a5917762c40eee111c9ec17b8197aac819f6070a530ec94efadd92c8a9b4bce760  config-postmarketos-qcom-msm8996.aarch64
 "
