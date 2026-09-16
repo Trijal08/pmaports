@@ -18,9 +18,16 @@ url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="all"
 license="GPL-2.0-or-later"
 makedepends="cargo cargo-auditable"
-options="!check net"
+# !pmb:crossdirect keeps this out of pmbootstrap's cross-compiler setup.
+# When a foreign-arch package names this as a makedepend, the dependency
+# walk computes the cross mode against *that* package's arch while the
+# build itself resolves to the native one, and init_compiler then asks for
+# a cross toolchain targeting the host (gcc-x86_64), which cannot exist.
+# This branch returns QEMU_ONLY, which is not "enabled", so that setup is
+# skipped entirely -- and the build is native anyway, so nothing is emulated.
+options="!check !pmb:crossdirect net"
 
-_commit="3a333898041239d943f396a40552801542ef3ae8"
+_commit="9cee4624713f6a0029e451790c8d2e2db642e809"
 source="exynos-modem-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz"
 builddir="$srcdir/exynos-modem"
 
@@ -43,5 +50,5 @@ package() {
 }
 
 sha512sums="
-227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-3a333898041239d943f396a40552801542ef3ae8.tar.gz
+227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-9cee4624713f6a0029e451790c8d2e2db642e809.tar.gz
 "

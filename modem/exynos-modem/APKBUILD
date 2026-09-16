@@ -19,7 +19,7 @@ subpackages="
 "
 options="net"
 
-_commit="3a333898041239d943f396a40552801542ef3ae8"
+_commit="9cee4624713f6a0029e451790c8d2e2db642e809"
 source="
 	$pkgname-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz
 	gipc-serve-uecap-fetch.patch
@@ -97,7 +97,7 @@ libsamsung_sit_ffi() {
 		> "$subpkgdir/usr/lib/pkgconfig/samsung-sit-ffi.pc"
 }
 sha512sums="
-227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-3a333898041239d943f396a40552801542ef3ae8.tar.gz
+227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-9cee4624713f6a0029e451790c8d2e2db642e809.tar.gz
 f6e7ea677e08d47cbb10155ebb45ffbe064a9303bdac687b091f451df876b221ac7a80314cf1ca0086ec91f30c27fb9469a07ef989c1b93b2284e1bd9710943e  gipc-serve-uecap-fetch.patch
 7e28d42a2895902225774e8a90527493470d7760690078119c7aa2beab18f5cb8d144219f0d70cc7050db5e26ece4e067189035e3b2136242a111f2eae976fbc  gipc-uecap-type2-and-wrapper.patch
 e3e25178dd5b8d8667218ad74d4d58bdd4825b9b54f96b7edc6d15592851b6fa77678a1fca378b51b5fd1a0884a9d6dcb68ad682711bc9689aa861c90d33a462  gipc-serve-requested-block.patch

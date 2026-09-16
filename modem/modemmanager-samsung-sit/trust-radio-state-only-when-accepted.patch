@@ -1,6 +1,8 @@
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index a69d838..35ac4a7 100644
 --- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
 +++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
-@@ -63,6 +63,10 @@
+@@ -66,6 +66,10 @@ struct _MMBroadbandModemSamsungSitPrivate {
       * change while the CP is up, and three loaders want it. */
      MMSitNetworkGenerations  radio_capability;
      gboolean                 radio_capability_valid;
@@ -11,7 +13,7 @@
  };
  
  typedef struct {
-@@ -2571,6 +2575,9 @@
+@@ -2617,6 +2621,9 @@ modem_set_power_finish (MMIfaceModem  *self,
  }
  
  static void power_up_radio (GTask *task);
@@ -21,7 +23,7 @@
  
  static void
  default_attach_apn_ready (MMSitClient  *client,
-@@ -2600,6 +2607,175 @@
+@@ -2646,6 +2653,175 @@ modem_set_power_ready (MMSitClient *client,
      g_object_unref (task);
  }
  
@@ -197,7 +199,7 @@
  static void
  power_up_radio (GTask *task)
  {
-@@ -2615,7 +2791,7 @@
+@@ -2661,7 +2837,7 @@ power_up_radio (GTask *task)
          return;
      }
      mm_sit_client_set_radio_state (client, MM_SIT_RADIO_STATE_ON, NULL,
@@ -206,7 +208,7 @@
                                     task);
  }
  
-@@ -2629,9 +2805,11 @@
+@@ -2675,9 +2851,11 @@ attach_apn_from_settings_ready (MMBroadbandModemSamsungSit *self,
      g_autoptr(GError)             error = NULL;
      MMSitClient                  *client;
  
@@ -219,7 +221,7 @@
  
      /*
       * The CP needs *an* attach APN or it never attaches, and it will not ask the
-@@ -2723,9 +2901,7 @@
+@@ -2769,9 +2947,7 @@ modem_set_power (MMIfaceModem        *iface,
       * and carrier manifest (radio reports "on" but never searches), so
       * mirror the downstream bring-up order before requesting the radio. */
      if (state == MM_SIT_RADIO_STATE_ON) {
@@ -230,7 +232,7 @@
          return;
      }
      mm_sit_client_set_radio_state (client, state, NULL,
-@@ -5205,6 +5381,10 @@
+@@ -5289,6 +5465,10 @@ dispose (GObject *object)
          g_source_remove (self->priv->reject_retry_id);
          self->priv->reject_retry_id = 0;
      }
@@ -240,10 +242,12 @@
 +    }
      g_clear_object (&self->priv->initial_eps_bearer_settings);
      g_clear_object (&self->priv->ims);
-     self->priv->client = NULL;
+     if (self->priv->client)
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+index a967b38..59d71b1 100644
 --- a/src/plugins/samsung-sit/mm-sit-client.c
 +++ b/src/plugins/samsung-sit/mm-sit-client.c
-@@ -357,6 +357,17 @@
+@@ -387,6 +387,17 @@ mm_sit_client_radio_state_trusted (MMSitClient *self)
      return self->priv->radio_state_trusted;
  }
  
@@ -261,7 +265,7 @@
  static void
  port_command_ready (MMPortSerialSit *port,
                      GAsyncResult    *res,
-@@ -487,6 +498,7 @@
+@@ -517,6 +528,7 @@ typedef struct {
      MMSitRadioState state;
      guint           poll_attempts;
      guint           retry_id;
@@ -269,7 +273,7 @@
  } SetRadioContext;
  
  static void set_radio_poll (GTask *task);
-@@ -525,7 +537,13 @@
+@@ -555,7 +567,13 @@ set_radio_poll_ready (MMSitClient *self,
          return;
      }
      if (state == ctx->state) {
@@ -281,10 +285,10 @@
 +         * with no APN and every SETUP_DATA_CALL fails with cause 133. */
 +        if (ctx->request_accepted)
 +            self->priv->radio_state_trusted = TRUE;
-         g_task_return_boolean (task, TRUE);
-         g_object_unref (task);
-         return;
-@@ -555,9 +573,13 @@
+         if (state == MM_SIT_RADIO_STATE_OFF && self->priv->cp) {
+             mm_sit_cp_release_stack_data (self->priv->cp, self->priv->stack);
+             g_clear_pointer (&self->priv->cids, g_hash_table_unref);
+@@ -589,9 +607,13 @@ set_radio_request_ready (MMSitClient *self,
       * the resulting state either way, so note the refusal and carry on; a state
       * that genuinely never arrives still fails there.
       */
@@ -298,9 +302,11 @@
  
      set_radio_poll (task);
  }
+diff --git a/src/plugins/samsung-sit/mm-sit-client.h b/src/plugins/samsung-sit/mm-sit-client.h
+index 3e9c6b9..dda2aad 100644
 --- a/src/plugins/samsung-sit/mm-sit-client.h
 +++ b/src/plugins/samsung-sit/mm-sit-client.h
-@@ -70,6 +70,7 @@
+@@ -73,6 +73,7 @@ MMSitCarrierSimInfo *mm_sit_client_query_carrier_sim_info_finish (MMSitClient
                                                                    GAsyncResult  *res,
                                                                    GError       **error);
  gboolean mm_sit_client_radio_state_trusted  (MMSitClient         *self);
@@ -308,9 +314,11 @@
  
  /* The next request token. Public because AIMS frames are built outside this
   * client -- by a different codec -- but must share its token sequence, since
+diff --git a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+index 4b21bc9..b2dd327 100644
 --- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
 +++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
-@@ -1973,6 +1973,48 @@
+@@ -2129,6 +2129,48 @@ client_radio_test_peer (ClientTestContext *ctx)
      return NULL;
  }
  
@@ -359,7 +367,7 @@
  static void
  client_radio_test_ready (MMSitClient       *client,
                           GAsyncResult      *res,
-@@ -2028,6 +2070,53 @@
+@@ -2184,6 +2226,53 @@ test_client_radio_transition (void)
      g_main_loop_unref (ctx.loop);
  }
  
@@ -413,11 +421,11 @@
  static gpointer
  client_boot_config_test_peer (ClientTestContext *ctx)
  {
-@@ -2469,6 +2558,7 @@
-     g_test_add_func ("/MM/sit/ims/config-carrier-overrides", test_ims_config_carrier_overrides_replace);
-     g_test_add_func ("/MM/sit/ims/config-user-agent", test_ims_config_user_agent);
+@@ -3051,6 +3140,7 @@ main (int argc,
+     g_test_add_data_func ("/MM/sit/ims/provisioning-retry-recovery", GUINT_TO_POINTER (1), test_ims_provisioning_retries);
+     g_test_add_data_func ("/MM/sit/ims/vops-gating", GUINT_TO_POINTER (2), test_ims_provisioning_retries);
      g_test_add_func ("/MM/sit/client/radio-transition", test_client_radio_transition);
 +    g_test_add_func ("/MM/sit/client/radio-transition-refused", test_client_radio_transition_refused);
      g_test_add_func ("/MM/sit/client/boot-config", test_client_boot_config);
-     g_test_add_func ("/MM/sit/decode/registration-failed", test_parse_registration_failed);
- 
+     g_test_add_func ("/MM/sit/dsds/data-ownership", test_dsds_data_ownership);
+     g_test_add_data_func ("/MM/sit/dsds/prepare-coalesced", NULL, test_cp_prepare_coalesced);
