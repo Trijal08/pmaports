@@ -8,53 +8,101 @@ arch="aarch64"
 _carch="arm64"
 license="GPL-2.0-or-later OFL-1.1 BSD-2-Clause BSD-3-Clause eCos-2.0 IBM-pibs
 	ISC LGPL-2.0-only LGPL-2.1-only X11"
-options="!check"
-
+options="!check !tracedeps pmb:cross-native"
 makedepends="
-	bash
+	gcompat
 	bc
+	binutils
 	bison
+	coreutils
+	dtc
 	flex
-	gnutls-dev
-	libfdt
-	make
 	openssl-dev
 	py3-elftools
 	py3-setuptools
 	python3-dev
 	swig
-"
+	zlib-dev
+	"
 
-_uboot="88dc2788777babfd6322fa655df549a019aa1e69"
-_rkbin="a2a0b89b6c8c612dca5ed9ed8a68db8a07f68bc0"
+# ARM-software/arm-trusted-firmware master; provides the px30 BL31 that
+# replaces rkbin's prebuilt px30_bl31_*.elf in trust.img.
+_atf="51d8794cc2b52e8df842ab2d2b6e1326a80da735"
+_uboot="940a0f5a7f65c2972b8e42949d1caf55542c58f2"
+_rkbin="3e288fe814e059dd06833495f845cab04ac20a5c"
 
 builddir=$srcdir/u-boot-$_uboot
 
 source="
-	uboot-$_uboot.tar.gz::https://github.com/u-boot/u-boot/archive/$_uboot.tar.gz
+	uboot-$_uboot.tar.gz::https://github.com/Trijal08/u-boot/archive/$_uboot.tar.gz
 	rkbin-$_rkbin.tar.gz::https://github.com/rockchip-linux/rkbin/archive/$_rkbin.tar.gz
+	atf-$_atf.tar.gz::https://github.com/ARM-software/arm-trusted-firmware/archive/$_atf.tar.gz
 "
 
 build() {
-	make rockchip-r36s-rk3566_defconfig
+	# Mirror ArchR's invocation exactly -- their tree builds a u-boot.img that
+	# boots this board from these identical sources, so keep the delta down to
+	# the toolchain alone:
+	#   ARCH=arm      U-Boot uses arch/arm for aarch64 too
+	#   LDFLAGS=""    abuild's host link flags must not reach the target link
+	#   mrproper      no stale state from a previous target
+	# The rkbin vars are deliberately NOT exported during the compile; ArchR
+	# sets them only for the packaging steps below, and U-Boot's Makefile
+	# reacts to BL31/ROCKCHIP_TPL being present in the environment.
+	make ARCH=arm LDFLAGS="" mrproper
+	make ARCH=arm LDFLAGS="" rk3326-handheld_defconfig
+	make ARCH=arm LDFLAGS="" u-boot-dtb.bin tools
 
-	export ROCKCHIP_TPL=$srcdir/rkbin-$_rkbin/bin/rk35/rk3566_ddr_1056MHz_v1.21.bin
-	export BL31=$srcdir/rkbin-$_rkbin/bin/rk35/rk3568_bl31_v1.44.elf
+	export RKBIN_DIR=$srcdir/rkbin-$_rkbin
+	export ROCKCHIP_TPL=$RKBIN_DIR/bin/rk33/px30_ddr_333MHz_v2.12.bin
+	export ROCKCHIP_SPL=$RKBIN_DIR/bin/rk33/px30_miniloader_v1.35.bin
 
-	make spl/u-boot-spl.bin u-boot.dtb u-boot.img tools
-	make CONFIG_MKIMAGE_DTC_PATH="scripts/dtc/dtc"
+	# BL31 comes from TF-A source rather than rkbin's prebuilt
+	# px30_bl31_*.elf. The DDR blob and miniloader above stay as they are --
+	# there is no open replacement for those.
+	#   E=0          no -Werror; TF-A trips newer host compilers otherwise
+	#   LDFLAGS=""   abuild's host link flags must not reach the target link
+	make -C "$srcdir"/arm-trusted-firmware-$_atf \
+		E=0 LDFLAGS="" PLAT=px30 bl31
+	# TF-A has moved this path around between releases; take whichever exists.
+	for _bl31 in "$srcdir"/arm-trusted-firmware-$_atf/build/px30/release/bl31/bl31.elf \
+	             "$srcdir"/arm-trusted-firmware-$_atf/build/px30/release/bl31.elf; do
+		[ -f "$_bl31" ] && break
+	done
+	[ -f "$_bl31" ] || { echo "TF-A px30 bl31.elf not found"; return 1; }
+	export BL31="$_bl31"
+	echo "using BL31: $BL31"
 
-	tools/mkimage -n rk3568 -T rksd -d $ROCKCHIP_TPL:spl/u-boot-spl.bin -C bzip2 idbloader.img
+	tools/mkimage -n px30 -T rksd -d $ROCKCHIP_TPL -C bzip2 idbloader.img
+	cat $ROCKCHIP_SPL >> idbloader.img
+
+	cat >trust.ini <<-EOF
+	[BL30_OPTION]
+	SEC=0
+	[BL31_OPTION]
+	SEC=1
+	PATH=$BL31
+	ADDR=0x00010000
+	[BL32_OPTION]
+	SEC=0
+	[BL33_OPTION]
+	SEC=0
+	[OUTPUT]
+	PATH=trust.img
+	EOF
+
+	$RKBIN_DIR/tools/trust_merger --verbose ./trust.ini
+
+	$RKBIN_DIR/tools/loaderimage --pack --uboot ./u-boot-dtb.bin u-boot.img 0x200000
 }
 
 package() {
 	_installdir="$pkgdir/usr/share/u-boot/rockchip-r36s"
 
-	install -Dm644 u-boot.itb -t $_installdir
+	install -Dm644 u-boot.img -t $_installdir
+	install -Dm644 trust.img -t $_installdir
 	install -Dm644 idbloader.img -t $_installdir
 }
 
 sha512sums="
-d4470668561ce084b04cdae7930085a3ea2ea4adfcf9b14080db9a6288355507603c95326da7a0afeaa0e93fb29d961cdf7a2adb7f6b7eec17960317b40ee7fd  uboot-88dc2788777babfd6322fa655df549a019aa1e69.tar.gz
-715253b5ef5c7fbcbce8478d4dea5ad3d1b4b738da437b5f0e9b31eed20f9bcb86cab082e4c04c69b42b6ffcc2cbb1a31079b33b968bb76826ff0dd4f83043e1  rkbin-a2a0b89b6c8c612dca5ed9ed8a68db8a07f68bc0.tar.gz
 "
