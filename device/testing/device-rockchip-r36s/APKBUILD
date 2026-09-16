@@ -9,10 +9,9 @@ license="MIT"
 arch="aarch64"
 options="!check !archcheck"
 depends="
-	linux-firmware-rtl_bt
-	linux-firmware-rtw88
 	linux-rockchip-r36s
 	postmarketos-base
+	postmarketos-bootsplash
 	u-boot-rockchip-r36s
 "
 makedepends="devicepkg-dev"
