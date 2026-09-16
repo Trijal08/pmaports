@@ -1,26 +1,20 @@
-diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
-index d14f8ec6..d5dd1846 100644
---- a/src/plugins/samsung-sit/mm-sit-client.c
-+++ b/src/plugins/samsung-sit/mm-sit-client.c
-@@ -1161,6 +1161,11 @@ mm_sit_client_set_logical_slot_mapping_finish (MMSitClient  *self,
-  * response as registered -- the camped state that lets the connect
-  * sequence do the real work.  Meaningful non-registered states (searching,
-  * denied, ...) are preserved.
-+ *
-+ * The s5400 firmware reports the camped state as 20, not 0 (confirmed on
-+ * device 2026-08-30: stable state=20 rat=14 while camped on the home PLMN
-+ * 24202 at ~-97 dBm, no reject indication), where state 0 instead means "no
-+ * serving cell" (empty PLMN).  Promote both camped values.
-  */
- static void
- get_registration_operator_ready (MMSitClient *self,
-@@ -1180,7 +1185,8 @@ get_registration_operator_ready (MMSitClient *self,
-                     registration->registered ? "yes" : "no",
-                     registration->radio_technology,
-                     operator_info.plmn);
--        if (operator_info.plmn[0] != '\0' && registration->state == 0) {
-+        if (operator_info.plmn[0] != '\0' &&
-+            (registration->state == 0 || registration->state == 20)) {
-             mm_obj_dbg (self->priv->port, "registration check: promoting camped PLMN to registered");
-             registration->registered = TRUE;
-             registration->state = 1;
+diff --git a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+index ab67397..4b18e5f 100644
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -314,6 +314,15 @@ sit_registration_state (const MMSitRegistration *registration)
+     case 5:
+         state = MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING;
+         break;
++    /* The s5400 firmware reports the camped state as 20, not 0 (confirmed on
++     * device 2026-08-30: stable state=20 rat=14 while camped on the home PLMN
++     * 24202 at ~-97 dBm, no reject indication), where state 0 instead means
++     * "no serving cell" (empty PLMN). Upstream dropped the promote-to-
++     * registered hack this used to extend, so name the state here instead --
++     * which also keeps a roaming subscription roaming, the reason it went. */
++    case 20:
++        state = MM_MODEM_3GPP_REGISTRATION_STATE_HOME;
++        break;
+     case 10:
+     case 12:
+     case 13:

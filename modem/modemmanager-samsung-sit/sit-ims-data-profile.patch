@@ -1,8 +1,8 @@
 diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
-index 7925d5a7..352de3db 100644
+index 59d71b1..3ecd9ac 100644
 --- a/src/plugins/samsung-sit/mm-sit-client.c
 +++ b/src/plugins/samsung-sit/mm-sit-client.c
-@@ -3038,15 +3038,74 @@ disconnect_normal_ready (MMSitClient  *self,
+@@ -3039,15 +3039,77 @@ disconnect_normal_ready (MMSitClient  *self,
  typedef struct {
      guint8        cid;
      gboolean      cid_kept;
@@ -27,19 +27,22 @@ index 7925d5a7..352de3db 100644
 + * SETUP_DATA_CALL names a DNN; SET_DATA_PROFILE is what tells the CP that DNN
 + * exists. Without the profile the CP has nothing to match the request against
 + * and refuses it with cause 2253, "no URSP rule matched and the catch-all is
-+ * not allowed" -- the same answer it gives for an attach that named no APN, and
-+ * the reason that cause was read as an attach problem for so long.
++ * not allowed" -- the same answer it gives for an attach that named no APN,
++ * which is why that cause read as an attach problem for so long.
 + *
 + * mm_sit_client_connect_data has always sent the profile first
-+ * (CONNECT_STEP_DATA_PROFILE); this entry point did not, so the one caller that
-+ * uses it -- the IMS stack, for the ims PDN -- could never bring its context up
-+ * on a network whose policy does not permit a catch-all. Downstream sends the
-+ * whole profile list at boot, which is why Android has the ims profile in place
-+ * long before anything asks for that PDN.
++ * (CONNECT_STEP_DATA_PROFILE); this entry point did not, so its one caller --
++ * the IMS stack, for the ims PDN -- could never bring its context up on a
++ * network whose policy does not permit a catch-all. Downstream sends the whole
++ * profile list at boot, which is why Android has the ims profile in place long
++ * before anything asks for that PDN.
 + *
-+ * HW-confirmed: `mm-sit-tool connect ims` (which goes through connect_data)
-+ * brought the same PDN up on the same CP seconds after the IMS path had been
-+ * refused, and the CP announced "IMS Registered" as soon as it did.
++ * A refusal is not fatal: the CP answers status 2 here on hardware and grants
++ * the context anyway, so the rejection is worth a line and nothing more.
++ *
++ * HW-confirmed on an s5400: `mm-sit-tool connect ims` (which goes through
++ * connect_data) brought the same PDN up on the same CP seconds after the IMS
++ * path had been refused, and the CP announced "IMS Registered" as it did.
 + */
 +static void
 +setup_profile_ready (MMSitClient  *self,
@@ -53,10 +56,10 @@ index 7925d5a7..352de3db 100644
 +
 +    response = mm_sit_client_command_finish (self, res, &error);
 +    if (!response || !message_check_success (response, &error)) {
-+        cid_release (self, ctx->cid);
-+        g_task_return_error (task, error);
-+        g_object_unref (task);
-+        return;
++        mm_obj_dbg (self->priv->port,
++                    "data profile for APN '%s' rejected (%s); attempting data call setup",
++                    ctx->apn, error ? error->message : "no response");
++        g_clear_error (&error);
 +    }
 +
 +    request = mm_sit_request_new_setup_data_call (mm_sit_client_next_token (self), ctx->cid,
@@ -77,7 +80,7 @@ index 7925d5a7..352de3db 100644
  static void
  setup_data_call_ready (MMSitClient  *self,
                         GAsyncResult *res,
-@@ -3097,6 +3156,7 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
+@@ -3098,6 +3160,7 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
      g_autoptr(GByteArray)  request = NULL;
      SetupContext          *ctx;
      GTask                 *task;
@@ -85,7 +88,7 @@ index 7925d5a7..352de3db 100644
      GError                *error = NULL;
      guint8                 cid;
  
-@@ -3111,10 +3171,14 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
+@@ -3112,10 +3175,14 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
  
      ctx = g_new0 (SetupContext, 1);
      ctx->cid = cid;
@@ -102,7 +105,7 @@ index 7925d5a7..352de3db 100644
      if (!request) {
          cid_release (self, cid);
          g_task_return_error (task, error);
-@@ -3122,10 +3186,8 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
+@@ -3123,10 +3190,8 @@ mm_sit_client_setup_data_call (MMSitClient        *self,
          return;
      }
  
@@ -115,3 +118,18 @@ index 7925d5a7..352de3db 100644
  }
  
  gboolean
+diff --git a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+index b2dd327..c54b902 100644
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -2725,6 +2725,10 @@ ims_retry_peer_ready (gint fd, GIOCondition condition, ImsRetryPeer *peer)
+             response[82] = 1;
+         }
+         break;
++    case MM_SIT_MESSAGE_SET_DATA_PROFILE:
++        /* The IMS PDN registers its profile before asking for the context.
++         * A plain success here; the caller carries on either way. */
++        break;
+     case 0x0d06: /* AIMS_DEREGISTRATION */
+     case 0x0d39: /* AIMS_STACK_START_REQ */
+     case 0x0d07: /* AIMS_HIDDEN_MENU */

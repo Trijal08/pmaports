@@ -2,7 +2,7 @@ maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=device-google-komodo
 pkgdesc="Google Pixel 9 Pro XL"
 pkgver=1
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -19,6 +19,7 @@ depends="
 	alsa-ucm-conf-zumapro
 	linux-firmware-arm
 	linux-firmware-cirrus
+	mesa-vulkan-panfrost
 	soc-google
 	soc-google-gbootctl
 	exynos-modem
