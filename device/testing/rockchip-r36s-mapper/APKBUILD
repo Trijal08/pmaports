@@ -3,13 +3,13 @@ pkgname=rockchip-r36s-mapper
 pkgver=1.0.2
 pkgrel=0
 pkgdesc="Rockchip R36S gamepad joiner/mapper"
-url="https://github.com/vognev/x55-mapper"
+url="https://github.com/Trijal08/r36s-mapper"
 arch="aarch64"
 license="MIT"
 options="!check"
 makedepends="cargo"
-source="rockchip-r36s-mapper-$pkgver.tar.gz::https://github.com/vognev/x55-mapper/archive/refs/tags/v$pkgver.tar.gz"
-builddir="$srcdir/x55-mapper-$pkgver"
+source="rockchip-r36s-mapper-$pkgver.tar.gz::$url/archive/refs/heads/master.tar.gz"
+builddir="$srcdir/r36s-mapper-master"
 subpackages="$pkgname-openrc $pkgname-systemd $pkgname-udev"
 install="
 	$pkgname-openrc.post-install
@@ -23,7 +23,7 @@ build() {
 package() {
 	install -Dm644 contrib/postmarketos/99-disable-real-gamepad.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d/
-	install -Dm755 target/release/x55-mapper \
+	install -Dm755 target/release/r36s-mapper \
 		-t "$pkgdir"/usr/bin/
 	install -Dm644 contrib/postmarketos/rockchip-r36s-mapper.service \
 		-t "$pkgdir"/usr/lib/systemd/system/

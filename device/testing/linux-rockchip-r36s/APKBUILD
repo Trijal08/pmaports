@@ -1,7 +1,7 @@
 maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 _flavor="rockchip-r36s"
 pkgname=linux-$_flavor
-pkgver=7.1.5
+pkgver=7.3_rc3
 pkgrel=0
 pkgdesc="The linux-rockchip-r36s kernel and modules"
 arch="aarch64"
@@ -15,33 +15,38 @@ options="!strip !check !tracedeps
 makedepends="
 	bison
 	clang
-	elfutils-dev
 	findutils
 	flex
-	linux-headers
 	lld
 	llvm
+	lz4
 	openssl-dev
-	pahole
 	perl
-	python3
-	xz
 	zstd
+	clang-dev
+	rust
+	rust-bindgen
+	rust-src
+	rustfmt
+	rust-clippy
+	dwarf-tools
+	pahole
+	elfutils-dev
+	python3-dev
+	linux-headers
 "
 
+# Source
+_owner="Trijal08"
+_repository="kernel-mainline"
+_commit="b81b6f482d88a6da0818c3a858e094ee4cab0944"
 _config="config-$_flavor.$arch"
-case $pkgver in
-	*.*.*)	_kernver=${pkgver%.0};;
-	*.*)	_kernver=$pkgver;;
-esac
-_version="$_kernver-$pkgrel.$_flavor"
-
-builddir="$srcdir/linux-$_kernver"
 source="
-	https://cdn.kernel.org/pub/linux/kernel/v${_kernver%%.*}.x/linux-$_kernver.tar.xz
-	rtw88_wifi_fix.patch
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
 	$_config
 "
+builddir="$srcdir/$_repository-$_commit"
+_outdir="out"
 
 prepare() {
 	default_prepare
