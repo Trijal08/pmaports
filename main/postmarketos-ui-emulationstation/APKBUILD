@@ -13,6 +13,7 @@ depends="
 	"
 source="
 	10-emulationstation.sh
+	51-default-sink-volume.conf
 	es_systems.cfg
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
@@ -28,6 +29,7 @@ _pmb_groups="seat input"
 # (beetle-saturn covers Saturn).
 # fbalpha2019 -> fbneo, mupen64plus_next -> mupen64plus, and so on.
 _pmb_recommends="
+	es-theme-art-book-next
 	retroarch
 	# standalone: Alpine has no libretro core for these
 	gzdoom
@@ -108,4 +110,7 @@ package() {
 	# INPUT wizard, so the pad stays unmapped too.
 	install -Dm644 "$srcdir"/es_systems.cfg \
 		-t "$pkgdir"/etc/emulationstation
+
+	install -Dm644 "$srcdir"/51-default-sink-volume.conf \
+		-t "$pkgdir"/usr/share/wireplumber/wireplumber.conf.d
 }

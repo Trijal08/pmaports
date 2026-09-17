@@ -13,6 +13,13 @@ if [ ! -e "$HOME/.emulationstation/resources" ]; then
 		"$HOME/.emulationstation/resources"
 fi
 
+# ES looks for themes under ~/.emulationstation/themes as well as the system
+# path; link them so installed theme packages are picked up.
+if [ ! -e "$HOME/.emulationstation/themes" ] && \
+   [ -d /usr/share/emulationstation/themes ]; then
+	ln -sf /usr/share/emulationstation/themes "$HOME/.emulationstation/themes"
+fi
+
 # ES prefers ~/.emulationstation/es_systems.cfg and only falls back to
 # /etc/emulationstation/es_systems.cfg. On a first run with no /etc copy it
 # writes a one-system example into $HOME, which then permanently shadows the
