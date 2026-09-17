@@ -1,0 +1,109 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=postmarketos-ui-emulationstation
+pkgver=1
+pkgrel=0
+pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
+url="https://postmarketos.org/"
+arch="all"
+license="GPL-3.0-or-later"
+options="!check pmb:drm pmb:default-openrc pmb:support-openrc pmb:support-systemd"
+depends="
+	emulationstation
+	postmarketos-base-ui-cage
+	"
+source="
+	10-emulationstation.sh
+	es_systems.cfg
+	"
+# https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
+# "input" is required: the r36s-mapper exposes a uinput node ("Fake Gamepad")
+# owned root:input 0660, and SDL2 reads joysticks straight from /dev/input,
+# not through Wayland. Without this the UI renders but no button works.
+_pmb_groups="seat input"
+# Mirrors the libretro cores ArchR ships on this hardware, reduced to what
+# Alpine actually packages (61 of 122; the rest have no aport). A few map
+# to a near equivalent -- snes9x2010 -> snes9x, mame2003_plus -> mame2003,
+# fbalpha2019 -> fbneo, mupen64plus_next -> mupen64plus, and so on.
+_pmb_recommends="
+	retroarch
+	# standalone: Alpine has no libretro core for these
+	gzdoom
+	ppsspp
+	libretro-81
+	libretro-atari800
+	libretro-beetle-lynx
+	libretro-beetle-ngp
+	libretro-beetle-pce-fast
+	libretro-beetle-pcfx
+	libretro-beetle-supergrafx
+	libretro-beetle-vb
+	libretro-beetle-wswan
+	libretro-bluemsx
+	libretro-bsnes
+	libretro-cap32
+	libretro-core-info
+	libretro-crocods
+	libretro-daphne
+	libretro-database
+	libretro-desmume
+	libretro-dolphin
+	libretro-dosbox
+	libretro-fbneo
+	libretro-fceumm
+	libretro-flycast
+	libretro-fmsx
+	libretro-freechaf
+	libretro-freeintv
+	libretro-fuse
+	libretro-gambatte
+	libretro-gearboy
+	libretro-genesis-plus-gx
+	libretro-gpsp
+	libretro-gw
+	libretro-handy
+	libretro-hatari
+	libretro-mame2003
+	libretro-melonds
+	libretro-mgba
+	libretro-mu
+	libretro-mupen64plus
+	libretro-neocd
+	libretro-nestopia
+	libretro-o2em
+	libretro-opera
+	libretro-parallel-n64
+	libretro-pcsx-rearmed
+	libretro-picodrive
+	libretro-pokemini
+	libretro-prosystem
+	libretro-quicknes
+	libretro-sameboy
+	libretro-scummvm
+	libretro-snes9x
+	libretro-stella2014
+	libretro-tgbdual
+	libretro-theodore
+	libretro-tyrquake
+	libretro-uzem
+	libretro-vba-next
+	libretro-vbam
+	libretro-vecx
+	libretro-virtualjaguar
+	libretro-yabause
+	"
+
+package() {
+	# cage-ui-session.sh sources /etc/cage-ui/*.sh, then execs
+	# $CAGE_UI_COMMAND. postmarketos-ui-moonlight uses tinydm's
+	# env-wayland.d instead; /etc/cage-ui is what cage-ui-session.sh
+	# reads directly.
+	install -Dm755 "$srcdir"/10-emulationstation.sh \
+		-t "$pkgdir"/etc/cage-ui
+
+	# EmulationStation reads /etc/emulationstation/es_systems.cfg -- NOT
+	# ~/.emulationstation/es_systems.cfg. Without it ES aborts startup with
+	# "es_systems.cfg file does not exist!" and never reaches its CONFIGURE
+	# INPUT wizard, so the pad stays unmapped too.
+	install -Dm644 "$srcdir"/es_systems.cfg \
+		-t "$pkgdir"/etc/emulationstation
+}
