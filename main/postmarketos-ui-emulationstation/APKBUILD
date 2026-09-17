@@ -28,10 +28,10 @@ _pmb_groups="seat input"
 # libretro-mupen64plus (parallel-n64 covers N64) and libretro-yabause
 # (beetle-saturn covers Saturn).
 # fbalpha2019 -> fbneo, mupen64plus_next -> mupen64plus, and so on.
+# standalone: Alpine has no libretro core for these
 _pmb_recommends="
 	es-theme-art-book-next
 	retroarch
-	# standalone: Alpine has no libretro core for these
 	gzdoom
 	ppsspp
 	libretro-81
