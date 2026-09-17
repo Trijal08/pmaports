@@ -1,0 +1,32 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=es-theme-art-book-next
+pkgver=0_git20260918
+pkgrel=0
+_commit="9a50ef366e750aabfab29e6915a2867607212971"
+pkgdesc="Art Book Next theme for EmulationStation"
+url="https://github.com/anthonycaccese/art-book-next-es"
+arch="noarch"
+license="CC-BY-NC-SA-4.0"
+options="!check"
+source="$pkgname-$_commit.tar.gz::https://github.com/anthonycaccese/art-book-next-es/archive/$_commit.tar.gz"
+builddir="$srcdir/art-book-next-es-$_commit"
+
+package() {
+	# ES searches /usr/share/emulationstation/themes (and ~/.emulationstation
+	# /themes, which the UI package links). ArchR installs to /usr/share/themes
+	# instead because its ES build is patched for that layout.
+	install -d "$pkgdir"/usr/share/emulationstation/themes/$pkgname
+	cp -r . "$pkgdir"/usr/share/emulationstation/themes/$pkgname
+
+	# Same trim ArchR applies: drop the artwork variants it does not ship and
+	# stop theme.xml referencing them.
+	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/_inc/systems/artwork-circuit
+	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/_inc/systems/artwork-classic
+	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/_inc/systems/artwork-nintendont
+	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/_inc/systems/artwork-noir
+	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/_inc/systems/artwork-outline
+	sed -i '/<include name="\(noir\|nintendont\|circuit\|outline\)"/d' \
+		"$pkgdir"/usr/share/emulationstation/themes/$pkgname/theme.xml
+
+	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/.git*
+}
