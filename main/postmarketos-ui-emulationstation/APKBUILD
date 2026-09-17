@@ -23,6 +23,9 @@ _pmb_groups="seat input"
 # Mirrors the libretro cores ArchR ships on this hardware, reduced to what
 # Alpine actually packages (61 of 122; the rest have no aport). A few map
 # to a near equivalent -- snes9x2010 -> snes9x, mame2003_plus -> mame2003,
+# and two are dropped for having no aarch64 build at all:
+# libretro-mupen64plus (parallel-n64 covers N64) and libretro-yabause
+# (beetle-saturn covers Saturn).
 # fbalpha2019 -> fbneo, mupen64plus_next -> mupen64plus, and so on.
 _pmb_recommends="
 	retroarch
@@ -38,6 +41,7 @@ _pmb_recommends="
 	libretro-beetle-supergrafx
 	libretro-beetle-vb
 	libretro-beetle-wswan
+	libretro-beetle-saturn
 	libretro-bluemsx
 	libretro-bsnes
 	libretro-cap32
@@ -66,7 +70,6 @@ _pmb_recommends="
 	libretro-melonds
 	libretro-mgba
 	libretro-mu
-	libretro-mupen64plus
 	libretro-neocd
 	libretro-nestopia
 	libretro-o2em
@@ -89,7 +92,6 @@ _pmb_recommends="
 	libretro-vbam
 	libretro-vecx
 	libretro-virtualjaguar
-	libretro-yabause
 	"
 
 package() {
