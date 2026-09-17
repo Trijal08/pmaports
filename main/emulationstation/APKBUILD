@@ -1,0 +1,64 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=emulationstation
+pkgver=0_git20260917
+pkgrel=0
+_commit="f25c4475a348f534de8ff724e9e42808b7a80a12"
+pkgdesc="Graphical emulator frontend, ArchR fork tuned for handheld consoles"
+url="https://github.com/archr-linux/emulationstation-next"
+arch="all"
+license="MIT AND GPL-2.0-or-later"
+makedepends="
+	alsa-lib-dev
+	cmake
+	curl-dev
+	freeimage-dev
+	freetype-dev
+	gettext-dev
+	glu-dev
+	mesa-dev
+	pugixml-dev
+	rapidjson-dev
+	samurai
+	sdl2-dev
+	sdl2_mixer-dev
+	vlc-dev
+	"
+# 7zip replaces Alpine's dropped p7zip; fping is used by the netplay browser.
+depends="
+	7zip
+	bash
+	fping
+	"
+options="!check"
+source="$pkgname-$_commit.tar.gz::https://github.com/archr-linux/emulationstation-next/archive/$_commit.tar.gz"
+builddir="$srcdir/emulationstation-next-$_commit"
+
+build() {
+	# ARCHR is deliberately left OFF. It is only a -DARCHR preprocessor
+	# define, but it switches the code to ArchR's /storage and /usr/config
+	# layout, which does not exist here. Turn it on only if you also
+	# recreate that layout.
+	#
+	# GLES2 rather than GL: the RK3326 Mali runs through panfrost, and this
+	# is what ArchR ships for the same SoC.
+	cmake -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DGLES2=ON \
+		-DGL=OFF \
+		-DCEC=OFF \
+		-DDISABLE_KODI=ON \
+		-DENABLE_FILEMANAGER=OFF \
+		-DENABLE_PULSE=ON \
+		-DUSE_SYSTEM_PUGIXML=ON
+	cmake --build build
+}
+
+package() {
+	# CMake only installs the binary (es-app: install(TARGETS ... DESTINATION
+	# bin)); resources are copied by hand upstream too.
+	DESTDIR="$pkgdir" cmake --install build
+
+	install -d "$pkgdir"/usr/share/emulationstation
+	cp -r resources "$pkgdir"/usr/share/emulationstation/
+}
