@@ -53,6 +53,7 @@ fi
 RA_CFG="$RA_DIR/retroarch.cfg"
 [ -f "$RA_CFG" ] || : > "$RA_CFG"
 for _kv in \
+	'input_driver = "udev"' \
 	'input_joypad_driver = "udev"' \
 	'joypad_autoconfig_dir = "~/.config/retroarch/autoconfig"' \
 	'input_enable_hotkey_btn = "8"' \
