@@ -1,0 +1,8 @@
+# EmulationStation's quit menu shells out to "sudo shutdown -h now" and
+# "sudo shutdown -r now" (see runShutdownCommand in the binary). It runs as the
+# session user with no terminal, so a password prompt cannot be answered: the
+# UI tears down, the command fails silently, and the device is left with a
+# black screen and no shutdown.
+#
+# Allow exactly those two binaries, nothing else.
+%wheel ALL=(root) NOPASSWD: /sbin/shutdown, /usr/sbin/shutdown
