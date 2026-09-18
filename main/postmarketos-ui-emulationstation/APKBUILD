@@ -8,11 +8,16 @@ arch="all"
 license="GPL-3.0-or-later"
 options="!check pmb:drm pmb:default-openrc pmb:support-openrc pmb:support-systemd"
 depends="
+	keyd
 	emulationstation
 	postmarketos-base-ui-cage
 	"
 source="
 	10-emulationstation.sh
+	Fake_Gamepad.cfg
+	keyd-default.conf
+	r36s-volume
+	retroarch.cfg
 	51-default-sink-volume.conf
 	es_systems.cfg
 	"
@@ -30,6 +35,7 @@ _pmb_groups="seat input"
 # fbalpha2019 -> fbneo, mupen64plus_next -> mupen64plus, and so on.
 # standalone: Alpine has no libretro core for these
 _pmb_recommends="
+	retroarch-joypad-autoconfig
 	es-theme-art-book-next
 	retroarch
 	gzdoom
@@ -113,4 +119,16 @@ package() {
 
 	install -Dm644 "$srcdir"/51-default-sink-volume.conf \
 		-t "$pkgdir"/usr/share/wireplumber/wireplumber.conf.d
+
+	# RetroArch has its own input stack: without an autoconfig for the merged
+	# pad no button works in-game, and without the hotkeys there is no way back
+	# to EmulationStation. SELECT+START exits, SELECT+X opens the menu.
+	install -Dm644 "$srcdir"/retroarch.cfg -t "$pkgdir"/etc
+	install -Dm644 "$srcdir"/Fake_Gamepad.cfg \
+		"$pkgdir"/usr/share/libretro/autoconfig/"Fake Gamepad.cfg"
+
+	# Volume rocker: the keys are delivered but nothing in a cage session binds
+	# media keys.
+	install -Dm755 "$srcdir"/r36s-volume -t "$pkgdir"/usr/bin
+	install -Dm644 "$srcdir"/keyd-default.conf "$pkgdir"/etc/keyd/default.conf
 }

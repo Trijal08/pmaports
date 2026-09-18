@@ -1,0 +1,17 @@
+#!/bin/sh
+# Adjust the volume of the graphical session's default sink.
+#
+# keyd runs as root, but PipeWire lives in the logged-in user's session, so
+# wpctl has to be re-executed as that user with their XDG_RUNTIME_DIR. The
+# autologin user is uid 10000 on postmarketOS; fall back to whatever session
+# logind reports as active if that is not present.
+set -eu
+
+uid=10000
+id -u "$uid" >/dev/null 2>&1 || uid=$(loginctl list-sessions --no-legend 2>/dev/null \
+	| awk 'NR==1{print $2}')
+[ -n "$uid" ] || exit 0
+
+exec setpriv --reuid="$uid" --regid="$uid" --clear-groups \
+	env XDG_RUNTIME_DIR="/run/user/$uid" \
+	wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ "$1"
