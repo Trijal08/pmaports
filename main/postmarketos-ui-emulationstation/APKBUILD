@@ -9,6 +9,7 @@ license="GPL-3.0-or-later"
 options="!check pmb:drm pmb:default-openrc pmb:support-openrc pmb:support-systemd"
 depends="
 	keyd
+	sudo
 	emulationstation
 	postmarketos-base-ui-cage
 	"
@@ -21,6 +22,7 @@ source="
 	retroarch.cfg
 	51-default-sink-volume.conf
 	51-min-quantum.conf
+	emulationstation-shutdown.sudoers
 	es_systems.cfg
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
@@ -135,6 +137,10 @@ package() {
 	# media keys.
 	install -Dm755 "$srcdir"/r36s-volume -t "$pkgdir"/usr/bin
 	install -Dm644 "$srcdir"/keyd-default.conf "$pkgdir"/etc/keyd/default.conf
+
+	# sudoers files must be 0440 or sudo refuses to read them.
+	install -Dm440 "$srcdir"/emulationstation-shutdown.sudoers \
+		"$pkgdir"/etc/sudoers.d/10-emulationstation
 	install -Dm644 "$srcdir"/99-keyd-ignore-pointer.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d
 }
