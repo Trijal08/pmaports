@@ -1,0 +1,5 @@
+# keyd always creates a virtual pointer alongside its virtual keyboard. On a
+# handheld with no mouse the compositor then draws a cursor over
+# EmulationStation and over every game. Nothing binds pointer events here, so
+# hide it from libinput; the virtual keyboard is left alone.
+SUBSYSTEM=="input", ATTRS{name}=="keyd virtual pointer", ENV{LIBINPUT_IGNORE_DEVICE}="1"

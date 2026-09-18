@@ -15,6 +15,7 @@ depends="
 source="
 	10-emulationstation.sh
 	Fake_Gamepad.cfg
+	99-keyd-ignore-pointer.rules
 	keyd-default.conf
 	r36s-volume
 	retroarch.cfg
@@ -131,4 +132,6 @@ package() {
 	# media keys.
 	install -Dm755 "$srcdir"/r36s-volume -t "$pkgdir"/usr/bin
 	install -Dm644 "$srcdir"/keyd-default.conf "$pkgdir"/etc/keyd/default.conf
+	install -Dm644 "$srcdir"/99-keyd-ignore-pointer.rules \
+		-t "$pkgdir"/usr/lib/udev/rules.d
 }
