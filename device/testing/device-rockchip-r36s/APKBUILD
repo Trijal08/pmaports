@@ -9,6 +9,7 @@ license="MIT"
 arch="aarch64"
 options="!check !archcheck"
 depends="
+	alsa-ucm-conf-rockchip-r36s
 	linux-rockchip-r36s
 	postmarketos-base
 	postmarketos-bootsplash
