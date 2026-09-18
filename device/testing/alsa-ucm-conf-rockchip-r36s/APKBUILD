@@ -1,0 +1,27 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=alsa-ucm-conf-rockchip-r36s
+pkgver=1
+pkgrel=0
+pkgdesc="ALSA UCM configuration for the RK3326 R36S (rk817 codec)"
+url="https://github.com/Trijal08/alsa-ucm-conf"
+arch="aarch64"
+license="BSD-3-Clause"
+# Upstream's Rockchip/rk817-sound names the raw controls rather than the simple
+# mixer elements, so PipeWire finds no hardware volume and plays everything at
+# software gain with the DAC stuck near -20 dB. This branch is upstream master
+# plus that one fix.
+provides="alsa-ucm-conf"
+provider_priority=1
+_owner="Trijal08"
+_repository="alsa-ucm-conf"
+_commit="rk3326-r36s"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+"
+options="!check"
+builddir="$srcdir/$_repository-$_commit"
+
+package() {
+	mkdir -p "$pkgdir"/usr/share/alsa
+	cp -r "$builddir"/ucm2 "$pkgdir"/usr/share/alsa/
+}
