@@ -38,6 +38,35 @@ if [ ! -e "$HOME/.emulationstation/tools/about.sh" ]; then
 	chmod 755 "$HOME/.emulationstation/tools/about.sh"
 fi
 
+# RetroArch reads ~/.config/retroarch/retroarch.cfg in preference to
+# /etc/retroarch.cfg, creates it on first launch and rewrites it on exit, so a
+# system-wide file alone never takes effect. Inject what the device needs each
+# session; this is idempotent and leaves everything else alone.
+#
+# Without the autoconfig RetroArch reports "Fake Gamepad not configured" and no
+# button works in-game -- including SELECT+START to get back here.
+RA_DIR="$HOME/.config/retroarch"
+mkdir -p "$RA_DIR/autoconfig"
+if [ -f "/usr/share/libretro/autoconfig/Fake Gamepad.cfg" ]; then
+	cp -f "/usr/share/libretro/autoconfig/Fake Gamepad.cfg" "$RA_DIR/autoconfig/"
+fi
+RA_CFG="$RA_DIR/retroarch.cfg"
+[ -f "$RA_CFG" ] || : > "$RA_CFG"
+for _kv in \
+	'input_joypad_driver = "udev"' \
+	'joypad_autoconfig_dir = "~/.config/retroarch/autoconfig"' \
+	'input_enable_hotkey_btn = "8"' \
+	'input_exit_emulator_btn = "9"' \
+	'input_menu_toggle_btn = "2"'
+do
+	_k=${_kv%% =*}
+	if grep -q "^$_k" "$RA_CFG"; then
+		sed -i "s|^$_k.*|$_kv|" "$RA_CFG"
+	else
+		echo "$_kv" >> "$RA_CFG"
+	fi
+done
+
 # ArchR sets this in es_settings; pipewire-pulse provides the endpoint.
 export SDL_AUDIODRIVER=pulseaudio
 
