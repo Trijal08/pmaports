@@ -20,6 +20,7 @@ source="
 	r36s-volume
 	retroarch.cfg
 	51-default-sink-volume.conf
+	51-min-quantum.conf
 	es_systems.cfg
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
@@ -120,6 +121,8 @@ package() {
 
 	install -Dm644 "$srcdir"/51-default-sink-volume.conf \
 		-t "$pkgdir"/usr/share/wireplumber/wireplumber.conf.d
+	install -Dm644 "$srcdir"/51-min-quantum.conf \
+		-t "$pkgdir"/usr/share/pipewire/pipewire.conf.d
 
 	# RetroArch has its own input stack: without an autoconfig for the merged
 	# pad no button works in-game, and without the hotkeys there is no way back
