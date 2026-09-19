@@ -1,6 +1,6 @@
 maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=rockchip-r36s-mapper
-pkgver=1.0.2
+pkgver=1.0.3
 pkgrel=0
 pkgdesc="Rockchip R36S gamepad joiner/mapper"
 url="https://github.com/Trijal08/r36s-mapper"
@@ -8,8 +8,15 @@ arch="aarch64"
 license="MIT"
 options="!check"
 makedepends="cargo"
-source="rockchip-r36s-mapper-$pkgver.tar.gz::$url/archive/refs/heads/master.tar.gz"
-builddir="$srcdir/r36s-mapper-master"
+# Pinned to a commit, NOT refs/heads/master. The branch tarball was saved
+# as rockchip-r36s-mapper-$pkgver.tar.gz, a name that does not change when
+# master moves, so a cached distfile is never refetched: the package would
+# keep building whatever snapshot happened to be downloaded first. That is
+# how a build silently shipped the pre-impersonation "Fake Gamepad" mapper
+# while master already carried the Switch Pro identity.
+_commit="94f379f6fea7fc3fb9aa981b6da06b469fbf61fe"
+source="rockchip-r36s-mapper-$_commit.tar.gz::$url/archive/$_commit.tar.gz"
+builddir="$srcdir/r36s-mapper-$_commit"
 subpackages="$pkgname-openrc $pkgname-systemd $pkgname-udev"
 install="
 	$pkgname-openrc.post-install
@@ -32,5 +39,5 @@ package() {
 }
 
 sha512sums="
-cf03fc0c9809724932400497cea581678cee70671c55d1450ebfac5dd1f7b5b03b047cdf388e21a391a4b526f51c9f2efa56789a185689c9f1f8e6464a86c62d  rockchip-r36s-mapper-1.0.2.tar.gz
+c3b2e9ae45ed00927a8ff53aae84b80e71e4e80364310a3f57ebabe6508619a83952828f651dd023fbce6d661df1d14593adccfaf7bc5ae78e0480ed042dfccf  rockchip-r36s-mapper-94f379f6fea7fc3fb9aa981b6da06b469fbf61fe.tar.gz
 "
