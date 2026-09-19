@@ -1,0 +1,18 @@
+[Unit]
+Description=PortMaster path compatibility symlinks (/roms, /storage)
+Documentation=https://portmaster.games
+# The links must exist before EmulationStation starts, since every port
+# script resolves its own location through /roms. Ordering early and with
+# no default dependencies keeps this independent of which display manager
+# or session the image ships.
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/portmaster-compat-links
+
+[Install]
+WantedBy=sysinit.target

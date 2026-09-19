@@ -1,0 +1,16 @@
+// Let any user restart the oga_events shim without a password.
+//
+// PortMaster ports invoke "systemctl restart oga_events" directly - ESUDO is
+// empty in control.txt - and an interactive polkit prompt is unanswerable
+// from EmulationStation, so the port hangs at exit.
+//
+// Deliberately not gated on subject.local/subject.active: that excludes SSH
+// sessions, which makes the behaviour untestable remotely for no benefit.
+// The unit itself only bounces the gamepad mapper, so there is nothing here
+// worth protecting.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "oga_events.service") {
+        return polkit.Result.YES;
+    }
+});
