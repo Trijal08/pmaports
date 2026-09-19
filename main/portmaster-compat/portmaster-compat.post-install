@@ -1,0 +1,8 @@
+#!/bin/sh
+# systemd images enable this through 80-portmaster-compat.preset, which
+# "systemctl preset-all" applies when the rootfs is built. OpenRC has no
+# equivalent, so add the service here when rc-update is present.
+if command -v rc-update >/dev/null 2>&1; then
+	rc-update add portmaster-compat default 2>/dev/null || true
+fi
+exit 0

@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Write the es_input.cfg PortMaster reads, with face buttons pre-exchanged.
+
+PortMaster's get_controls generates its controller database by running
+mapper.py over ~/.config/emulationstation/es_input.cfg - a path
+EmulationStation on postmarketOS does not use, so without this the file is
+absent, the guard fails, and the database is left empty. SDL then falls back
+to its built-in mapping.
+
+mapper.py also swaps the face buttons unconditionally (a->b, b->a, x->y,
+y->x). That is positionally correct - this board's A is the right-hand
+button and SDL calls the right-hand button "b" - but it is not what the rest
+of the system does: EmulationStation, RetroArch and the GLFW ports all treat
+the printed label as authoritative, so A confirms. Exchanging the pair here
+cancels mapper.py's swap and keeps every consumer consistent.
+
+The real ES config is never modified; this writes a separate copy.
+
+  es-input-for-portmaster [src] [dst]
+"""
+import os
+import shutil
+import sys
+import xml.etree.ElementTree as ET
+
+SWAP = {"a": "b", "b": "a", "x": "y", "y": "x"}
+
+home = os.path.expanduser("~")
+src = sys.argv[1] if len(sys.argv) > 1 else f"{home}/.emulationstation/es_input.cfg"
+dst = sys.argv[2] if len(sys.argv) > 2 else f"{home}/.config/emulationstation/es_input.cfg"
+
+if not os.path.isfile(src):
+    sys.exit(0)
+
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+
+try:
+    tree = ET.parse(src)
+except ET.ParseError:
+    # Malformed config: hand it over untouched rather than losing the file.
+    shutil.copyfile(src, dst)
+    sys.exit(0)
+
+for dev in tree.getroot().findall("inputConfig"):
+    for inp in dev.findall("input"):
+        name = inp.get("name")
+        if name in SWAP:
+            inp.set("name", SWAP[name])
+
+tree.write(dst, encoding="utf-8", xml_declaration=True)

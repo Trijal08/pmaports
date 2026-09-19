@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+description="PortMaster path compatibility symlinks (/roms, /storage)"
+
+depend() {
+	need localmount
+	before display-manager
+}
+
+start() {
+	ebegin "Creating PortMaster compatibility symlinks"
+	/usr/bin/portmaster-compat-links
+	eend $?
+}

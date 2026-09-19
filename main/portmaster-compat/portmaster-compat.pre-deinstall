@@ -1,0 +1,5 @@
+#!/bin/sh
+if command -v rc-update >/dev/null 2>&1; then
+	rc-update del portmaster-compat 2>/dev/null || true
+fi
+exit 0

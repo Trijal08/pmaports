@@ -1,0 +1,151 @@
+#!/bin/sh
+# Run a PortMaster port against the glibc sysroot, automatically.
+#
+#   port-launch <port-script>
+#
+# No per-port configuration. Everything is derived from the port itself:
+#
+#   * The port directory comes from the GAMEDIR= line every PortMaster
+#     launcher defines.
+#   * Real glibc is supplied by binding the sysroot's loader over
+#     /lib/ld-linux-aarch64.so.1 inside the namespace, so EVERY glibc binary
+#     the port runs - the game, gptokeyb, anything else - uses it without a
+#     wrapper. musl binaries use ld-musl-aarch64.so.1 and are untouched.
+#   * Libraries resolve through an ld.so.cache built once from the sysroot.
+#     The loader reads it from /storage/.cache/ld.so.cache (ArchR built it
+#     with that path compiled in) and musl never looks at it, so it cannot
+#     affect anything else on the system.
+#   * X11 is forced only for ports whose binaries import glfwGetX11Display,
+#     detected by scanning them. GLFW would otherwise pick Wayland, and
+#     merely unsetting WAYLAND_DISPLAY is not enough - libwayland falls back
+#     to the default name "wayland-0", which exists.
+#   * /opt/port-overlays/common/ is layered in only where the port does not
+#     already provide the same filename, so e.g. PortMaster's own large
+#     gamecontrollerdb.txt is never replaced by ours.
+#
+# The port directory is mounted as an overlay with a writable upper layer
+# under ~/.local/share/port-writes/, so saves work and the directory on disk
+# is never modified.
+
+set -e
+SCRIPT=$1
+[ -n "$SCRIPT" ] || { echo "usage: port-launch <port-script>" >&2; exit 1; }
+
+SYSROOT=${GLIBC_SYSROOT:-/opt/glibc-sysroot}
+COMMON=${PORT_OVERLAY_COMMON:-/opt/port-overlays/common}
+LOADER="$SYSROOT/usr/lib/ld-linux-aarch64.so.1"
+CACHE="$HOME/.cache/ld.so.cache"
+WRITES=${XDG_DATA_HOME:-$HOME/.local/share}/port-writes
+STAGE=${XDG_RUNTIME_DIR:-/tmp}/port-launch
+PORTS_DIR=$(dirname "$SCRIPT")
+
+# PortMaster's get_controls builds its controller database by running
+# mapper.py over ~/.config/emulationstation/es_input.cfg - a path
+# EmulationStation on postmarketOS does not use, so the guard fails and the
+# database is left empty, leaving SDL on its built-in mapping.
+#
+# Refreshed on every launch rather than once per session, so re-running ES's
+# input wizard takes effect immediately for PortMaster's UI and every SDL
+# port. The helper also pre-exchanges the face buttons to cancel mapper.py's
+# unconditional swap; see its header.
+command -v es-input-for-portmaster >/dev/null && es-input-for-portmaster || :
+
+run_plain() { exec /bin/bash "$SCRIPT"; }
+
+command -v bwrap >/dev/null || run_plain
+bwrap --dev-bind / / -- /bin/true 2>/dev/null || run_plain
+[ -x "$LOADER" ] || run_plain
+
+# Build the loader cache once. ldconfig is itself a glibc binary, so it has
+# to be run through the loader explicitly.
+#
+# Rebuild when the sysroot's library directory is newer, not just the
+# loader: adding a library to an existing sysroot leaves the loader
+# untouched, and a stale cache then hides the new library completely.
+if [ ! -f "$CACHE" ] || [ "$LOADER" -nt "$CACHE" ] || \
+   [ "$SYSROOT/usr/lib" -nt "$CACHE" ]; then
+	mkdir -p "$(dirname "$CACHE")"
+	"$LOADER" --library-path "$SYSROOT/usr/lib:$SYSROOT/lib" \
+		"$SYSROOT/usr/bin/ldconfig" -f "$SYSROOT/etc/ld.so.conf" \
+		-C "$CACHE" 2>/dev/null || :
+fi
+
+# Which directory does this port live in?
+#
+# Launchers write GAMEDIR in whatever style they like - "/$directory/ports/gta3"
+# in the re3 ports, "$SCRIPT_DIR/mcpe_launcher" in others - so the value is
+# not usable as written and expanding it would mean sourcing the script.
+# Only the last component is ever meaningful, and ports always sit directly
+# under the ports directory, so take the basename and resolve it there.
+GAMEDIR=$(sed -n 's/^[[:space:]]*GAMEDIR=["]*\([^"]*\)["]*.*/\1/p' "$SCRIPT" | head -1)
+GAMEDIR=${GAMEDIR%/}
+GAMEDIR=${GAMEDIR##*/}
+[ -n "$GAMEDIR" ] && GAMEDIR="$PORTS_DIR/$GAMEDIR"
+
+set -- --dev-bind / / --ro-bind "$LOADER" /lib/ld-linux-aarch64.so.1
+
+if [ -d "$GAMEDIR" ]; then
+	# dlopen'd trees, pointed into the sysroot so a glibc binary does not
+	# drag the host's musl libraries into its process and corrupt the heap.
+	#
+	# Scoped to identified ports deliberately. These are process-wide, and
+	# a musl program - PortMaster's own Python UI, which loads musl SDL2 -
+	# cannot load glibc ALSA plugins, so setting them globally silently
+	# kills its audio. PortMaster's launcher defines no GAMEDIR, so it
+	# never reaches here.
+	set -- "$@" --setenv LIBGL_DRIVERS_PATH "$SYSROOT/usr/lib/dri"
+	# libglvnd resolves its driver through a vendor JSON, and hardcodes the
+	# absolute search path /etc/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d.
+	# Inside the sandbox those are the *host* dirs, and Alpine's Mesa is not
+	# glvnd so they do not exist. With no vendor, eglGetDisplay returns
+	# EGL_NO_DISPLAY and SDL reports "Could not get EGL display". The sysroot
+	# ships the JSON; glvnd just needs to be told where it is.
+	set -- "$@" --setenv __EGL_VENDOR_LIBRARY_DIRS "$SYSROOT/usr/share/glvnd/egl_vendor.d"
+	set -- "$@" --setenv ALSA_PLUGIN_DIR    "$SYSROOT/usr/lib/alsa-lib"
+	set -- "$@" --setenv ALSA_CONFIG_PATH   "$SYSROOT/usr/share/alsa/alsa.conf"
+	set -- "$@" --setenv SPA_PLUGIN_DIR     "$SYSROOT/usr/lib/spa-0.2"
+	set -- "$@" --setenv PIPEWIRE_MODULE_DIR "$SYSROOT/usr/lib/pipewire-0.3"
+
+	port=$(basename "$GAMEDIR")
+	# The upper layer is stable so saves persist. The work directory must
+	# be unique per launch: overlayfs refuses to share one, and two ports
+	# running at once otherwise produce "workdir is in-use as
+	# upperdir/workdir of another mount - undefined behavior".
+	upper="$WRITES/$port/upper"
+	work="$WRITES/$port/work.$$"
+	rm -rf "$WRITES/$port"/work.* 2>/dev/null || :
+	merged="$STAGE/$port/common"
+	mkdir -p "$upper" "$work" "$merged"
+
+	# Only filenames the port does not already have.
+	for f in "$COMMON"/*; do
+		[ -e "$f" ] || continue
+		[ -e "$GAMEDIR/$(basename "$f")" ] || ln -sfn "$f" "$merged/$(basename "$f")"
+	done
+
+	# The LAST --overlay-src is the topmost layer.
+	set -- "$@" --overlay-src "$GAMEDIR" --overlay-src "$merged"
+	set -- "$@" --overlay "$upper" "$work" "$GAMEDIR"
+
+	# PortMaster targets CFW distros that run everything as root, so ports
+	# write to /root directly - McpeLauncher stages the game under
+	# /root/.local/share. As a normal user that is EACCES, and because
+	# those ports chain with &&, the first failure silently aborts the
+	# launch. Give each port a private writable /root instead. /root
+	# already exists, so bwrap can mount over it (it cannot create a
+	# mountpoint on a filesystem it does not own), and the real one is
+	# never touched.
+	privroot="$WRITES/$port/root"
+	mkdir -p "$privroot/.local/share" "$privroot/.config"
+	set -- "$@" --bind "$privroot" /root
+
+	if grep -qls glfwGetX11Display "$GAMEDIR"/* 2>/dev/null; then
+		set -- "$@" --setenv DISPLAY "${DISPLAY:-:0}"
+		set -- "$@" --setenv WAYLAND_DISPLAY none-forced-to-x11
+	fi
+fi
+
+# Clean up this launch's work directory when the port exits.
+trap 'rm -rf "$work" 2>/dev/null' EXIT INT TERM
+
+bwrap "$@" -- /bin/bash "$SCRIPT"
