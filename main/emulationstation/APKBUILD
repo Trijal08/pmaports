@@ -1,6 +1,6 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=emulationstation
-pkgver=0_git20260917
+pkgver=42_git20260917
 pkgrel=0
 _commit="f25c4475a348f534de8ff724e9e42808b7a80a12"
 pkgdesc="Graphical emulator frontend, ArchR fork tuned for handheld consoles"
