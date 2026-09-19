@@ -6,10 +6,18 @@ pkgdesc="Run PortMaster and its glibc game ports on postmarketOS"
 url="https://portmaster.games"
 arch="all"
 license="MIT"
-options="!check pmb:support-openrc pmb:support-systemd"
+# !fhs: the shared overlay lives in /opt, which abuild otherwise rejects
+# outright. It sits beside /opt/glibc-sysroot, the runtime it belongs to,
+# and is reached only through port-launch - never through a system path.
+options="!check !fhs pmb:support-openrc pmb:support-systemd"
+
+# abuild moves etc/init.d and usr/lib/systemd into these automatically via
+# default_openrc/default_systemd, each with install_if on the init system,
+# so a systemd image pulls the unit and an OpenRC image pulls the script.
+subpackages="$pkgname-openrc $pkgname-systemd"
 install="
-	$pkgname.post-install
-	$pkgname.pre-deinstall
+	$pkgname-openrc.post-install
+	$pkgname-openrc.pre-deinstall
 "
 
 # bash: every PortMaster launcher and control.txt is #!/bin/bash and uses
