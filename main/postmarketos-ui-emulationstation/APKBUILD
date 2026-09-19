@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=0
+pkgrel=1
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -12,10 +12,11 @@ depends="
 	sudo
 	emulationstation
 	postmarketos-base-ui-cage
+	bash
+	portmaster-compat
 	"
 source="
 	10-emulationstation.sh
-	Fake_Gamepad.cfg
 	99-keyd-ignore-pointer.rules
 	keyd-default.conf
 	r36s-volume
@@ -26,7 +27,8 @@ source="
 	es_systems.cfg
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
-# "input" is required: the r36s-mapper exposes a uinput node ("Fake Gamepad")
+# "input" is required: the r36s-mapper exposes a uinput node (a virtual
+# "Nintendo Switch Pro Controller")
 # owned root:input 0660, and SDL2 reads joysticks straight from /dev/input,
 # not through Wayland. Without this the UI renders but no button works.
 _pmb_groups="seat input"
@@ -37,9 +39,20 @@ _pmb_groups="seat input"
 # libretro-mupen64plus (parallel-n64 covers N64) and libretro-yabause
 # (beetle-saturn covers Saturn).
 # fbalpha2019 -> fbneo, mupen64plus_next -> mupen64plus, and so on.
+# PortMaster's Python UI (pugwash) needs SDL2_mixer/ttf/image; glfw is for
+# GLFW-based ports such as re3. The ports themselves are prebuilt glibc
+# binaries and run against the real glibc in portmaster-compat, not under
+# musl - so no symbol shim is involved. Verified on device with gptokeyb
+# and the Love2D 11.5 runtime.
 # standalone: Alpine has no libretro core for these
 _pmb_recommends="
 	retroarch-joypad-autoconfig
+	libtheora
+	mesa-demos
+	glfw
+	sdl2_mixer
+	sdl2_ttf
+	sdl2_image
 	es-theme-art-book-next
 	retroarch
 	gzdoom
@@ -126,12 +139,14 @@ package() {
 	install -Dm644 "$srcdir"/51-min-quantum.conf \
 		-t "$pkgdir"/usr/share/pipewire/pipewire.conf.d
 
-	# RetroArch has its own input stack: without an autoconfig for the merged
-	# pad no button works in-game, and without the hotkeys there is no way back
-	# to EmulationStation. SELECT+START exits, SELECT+X opens the menu.
+	# No joypad autoconfig is shipped. The merged pad impersonates a real
+	# Nintendo Switch Pro Controller, so the profile in
+	# retroarch-joypad-autoconfig matches it on name and vendor/product, and
+	# its button numbering already matches the mapper's bitmap exactly -
+	# including index 4, the Capture button, which is why the mapper declares
+	# an unused BTN_Z. The session script points joypad_autoconfig_dir at the
+	# system path and sets the hotkeys, which the profile leaves unbound.
 	install -Dm644 "$srcdir"/retroarch.cfg -t "$pkgdir"/etc
-	install -Dm644 "$srcdir"/Fake_Gamepad.cfg \
-		"$pkgdir"/usr/share/libretro/autoconfig/"Fake Gamepad.cfg"
 
 	# Volume rocker: the keys are delivered but nothing in a cage session binds
 	# media keys.
@@ -143,4 +158,10 @@ package() {
 		"$pkgdir"/etc/sudoers.d/10-emulationstation
 	install -Dm644 "$srcdir"/99-keyd-ignore-pointer.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d
+
+	# NOTE: bash is a hard dependency, not a recommend. Every PortMaster
+	# launcher and control.txt itself is #!/bin/bash and uses bash-only
+	# syntax ([[ ]], source, $(< file)). Without it EmulationStation's exec
+	# fails with 127 and no output at all.
+
 }
