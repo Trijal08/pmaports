@@ -7,6 +7,10 @@ url="https://postmarketos.org/"
 arch="all"
 license="GPL-3.0-or-later"
 options="!check pmb:drm pmb:default-openrc pmb:support-openrc pmb:support-systemd"
+
+# abuild moves usr/lib/udev into this via default_udev, with install_if on
+# udev - the same split rockchip-r36s-mapper uses for its rules.
+subpackages="$pkgname-udev"
 depends="
 	keyd
 	sudo
@@ -165,3 +169,14 @@ package() {
 	# fails with 127 and no output at all.
 
 }
+sha512sums="
+1d43a2ff4c1cf63fd7260113f2181bc854ed87b891143bd1c51f1b5749d938eafd317a1027a8991f8bb9d7caeef4e01ffa9b1142efac42b6e5582cb27bfbad25  10-emulationstation.sh
+e8ae698b31f93b3588615e82f7b02c48c5b0935b8af5e567d422eea773e034b4f157a90e0e47f5944510723f8aa06db1c3785c1d472a04e815b0ff80f4cbe28d  99-keyd-ignore-pointer.rules
+bf04608cf87ff91bf21551d084aed9cb33849cd708938930c92d8ec1783c806bb77eb2fb82e427489643b2d5357a6fe9910d1d4d3154c6a658078718932c9782  keyd-default.conf
+e9b11cfd3ae7a9a20be95a23984664845df7fd643495604987387972b11ea621eeac39d405043368dcec7000eca346fcdcc3ab054aa31a4822afca0222efd132  r36s-volume
+d817e71d4f729981a00b925a000f03ab9de23d7fba26d9225867d2d091cda4e2e7441d252fb5caa2b051a0a3f9f6991a89aa5c3e47b770ad010cbb10b9e66435  retroarch.cfg
+4e994036d4ce7266b5378909866e455632fd3b69bb33c4a156e363ffb27083e18a2dc0d7533cd7953c246622fac1b75cda26692714ae3a618970ea2f9b579655  51-default-sink-volume.conf
+973d4e16673ade069ca174146b31ce98f68674c268856bb7a15c78e8a6e419bb2df4c979a0da8e0176845b256cc5db946b4605aba912fb19c1a544735abef2f9  51-min-quantum.conf
+0bda887347a8240957430a300c48df681db445861a69119c244ead167662cc7d4bb34ba1cbdf3a92db35c53f04e55165f77c609074fb795d5e2bb8ab1fc4f879  emulationstation-shutdown.sudoers
+4dd60ed1502abd60c75c1072172d100799ccaf283cea43c8d677fcad99f8b42e1f4040be807a43d15c3f98b38de34e18fa1006ca0b42c224279c13ceeb38ca93  es_systems.cfg
+"
