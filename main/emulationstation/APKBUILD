@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=emulationstation
 pkgver=42_git20260917
-pkgrel=0
+pkgrel=1
 _commit="f25c4475a348f534de8ff724e9e42808b7a80a12"
 pkgdesc="Graphical emulator frontend, ArchR fork tuned for handheld consoles"
 url="https://github.com/archr-linux/emulationstation-next"
@@ -91,6 +91,16 @@ prepare() {
 	awk '{print} /^[ \t]*add_definitions\(-DHAVE_INTL\)[ \t]*$/ {print "\tif(NOT Intl_IS_BUILT_IN)"; print "\t  list(APPEND COMMON_LIBRARIES ${Intl_LIBRARIES})"; print "\tendif()"}' \
 		CMakeLists.txt > CMakeLists.txt.intl
 	mv CMakeLists.txt.intl CMakeLists.txt
+
+	# Battery detection only accepts a power supply whose path contains
+	# "/bat", i.e. a directory NAMED bat* - BAT0 on a PC. This board
+	# exposes rk817-battery, where "bat" follows a dash, so nothing
+	# matches, ES falls through to the charger branch - which sets a
+	# status path but never a capacity path - and the indicator sits at
+	# 0% forever while /sys reports 97. Match "bat" anywhere in the name;
+	# BAT0 still matches, and the only other supply here is
+	# rk817-charger, which contains no "bat".
+	sed -i 's|find("/bat")|find("bat")|' es-core/src/utils/Platform.cpp
 }
 
 build() {
