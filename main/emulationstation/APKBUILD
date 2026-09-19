@@ -49,6 +49,25 @@ prepare() {
 	mkdir -p external/pugixml/src
 	ln -sf /usr/include/pugixml.hpp external/pugixml/src/pugixml.hpp
 	ln -sf /usr/include/pugiconfig.hpp external/pugixml/src/pugiconfig.hpp
+
+	# GCC 13+ stopped pulling <cstdint> in transitively, so every file using
+	# int8_t and friends has to include it itself. 17 files here do not, and
+	# which of them break depends on what each translation unit happens to
+	# pull in - MetaData.h was simply the first. Add the include wherever it
+	# is missing rather than carry a multi-hunk patch against a moving fork;
+	# adding it to a file that already compiles is harmless.
+	grep -rlE '\b(u?int(8|16|32|64)_t)\b' es-app/src es-core/src \
+		| grep -E '\.(h|hpp|cpp)$' \
+		| while read -r f; do
+			grep -qE '#include *[<"](cstdint|stdint\.h)[>"]' "$f" && continue
+			if grep -q '^#pragma once' "$f"; then
+				awk '{print} !ins && /^#pragma once/ {print "#include <cstdint>"; ins=1}' \
+					"$f" > "$f.cstdint"
+			else
+				{ echo '#include <cstdint>'; cat "$f"; } > "$f.cstdint"
+			fi
+			mv "$f.cstdint" "$f"
+		done
 }
 
 build() {
