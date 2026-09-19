@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=2
+pkgrel=3
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -27,7 +27,6 @@ source="
 	99-keyd-ignore-pointer.rules
 	keyd-default.conf
 	r36s-volume
-	retroarch.cfg
 	51-default-sink-volume.conf
 	51-min-quantum.conf
 	emulationstation-shutdown.sudoers
@@ -146,14 +145,20 @@ package() {
 	install -Dm644 "$srcdir"/51-min-quantum.conf \
 		-t "$pkgdir"/usr/share/pipewire/pipewire.conf.d
 
-	# No joypad autoconfig is shipped. The merged pad impersonates a real
-	# Nintendo Switch Pro Controller, so the profile in
-	# retroarch-joypad-autoconfig matches it on name and vendor/product, and
-	# its button numbering already matches the mapper's bitmap exactly -
-	# including index 4, the Capture button, which is why the mapper declares
-	# an unused BTN_Z. The session script points joypad_autoconfig_dir at the
-	# system path and sets the hotkeys, which the profile leaves unbound.
-	install -Dm644 "$srcdir"/retroarch.cfg -t "$pkgdir"/etc
+	# No RetroArch config and no joypad autoconfig are shipped. RetroArch
+	# reads ~/.config/retroarch/retroarch.cfg in preference to
+	# /etc/retroarch.cfg and rewrites it on exit, so a system-wide file never
+	# takes effect - the session script injects the settings into the user's
+	# config instead. /etc/retroarch.cfg is also owned by the retroarch
+	# package, so shipping one made the rootfs unpackable.
+	#
+	# The merged pad impersonates a real Nintendo Switch Pro Controller, so
+	# the profile in retroarch-joypad-autoconfig matches it on name and
+	# vendor/product, and its button numbering already matches the mapper's
+	# bitmap exactly - including index 4, the Capture button, which is why
+	# the mapper declares an unused BTN_Z. The session script points
+	# joypad_autoconfig_dir at the system path and sets the hotkeys, which
+	# the profile leaves unbound.
 
 	# Volume rocker: the keys are delivered but nothing in a cage session binds
 	# media keys.
@@ -177,7 +182,6 @@ sha512sums="
 e8ae698b31f93b3588615e82f7b02c48c5b0935b8af5e567d422eea773e034b4f157a90e0e47f5944510723f8aa06db1c3785c1d472a04e815b0ff80f4cbe28d  99-keyd-ignore-pointer.rules
 bf04608cf87ff91bf21551d084aed9cb33849cd708938930c92d8ec1783c806bb77eb2fb82e427489643b2d5357a6fe9910d1d4d3154c6a658078718932c9782  keyd-default.conf
 e9b11cfd3ae7a9a20be95a23984664845df7fd643495604987387972b11ea621eeac39d405043368dcec7000eca346fcdcc3ab054aa31a4822afca0222efd132  r36s-volume
-d817e71d4f729981a00b925a000f03ab9de23d7fba26d9225867d2d091cda4e2e7441d252fb5caa2b051a0a3f9f6991a89aa5c3e47b770ad010cbb10b9e66435  retroarch.cfg
 4e994036d4ce7266b5378909866e455632fd3b69bb33c4a156e363ffb27083e18a2dc0d7533cd7953c246622fac1b75cda26692714ae3a618970ea2f9b579655  51-default-sink-volume.conf
 973d4e16673ade069ca174146b31ce98f68674c268856bb7a15c78e8a6e419bb2df4c979a0da8e0176845b256cc5db946b4605aba912fb19c1a544735abef2f9  51-min-quantum.conf
 0bda887347a8240957430a300c48df681db445861a69119c244ead167662cc7d4bb34ba1cbdf3a92db35c53f04e55165f77c609074fb795d5e2bb8ab1fc4f879  emulationstation-shutdown.sudoers
