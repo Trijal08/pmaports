@@ -11,9 +11,12 @@ options="!check pmb:drm pmb:default-openrc pmb:support-openrc pmb:support-system
 # abuild moves usr/lib/udev into this via default_udev, with install_if on
 # udev - the same split rockchip-r36s-mapper uses for its rules.
 subpackages="$pkgname-udev"
+# sudo-virt rather than sudo: postmarketos-base recommends sudo-rs, and
+# the two real implementations conflict over cmd:sudo/sudoedit/visudo.
+# Both provide sudo-virt, so the image keeps whichever one base picked.
 depends="
 	keyd
-	sudo
+	sudo-virt
 	emulationstation
 	postmarketos-base-ui-cage
 	bash
