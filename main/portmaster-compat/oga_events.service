@@ -1,0 +1,26 @@
+[Unit]
+# PortMaster port scripts end with "$ESUDO systemctl restart oga_events &",
+# ArchR's input daemon, to restore gamepad handling after gptokeyb has been
+# holding the pad. The unit does not exist on postmarketOS, and with ESUDO
+# empty the call runs as the session user, so polkit prompts for a password
+# no one can type from EmulationStation and the port hangs at exit.
+#
+# Make it a genuine no-op. An earlier version bounced rockchip-r36s-mapper,
+# mirroring what oga_events does on ArchR - but port scripts invoke this at
+# BOTH start and exit, so every launch destroyed and recreated the merged
+# pad twice. dmesg showed the input node climbing (input19, input20, ...),
+# and each new node is a new device index for SDL and EmulationStation to
+# re-detect, which made button behaviour inconsistent between launches.
+#
+# Nothing actually needs restarting: gptokeyb grabs the input devices while
+# a port runs and releases them when it exits.
+Description=Compatibility shim for PortMaster's oga_events restart
+Documentation=https://portmaster.games
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

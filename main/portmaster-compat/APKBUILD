@@ -1,0 +1,92 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=portmaster-compat
+pkgver=1
+pkgrel=0
+pkgdesc="Run PortMaster and its glibc game ports on postmarketOS"
+url="https://portmaster.games"
+arch="all"
+license="MIT"
+options="!check pmb:support-openrc pmb:support-systemd"
+install="
+	$pkgname.post-install
+	$pkgname.pre-deinstall
+"
+
+# bash: every PortMaster launcher and control.txt is #!/bin/bash and uses
+#   bash-only syntax. Without it EmulationStation's exec fails with 127 and
+#   no output at all.
+# bubblewrap: port-launch runs each port in a namespace - this is what binds
+#   the glibc loader and overlays the port directory read-only.
+# gcompat: supplies /lib/ld-linux-aarch64.so.1, the path port-launch binds
+#   the sysroot loader OVER. Without gcompat there is no bind target and
+#   port-launch falls back to running ports unsandboxed.
+# glibc-sysroot: the real glibc/Mesa/SDL runtime the ports execute against.
+# python3: es-input-for-portmaster.
+depends="
+	bash
+	bubblewrap
+	gcompat
+	glibc-sysroot
+	python3
+	"
+source="
+	port-launch
+	es-input-for-portmaster
+	portmaster-compat-links
+	portmaster-compat.service
+	portmaster-compat.initd
+	80-portmaster-compat.preset
+	gamecontrollerdb.txt
+	mod_postmarketOS.txt
+	oga_events.service
+	50-oga-events.rules
+	"
+
+package() {
+	# /usr/bin, not /usr/sbin: EmulationStation runs this as the session
+	# user, and /usr/sbin is for administrative tools.
+	install -Dm755 "$srcdir"/port-launch -t "$pkgdir"/usr/bin
+	install -Dm755 "$srcdir"/es-input-for-portmaster -t "$pkgdir"/usr/bin
+	install -Dm755 "$srcdir"/portmaster-compat-links -t "$pkgdir"/usr/bin
+
+	# /roms and /storage. A service rather than tmpfiles.d because the
+	# target depends on the user's home directory, whose name is chosen at
+	# "pmbootstrap init" time and cannot be written into a static file.
+	install -Dm644 "$srcdir"/portmaster-compat.service \
+		-t "$pkgdir"/usr/lib/systemd/system
+	install -Dm755 "$srcdir"/portmaster-compat.initd \
+		"$pkgdir"/etc/init.d/portmaster-compat
+	# Without a preset the unit ships disabled, /roms is never created and
+	# every port fails to resolve its own location.
+	install -Dm644 "$srcdir"/80-portmaster-compat.preset \
+		-t "$pkgdir"/usr/lib/systemd/system-preset
+
+	# Layered into every port by port-launch, but only where the port does
+	# not already ship a file of that name - so PortMaster's own much
+	# larger gamecontrollerdb.txt is never replaced.
+	install -Dm644 "$srcdir"/gamecontrollerdb.txt \
+		-t "$pkgdir"/opt/port-overlays/common
+
+	install -Dm644 "$srcdir"/mod_postmarketOS.txt \
+		-t "$pkgdir"/usr/share/portmaster
+
+	# PortMaster ports restart ArchR's oga_events at exit; provide the unit
+	# and let the session user bounce it without a polkit prompt.
+	install -Dm644 "$srcdir"/oga_events.service \
+		-t "$pkgdir"/usr/lib/systemd/system
+	install -Dm644 "$srcdir"/50-oga-events.rules \
+		-t "$pkgdir"/usr/share/polkit-1/rules.d
+}
+
+sha512sums="
+5dfdeee3b0e16d7b6dc3f6201b16651b7060eefccd46fa8d7e977af0d56611b0ae7c5e3db29ca3cf3df7ec1e1621c15e8f390485ff7e9ee10365de1063e1ce9a  port-launch
+f87aa3a8175dc26c9c007b27c558313ac8552c0c40cfd84068f5c1c95b0913a552364912447884a491deff23768167c82e5bdc5cb7027e54a5de494481a6b828  es-input-for-portmaster
+df7fa4586e019d3684add4e7245227f12516739bce9d3a68849f161c9196204fb1a2bb73dacc4a848594bd476fa67efaab8c2d36884b5ebbe1a7cdba1f43b08b  portmaster-compat-links
+e21037d662ae8307fdf4b262b90f413bfc075d91bb615bca2c2a0a05a4002cdfbd9b080c565738467001fa1cadf72a3b7c3dd9aa9540546bb029290e7785a1fa  portmaster-compat.service
+0e6a3f338b737de28743c49c1a6d2aad81e95cc1e9aeaf668a9da28d17570496e42c975b5c4dd2f186d2b22a68d514e33112deb59b8aef07fa04d145f0c58032  portmaster-compat.initd
+871eaef133d6882d5a026c0a6afe4d2feb7921136a7208a7772ce3a5df74a3fdfab18e1a87cd9f67ef29f2ff1083952e0fedc4b127df29e40ce6e181a9d58dcc  80-portmaster-compat.preset
+6719482cfeba96d1cd25952357013a8f33e73997cc499c2ba80251c08db3507856cf608e06f2b1c23319db2e62b5e28d72a2599af5abb341d7932a59e6d1d65a  gamecontrollerdb.txt
+a079be26bf484bd22c71973f25b2fab08e334830bf55df825dcee31bb5e2fc8c25fc89a072b3b50d24d90019a0371ac3151392b0f19e359cf55a18de533f0c9b  mod_postmarketOS.txt
+144b3f0edad204b2a71107f389eb62d06398d89be0e2a9a9d7a8097eff7983177eb10a9609f4a7af474c1d05fbb95e7336a81e9132ba9bd10c5e8880a24e0b64  oga_events.service
+ff6912ddb33bb7e9f4d11c946ea7c12fc1624f22b13f9f8d1f75ced5fcd4b2ccd40ab40844fc501f60fc033ff9e34cbd829d69bf869e2c5ba0c1b43726342e9e  50-oga-events.rules
+"

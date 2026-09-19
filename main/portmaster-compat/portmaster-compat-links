@@ -1,0 +1,46 @@
+#!/bin/sh
+# Create the layout PortMaster hardcodes, without assuming a username.
+#
+# PortMaster targets LibreELEC/JELOS, where everything is root-owned under
+# fixed paths: control.txt sets directory="roms" and derives controlfolder
+# and GAMEDIR from "/$directory/ports/...", and control.txt, device_info.txt,
+# mapper.txt and pugwash.txt all reference /storage as the home directory.
+# Two symlinks make the whole layout resolve with no patched scripts.
+#
+# The previous tmpfiles.d version wrote /home/user literally, which breaks
+# on any install whose user is not named "user" - the name is chosen at
+# "pmbootstrap init" time. pmOS always gives the first user UID 10000, so
+# resolve the home directory from the passwd database instead of the name.
+set -eu
+
+entry=$(getent passwd 10000 || true)
+if [ -z "$entry" ]; then
+	# Not a pmbootstrap-created install; fall back to the first ordinary
+	# user with a home under /home.
+	entry=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65000 && $6 ~ /^\/home\// { print; exit }')
+fi
+[ -n "$entry" ] || exit 0
+
+home=$(echo "$entry" | cut -d: -f6)
+uid=$(echo "$entry" | cut -d: -f3)
+gid=$(echo "$entry" | cut -d: -f4)
+[ -n "$home" ] || exit 0
+
+# ES reads ~/ROMs and PortMaster installs into it, so it must exist and be
+# owned by the user before anything follows /roms into it.
+if [ ! -d "$home/ROMs" ]; then
+	mkdir -p "$home/ROMs"
+	chown "$uid:$gid" "$home/ROMs"
+fi
+
+# Replace only a symlink or a missing path. "ln -sfn" onto an existing real
+# directory silently creates the link *inside* it, which would bury the
+# user's ROMs one level deeper on every boot.
+link() {
+	if [ -L "$2" ] || [ ! -e "$2" ]; then
+		ln -sfn "$1" "$2"
+	fi
+}
+
+link "$home/ROMs" /roms
+link "$home" /storage

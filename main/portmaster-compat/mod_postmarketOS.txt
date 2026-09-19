@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# SPDX-License-Identifier: MIT
+#
+
+## Modular - postmarketOS
+#
+# Sourced by PortMaster.sh as mod_${CFW_NAME}.txt, where CFW_NAME comes from
+# NAME= in /etc/os-release. Modelled on ArchR's mod_ArchR.txt.
+
+# NOTE: no LD_PRELOAD symbol shim here any more. Ports used to run against
+# musl via gcompat, which lacks the _FORTIFY_SOURCE __*_chk and __*_finite
+# families, so a shim forwarded them. port-launch now binds a real glibc
+# loader over /lib/ld-linux-aarch64.so.1, so every port gets genuine glibc
+# and there is nothing left to forward. Preloading the old musl-linked shim
+# into those processes would be actively harmful: it drags musl's libc into
+# a glibc process, which is what corrupts the heap.
+
+# The merged pad advertises itself as a Nintendo Switch Pro Controller
+# (057e:2009) so that SDL and RetroArch recognise it. SDL then applies
+# SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, on by default, which for
+# Nintendo controllers swaps the face buttons to match their printed labels
+# instead of their positions. gptokeyb and every .gptk file expect the
+# positional layout, so in-game B behaves as A and X as B.
+#
+# Turning the hint off fixes every port at once, without editing a single
+# .gptk file - those are shared with other platforms and must keep assuming
+# the standard internal layout.
+export SDL_GAMECONTROLLER_USE_BUTTON_LABELS=0
+
+# aarch64 only - no lib32 tree here, unlike ArchR.
+#
+# Only as a fallback: this file is sourced by every port through control.txt,
+# and port-launch has already pointed identified ports at the sysroot's Mesa.
+# Assigning unconditionally would overwrite that and send a glibc process to
+# musl-built DRI drivers, which cannot load.
+export LIBGL_DRIVERS_PATH="${LIBGL_DRIVERS_PATH:-/usr/lib/dri}"
+
+# Use for Godot 2
+GODOT2_OPTS="-r ${DISPLAY_WIDTH}x${DISPLAY_HEIGHT} -f"
+
+# Use for Godot 3+
+GODOT_OPTS="--resolution ${DISPLAY_WIDTH}x${DISPLAY_HEIGHT} -f"
+
+pm_platform_helper() {
+    if [ -e "$PM_PIPE" ]; then
+        PortMasterDialogExit
+    fi
+
+    # ArchR calls a sway helper to fullscreen the window. cage runs a single
+    # fullscreen surface by design, so there is nothing to do here.
+    :
+}

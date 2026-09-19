@@ -1,0 +1,15 @@
+# R36S merged pad, face buttons matched to the board's printed labels.
+#
+# The board is labelled Nintendo-style: A right, B bottom, X top, Y left.
+# evdev and every gamepad database name buttons by POSITION, so GLFW's
+# built-in entry for this GUID reads a:b0 b:b1 x:b3 y:b2 - which puts "A" on
+# the bottom button (labelled B) and "X" on the left one (labelled Y). Both
+# pairs come out crossed.
+#
+# Swapping a/b and x/y here makes each printed label do what it says. This is
+# the same convention ArchR uses for its own pad (a:b1,b:b0,x:b2,y:b3).
+#
+# Button indices are the pad's capability bitmap in ascending evdev code
+# order: 0 SOUTH 1 EAST 2 NORTH 3 WEST 4 Z(unused) 5 TL 6 TR 7 TL2 8 TR2
+# 9 SELECT 10 START 11 MODE 12 THUMBL 13 THUMBR.
+030000007e0500000920000011810000,Nintendo Switch Pro Controller,a:b1,b:b0,x:b2,y:b3,back:b9,start:b10,guide:b11,leftshoulder:b5,rightshoulder:b6,lefttrigger:b7,righttrigger:b8,leftstick:b12,rightstick:b13,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,leftx:a0,lefty:a1,rightx:a2,righty:a3,platform:Linux,
