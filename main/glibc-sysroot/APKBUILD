@@ -1,0 +1,57 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=glibc-sysroot
+pkgver=2.40
+pkgrel=0
+pkgdesc="Self-contained glibc runtime under /opt for prebuilt game ports"
+url="https://postmarketos.org/"
+# Prebuilt aarch64 binaries; there is nothing to compile for other arches.
+arch="aarch64"
+license="LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later"
+
+# !tracedeps is the important one. These are glibc's own shared objects, so
+# tracing would make the package depend on so:libc.so.6, so:libm.so.6 and
+# friends, which nothing in Alpine provides - and would advertise this
+# package as PROVIDING them, which would let apk satisfy an unrelated
+# package's glibc dependency with a tree that is not on the library path.
+# The sysroot is reached only through port-launch, never through ld.so.conf.
+#
+# !strip keeps the binaries byte-identical to the ones validated on device.
+options="!check !strip !tracedeps !fhs"
+
+# This tarball is a curated closure of a donor aarch64 glibc root (glibc
+# 2.40, Mesa 26.1, SDL 2.32), built by build-sysroot.py walking DT_NEEDED
+# from the binaries the ports actually run. It is a binary artefact by
+# nature: the point is to run prebuilt glibc ports unmodified, and
+# rebuilding these libraries from source under musl would defeat that.
+#
+# Regenerating it (see ~/Documents/R36S-K36/portmaster/):
+#   build-sysroot.py <donor-root> sysroot <binaries and dlopen'd libs...>
+#   tar -czf glibc-sysroot-$pkgver.tar.gz --transform 's,^\./,glibc-sysroot-$pkgver/,' -C sysroot .
+#
+# dlopen'd libraries are invisible to a DT_NEEDED walk and must be named
+# explicitly. The set that matters here, each found by something failing:
+#   panfrost_dri.so                 Mesa's driver for this GPU
+#   libEGL_mesa / libGLX_mesa       glvnd vendor libraries
+#   libGLESv2 / libGLESv1_CM        glvnd dispatches GLES separately from GL
+#   libxkbcommon                    SDL's Wayland backend
+#   libwebp / libwebpdemux          SDL2_image
+#   libwavpack / libxmp             SDL2_mixer
+#   libnss_files                    glibc user lookups
+# plus the data files no ELF walk can see: the glvnd vendor JSON, drirc,
+# and the ALSA/SPA/PipeWire plugin trees.
+source="glibc-sysroot-$pkgver.tar.gz"
+
+package() {
+	install -dm755 "$pkgdir"/opt/glibc-sysroot
+	cp -a "$builddir"/. "$pkgdir"/opt/glibc-sysroot/
+
+	# No ldconfig here: port-launch builds the cache at first launch with
+	# the sysroot's OWN ldconfig, into the user's ~/.cache. Running the
+	# host's musl ldconfig over these libraries would produce nothing
+	# usable, and a root-owned cache inside /opt could not be refreshed
+	# when a port is added.
+}
+
+sha512sums="
+c63d0edce34f251b4d8bad3d034b1c6ef44e825d47a6d76a466ef1a2ac52c40327cdd8e246f769d1c9629824fd25a44182e7e098a11c8bc4dfe0cd957729c7f4  glibc-sysroot-2.40.tar.gz
+"
