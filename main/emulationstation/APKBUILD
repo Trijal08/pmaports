@@ -41,6 +41,11 @@ build() {
 	#
 	# GLES2 rather than GL: the RK3326 Mali runs through panfrost, and this
 	# is what ArchR ships for the same SoC.
+	# ENABLE_PULSE=OFF: it makes VolumeControl talk to a PulseAudio
+	# server, and this image has neither libpulse nor pipewire-pulse -
+	# the audio backend is PipeWire reached through its ALSA plugin. ES
+	# drives the hw:0 mixer directly instead, which is what the session
+	# script's AudioCard=hw:0 selects.
 	cmake -B build -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_INSTALL_PREFIX=/usr \
@@ -49,7 +54,7 @@ build() {
 		-DCEC=OFF \
 		-DDISABLE_KODI=ON \
 		-DENABLE_FILEMANAGER=OFF \
-		-DENABLE_PULSE=ON \
+		-DENABLE_PULSE=OFF \
 		-DUSE_SYSTEM_PUGIXML=ON
 	cmake --build build
 }
@@ -62,3 +67,6 @@ package() {
 	install -d "$pkgdir"/usr/share/emulationstation
 	cp -r resources "$pkgdir"/usr/share/emulationstation/
 }
+sha512sums="
+f2277c79b506d43d8c2e150ee2d9dbc9cb1883f5153f25c188d447d27122e0f455fac5d8dacfaba47fad053e8722285e3a1a950c80e87169ab1a7b599fcb765f  emulationstation-f25c4475a348f534de8ff724e9e42808b7a80a12.tar.gz
+"
