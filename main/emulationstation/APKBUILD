@@ -33,6 +33,24 @@ options="!check"
 source="$pkgname-$_commit.tar.gz::https://github.com/archr-linux/emulationstation-next/archive/$_commit.tar.gz"
 builddir="$srcdir/emulationstation-next-$_commit"
 
+prepare() {
+	default_prepare
+
+	# Every source includes <pugixml/src/pugixml.hpp> - the path of the
+	# git submodule this fork vendors under external/. GitHub's archive
+	# tarball contains no submodules, and USE_SYSTEM_PUGIXML only
+	# redirects the LINK step (find_package + target_link_libraries), so
+	# the include itself still has to resolve. Point it at the system
+	# headers, which pugixml-dev already provides. pugixml.hpp includes
+	# "pugiconfig.hpp" relatively, so both have to sit in that directory.
+	# rm first: the archive leaves the submodule as an empty directory or
+	# a gitlink stub, and mkdir -p fails on the latter.
+	rm -rf external/pugixml
+	mkdir -p external/pugixml/src
+	ln -sf /usr/include/pugixml.hpp external/pugixml/src/pugixml.hpp
+	ln -sf /usr/include/pugiconfig.hpp external/pugixml/src/pugiconfig.hpp
+}
+
 build() {
 	# ARCHR is deliberately left OFF. It is only a -DARCHR preprocessor
 	# define, but it switches the code to ArchR's /storage and /usr/config
