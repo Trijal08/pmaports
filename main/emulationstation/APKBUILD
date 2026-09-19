@@ -81,6 +81,16 @@ prepare() {
 	awk '!ins && /^#else \/\/ _WIN32$/ {print; print "#if !defined(__GLIBC__)"; print "#define stat64 stat"; print "#endif"; ins=1; next} {print}' \
 		es-core/src/utils/FileSystemUtil.cpp > FileSystemUtil.cpp.musl
 	mv FileSystemUtil.cpp.musl es-core/src/utils/FileSystemUtil.cpp
+
+	# The tree calls find_package(Intl) and defines HAVE_INTL, but never
+	# links Intl_LIBRARIES - harmless on glibc, where gettext lives in
+	# libc, and a link failure on musl, where it is a separate libintl.
+	# Append it where the definition is added: COMMON_LIBRARIES is still
+	# in scope there, and add_subdirectory(es-app) comes later, so the
+	# value propagates.
+	awk '{print} /^[ \t]*add_definitions\(-DHAVE_INTL\)[ \t]*$/ {print "\tif(NOT Intl_IS_BUILT_IN)"; print "\t  list(APPEND COMMON_LIBRARIES ${Intl_LIBRARIES})"; print "\tendif()"}' \
+		CMakeLists.txt > CMakeLists.txt.intl
+	mv CMakeLists.txt.intl CMakeLists.txt
 }
 
 build() {
