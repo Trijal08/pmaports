@@ -68,6 +68,19 @@ prepare() {
 			fi
 			mv "$f.cstdint" "$f"
 		done
+
+	# musl removed the LFS64 aliases in 1.2.4 - plain stat is already
+	# 64-bit there, and this file sets _FILE_OFFSET_BITS anyway. It
+	# defines stat64 for Windows but assumes glibc otherwise, so add the
+	# musl case in the same idiom. Only the FIRST of the seven
+	# "#else // _WIN32" lines opens the block that needs it.
+	#
+	# zip_file.hpp also mentions stat64, but in a branch miniz does not
+	# take here - it reports "Using fopen, ftello, fseeko, stat()" and
+	# ZipFile.cpp already compiles.
+	awk '!ins && /^#else \/\/ _WIN32$/ {print; print "#if !defined(__GLIBC__)"; print "#define stat64 stat"; print "#endif"; ins=1; next} {print}' \
+		es-core/src/utils/FileSystemUtil.cpp > FileSystemUtil.cpp.musl
+	mv FileSystemUtil.cpp.musl es-core/src/utils/FileSystemUtil.cpp
 }
 
 build() {
