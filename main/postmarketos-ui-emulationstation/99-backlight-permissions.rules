@@ -1,0 +1,14 @@
+# Let the session user set panel brightness.
+#
+# EmulationStation writes <backlight>/brightness directly as the session
+# user (ApiSystem::setBrightness -> writeAllText), with no helper and no
+# privilege escalation. The kernel creates that attribute root:root 0644,
+# so every write silently fails and the brightness slider appears stuck.
+#
+# GROUP=/MODE= on the device do not cover sysfs attributes, so the mode is
+# set on the attribute itself. The seat user is already in the video group
+# (postmarketos-base puts it there), so group-write is enough and nothing
+# needs to run as root at runtime.
+ACTION=="add", SUBSYSTEM=="backlight", \
+	RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", \
+	RUN+="/bin/chmod 0664 /sys/class/backlight/%k/brightness"

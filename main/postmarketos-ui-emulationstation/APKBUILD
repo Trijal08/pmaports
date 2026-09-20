@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=12
+pkgrel=13
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -53,6 +53,7 @@ source="
 	51-min-quantum.conf
 	emulationstation-shutdown.sudoers
 	es_systems.cfg
+	99-backlight-permissions.rules
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
 # "input" is required: the r36s-mapper exposes a uinput node (a virtual
@@ -192,6 +193,8 @@ package() {
 		"$pkgdir"/etc/sudoers.d/10-emulationstation
 	install -Dm644 "$srcdir"/99-keyd-ignore-pointer.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d
+	install -Dm644 "$srcdir"/99-backlight-permissions.rules \
+		-t "$pkgdir"/usr/lib/udev/rules.d
 
 	# NOTE: bash is a hard dependency, not a recommend. Every PortMaster
 	# launcher and control.txt itself is #!/bin/bash and uses bash-only
@@ -200,6 +203,7 @@ package() {
 
 }
 sha512sums="
+93d42b333606ad94f35a0bada5ffd3dcf0e2fcb7b7ba3aecba6110bcd6af215dc00c1c15ae549d449e8d7788cc125d4b5023f575014a27480649943a8fd8948d  99-backlight-permissions.rules
 ed05eef5d62bfd1f75192ce0ac9fc193e51654e65511648efe6628bc7600392f9b797754a94c5b23a28cf25a03353cc7bcf69c504e1382f2668f4429656ce7be  10-emulationstation.sh
 e8ae698b31f93b3588615e82f7b02c48c5b0935b8af5e567d422eea773e034b4f157a90e0e47f5944510723f8aa06db1c3785c1d472a04e815b0ff80f4cbe28d  99-keyd-ignore-pointer.rules
 bf04608cf87ff91bf21551d084aed9cb33849cd708938930c92d8ec1783c806bb77eb2fb82e427489643b2d5357a6fe9910d1d4d3154c6a658078718932c9782  keyd-default.conf
