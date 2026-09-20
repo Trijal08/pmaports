@@ -162,6 +162,11 @@ video_scale = "1.000000"
 # clobbered - the setting has to be changed in RetroArch's own menu, or
 # written while it is not running.
 menu_swap_ok_cancel = "false"
+# The one this RetroArch actually reads. It writes three swap keys -
+# menu_swap_ok_cancel, menu_swap_ok_cancel_buttons and
+# menu_swap_scroll_buttons - and only the _buttons one drives the
+# quick menu's A/B behaviour; setting the legacy name alone does nothing.
+menu_swap_ok_cancel_buttons = "false"
 
 # Most 2D cores have no analog input, so the left stick does nothing in them.
 # Mode 1 makes it drive the D-pad for those cores while leaving genuinely
