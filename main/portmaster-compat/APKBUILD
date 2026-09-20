@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=portmaster-compat
 pkgver=1
-pkgrel=8
+pkgrel=9
 pkgdesc="Run PortMaster and its glibc game ports on postmarketOS"
 url="https://portmaster.games"
 arch="all"
@@ -30,11 +30,15 @@ install="
 #   port-launch falls back to running ports unsandboxed.
 # glibc-sysroot: the real glibc/Mesa/SDL runtime the ports execute against.
 # python3: es-input-for-portmaster.
+# binutils: port-launch reads DT_NEEDED and the dynamic symbol table with
+#   readelf. Without it the X11 probe silently never matches and ports that
+#   need X11 start on Wayland and fail.
 # librga-stub: Rockchip ports link librga.so.2 and will not load without
 #   it. See that aport - mainline cannot provide the real thing, and the
 #   ports only use it to rotate the scanout, which this panel never needs.
 depends="
 	bash
+	binutils
 	bubblewrap
 	gcompat
 	glibc-sysroot
@@ -100,7 +104,7 @@ package() {
 }
 
 sha512sums="
-251569b8e42067050dcbd432565a61df5842834af97a4928c27aa51eb12f6b469cb56b8a92d32c76c2cdd9548378a7c67e322e5dc8b71f7039802f961e0f6f7a  port-launch
+75e16983ef8e32f1dccf6f5f094328a5694ed2f9b45864230593fce3268c5107d20475c61a648228792761fbbddbf8316777bc56416325d819f24641e5449e15  port-launch
 f87aa3a8175dc26c9c007b27c558313ac8552c0c40cfd84068f5c1c95b0913a552364912447884a491deff23768167c82e5bdc5cb7027e54a5de494481a6b828  es-input-for-portmaster
 df7fa4586e019d3684add4e7245227f12516739bce9d3a68849f161c9196204fb1a2bb73dacc4a848594bd476fa67efaab8c2d36884b5ebbe1a7cdba1f43b08b  portmaster-compat-links
 e21037d662ae8307fdf4b262b90f413bfc075d91bb615bca2c2a0a05a4002cdfbd9b080c565738467001fa1cadf72a3b7c3dd9aa9540546bb029290e7785a1fa  portmaster-compat.service
