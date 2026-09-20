@@ -208,6 +208,20 @@ if [ -d "$GAMEDIR" ]; then
 	if [ -n "$_x11" ]; then
 		set -- "$@" --setenv DISPLAY "${DISPLAY:-:0}"
 		set -- "$@" --setenv WAYLAND_DISPLAY none-forced-to-x11
+		# XDG_SESSION_TYPE has to be overridden too, and this is the
+		# half that matters. GLFW 3.4 reads it FIRST: "wayland" makes
+		# it commit to the Wayland backend before testing whether a
+		# Wayland display is actually reachable, so the bogus
+		# WAYLAND_DISPLAY above then fails with "Wayland: Failed to
+		# connect to display" and it never falls back to X11 -
+		# glfwInit() returns false and the port dies before it draws
+		# anything. The session EmulationStation runs in sets it to
+		# wayland.
+		#
+		# Invisible until the sysroot moved to Debian: the old Arch
+		# donor shipped GLFW 3.3 built X11-only, which had no Wayland
+		# backend to prefer and ignored both variables.
+		set -- "$@" --setenv XDG_SESSION_TYPE x11
 	fi
 fi
 
