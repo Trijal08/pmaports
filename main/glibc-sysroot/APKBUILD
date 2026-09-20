@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=glibc-sysroot
 pkgver=2.40
-pkgrel=1
+pkgrel=2
 pkgdesc="Self-contained glibc runtime under /opt for prebuilt game ports"
 url="https://postmarketos.org/"
 # Prebuilt aarch64 binaries; there is nothing to compile for other arches.
@@ -62,6 +62,24 @@ package() {
 	# host's musl ldconfig over these libraries would produce nothing
 	# usable, and a root-owned cache inside /opt could not be refreshed
 	# when a port is added.
+
+	# Ports probe the Debian multiarch triplet before anything else - see
+	# McpeLauncherV2's GPU search order, which lists
+	# /usr/lib/aarch64-linux-gnu ahead of /usr/lib. Alpine leaves that path
+	# empty, so without this they fall through to Alpine's MUSL Mesa and
+	# load it into a glibc process, which survives until the first
+	# allocator crossing and then dies on "free(): invalid pointer" inside
+	# libgallium. Pointing the triplet at the sysroot keeps such a port on
+	# one libc. Nothing in Alpine looks in this directory.
+	install -dm755 "$pkgdir"/usr/lib
+	ln -s /opt/glibc-sysroot/usr/lib "$pkgdir"/usr/lib/aarch64-linux-gnu
+
+	# Rockchip ports built against the vendor Mali stack dlopen GBM under
+	# the blob's name. Mesa's libgbm exports the same API, so the name only
+	# has to resolve - mcpelauncher-client's patched SDL asks for exactly
+	# this one and reports "kmsdrm not available" without it.
+	ln -s libgbm.so.1 \
+		"$pkgdir"/opt/glibc-sysroot/usr/lib/libmali-bifrost-g31-rxp0-gbm.so
 }
 
 sha512sums="
