@@ -34,9 +34,9 @@ SCRIPT=$1
 SYSROOT=${GLIBC_SYSROOT:-/opt/glibc-sysroot}
 COMMON=${PORT_OVERLAY_COMMON:-/opt/port-overlays/common}
 LOADER="$SYSROOT/usr/lib/ld-linux-aarch64.so.1"
-CACHE="$HOME/.cache/ld.so.cache"
 WRITES=${XDG_DATA_HOME:-$HOME/.local/share}/port-writes
 STAGE=${XDG_RUNTIME_DIR:-/tmp}/port-launch
+CACHE="$STAGE/ld.so.cache"
 PORTS_DIR=$(dirname "$SCRIPT")
 
 # PortMaster's get_controls builds its controller database by running
@@ -56,12 +56,17 @@ command -v bwrap >/dev/null || run_plain
 bwrap --dev-bind / / -- /bin/true 2>/dev/null || run_plain
 [ -x "$LOADER" ] || run_plain
 
-# Build the loader cache once. ldconfig is itself a glibc binary, so it has
-# to be run through the loader explicitly.
+# Build the loader cache once per boot. ldconfig is itself a glibc binary,
+# so it has to be run through the loader explicitly.
 #
-# Rebuild when the sysroot's library directory is newer, not just the
-# loader: adding a library to an existing sysroot leaves the loader
-# untouched, and a stale cache then hides the new library completely.
+# Kept in XDG_RUNTIME_DIR (tmpfs), NOT under ~/.cache. A cache that outlives
+# the sysroot it describes hides every library added since, and the mtime
+# checks below cannot save it: restoring a home-directory backup, or
+# reinstalling the image, leaves a cache NEWER than the freshly unpacked
+# sysroot. That cost an evening once - a port failed with "libtheoradec.so.1:
+# cannot open shared object file" while the library sat in the sysroot,
+# invisible because the cache predated it. On tmpfs the worst case is one
+# extra ldconfig run after a reboot.
 if [ ! -f "$CACHE" ] || [ "$LOADER" -nt "$CACHE" ] || \
    [ "$SYSROOT/usr/lib" -nt "$CACHE" ]; then
 	mkdir -p "$(dirname "$CACHE")"
