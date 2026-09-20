@@ -79,7 +79,28 @@ fi
 # START (Plus), 2 is X (BTN_NORTH).
 RA_DIR="$HOME/.config/retroarch"
 RA_CFG="$RA_DIR/retroarch.cfg"
-mkdir -p "$RA_DIR"
+mkdir -p "$RA_DIR" "$HOME/ROMs/bios"
+
+# Anything a core previously wrote into the old system directory moves
+# across once, so Dreamcast VMU saves and MAME hiscore data are not
+# stranded.
+#
+# NEWER wins, and the loser is kept. These are not interchangeable
+# assets: dc/vmu_save_*.bin are Dreamcast memory cards, i.e. actual game
+# progress. A plain "skip if it already exists" silently shadows newer
+# saves with whatever the ROM share happened to carry, which reads as
+# lost progress.
+if [ -d "$HOME/.config/retroarch/system" ]; then
+	(cd "$HOME/.config/retroarch/system" 2>/dev/null &&
+	 find . -mindepth 1 -type f | while read -r _f; do
+		_t="$HOME/ROMs/bios/${_f#./}"
+		if [ ! -e "$_t" ]; then
+			mkdir -p "$(dirname "$_t")" && mv "$_f" "$_t"
+		elif [ "$_f" -nt "$_t" ]; then
+			cp -p "$_t" "$_t.pre-migration" && mv "$_f" "$_t"
+		fi
+	 done) || :
+fi
 [ -f "$RA_CFG" ] || : > "$RA_CFG"
 
 while IFS= read -r _kv; do
@@ -93,6 +114,18 @@ while IFS= read -r _kv; do
 	sed -i "\\|^$_k *=|d" "$RA_CFG"
 	echo "$_kv" >>"$RA_CFG"
 done <<'RACFG'
+# BIOS and core data live on the ROM share, not under ~/.config. They are
+# content: they belong beside the games, they are what every other handheld
+# firmware does (ArkOS, JELOS and the ArchR card this device came from all
+# use <roms>/bios), and a config reset or a reinstall must not take them
+# with it. One setting covers every core, since they all read
+# system_directory - Beetle Saturn looks for mpr-17933.bin there, Flycast
+# for dc/, MAME for its hiscore.dat, and so on.
+#
+# Cores also WRITE here (Dreamcast VMU saves, MAME hiscore data), so the
+# directory has to stay writable - it is not a read-only asset store.
+system_directory = "~/ROMs/bios"
+
 # Input. The pad impersonates a Switch Pro Controller, so RetroArch's own
 # profile configures it; only the hotkeys are ours. 9 is SELECT (Minus), 10 is
 # START (Plus), 2 is X (BTN_NORTH).
