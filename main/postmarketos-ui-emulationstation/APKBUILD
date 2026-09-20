@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=7
+pkgrel=8
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -14,6 +14,21 @@ subpackages="$pkgname-udev"
 # sudo-virt rather than sudo: postmarketos-base recommends sudo-rs, and
 # the two real implementations conflict over cmd:sudo/sudoedit/visudo.
 # Both provide sudo-virt, so the image keeps whichever one base picked.
+# coreutils, findutils, unzip, zip: game ports are written against a GNU/glibc
+# userland and call options BusyBox does not have. They fail silently,
+# because the callers redirect stderr, and surface as empty data rather
+# than an error. In McpeLauncherV2 alone: the APK browser runs
+# "ls --time-style=" and renders an empty directory, the version list runs
+# "find -printf" and renders nothing, and extract_apk.sh verifies the game
+# library with "unzip -Z1" and reports libminecraftpe.so missing from an
+# APK that contains it. The GNU builds install alongside the BusyBox
+# applets rather than replacing them. zip has no BusyBox applet at all -
+# a port that repacks an archive gets "command not found" - so it is here
+# pre-emptively rather than after the next silent failure.
+# GNU rather than uutils-coreutils: the ports do not just call these, they
+# parse their exact output - main.lua matches ls -la column by column - and
+# GNU is the implementation every PortMaster host ships and these scripts
+# were written against.
 depends="
 	keyd
 	sudo-virt
@@ -21,6 +36,10 @@ depends="
 	postmarketos-base-ui-cage
 	bash
 	portmaster-compat
+	coreutils
+	findutils
+	unzip
+	zip
 	"
 source="
 	10-emulationstation.sh
