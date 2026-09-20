@@ -3,7 +3,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=device-rockchip-r36s
 pkgdesc="Rockchip R36S"
 pkgver=7
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -18,11 +18,14 @@ depends="
 makedepends="devicepkg-dev"
 source="
 	80-device-rockchip-r36s.preset
+	99-rockchip-r36s-gpu.rules
 	deviceinfo
 	kernel-cmdline.conf
 "
 _pmb_recommends="rockchip-r36s-mapper"
-subpackages="$pkgname-systemd"
+# abuild moves usr/lib/udev into this via default_udev, with install_if on
+# udev - the same split the other device rules use.
+subpackages="$pkgname-systemd $pkgname-udev"
 
 build() {
 	devicepkg_build $startdir $pkgname
@@ -33,10 +36,14 @@ package() {
 
 	install -Dm644 "$srcdir"/80-device-rockchip-r36s.preset \
 		-t "$pkgdir"/usr/lib/systemd/system-preset/
+
+	install -Dm644 "$srcdir"/99-rockchip-r36s-gpu.rules \
+		-t "$pkgdir"/usr/lib/udev/rules.d/
 }
 
 sha512sums="
 15ba9b5aa826056cbd03b593dd776981835d686dfa420f60eee84b117dda504a0762a6069ef5bfa0f6e302c82326fb3bb47db2fdad7535805af697f397f8f09c  80-device-rockchip-r36s.preset
+8bdd663bee31c219cf42e3452ac83a21b37774cf51c21c360f4db9f24dec32142d626a02cafd5e3982f1643d8a8e1fb7d038713aae5c3c4eb57ea62b26e2f664  99-rockchip-r36s-gpu.rules
 e04db4430e046c178e367af39f2b900e372d67da323dd10482f4ba0b170357b712dc909b047474b565c26189f1eac25c6e6519bd3f981b64b4a8c357963f1d42  deviceinfo
 ce96e936003e90c659d3e54f31d674f953bc8858b06bed88eaff988a36101dcedd3ce41f2d5a2dc8257bce5e37893457289838fd875fc3a41e0c83b2998ea510  kernel-cmdline.conf
 "
