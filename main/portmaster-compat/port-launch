@@ -186,7 +186,18 @@ if [ -d "$GAMEDIR" ]; then
 	mkdir -p "$privroot/.local/share" "$privroot/.config"
 	set -- "$@" --bind "$privroot" /root
 
-	if grep -qls glfwGetX11Display "$GAMEDIR"/* 2>/dev/null; then
+	# ELF files only. glfwGetX11Display is an imported symbol, so it can
+	# only ever appear in a binary - and ports keep game data next to
+	# their binaries. McpeLauncherV2 ships a 1 GB .apk here, and grepping
+	# it off the SD card stalled the launch for minutes with no output,
+	# which looks exactly like a hang. Four bytes per file instead.
+	_x11=
+	for _f in "$GAMEDIR"/*; do
+		[ -f "$_f" ] || continue
+		[ "$(od -An -N4 -tx1 "$_f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
+		if grep -qls glfwGetX11Display "$_f"; then _x11=1; break; fi
+	done
+	if [ -n "$_x11" ]; then
 		set -- "$@" --setenv DISPLAY "${DISPLAY:-:0}"
 		set -- "$@" --setenv WAYLAND_DISPLAY none-forced-to-x11
 	fi
