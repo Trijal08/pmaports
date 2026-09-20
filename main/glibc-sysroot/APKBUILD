@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=glibc-sysroot
 pkgver=2.40
-pkgrel=0
+pkgrel=1
 pkgdesc="Self-contained glibc runtime under /opt for prebuilt game ports"
 url="https://postmarketos.org/"
 # Prebuilt aarch64 binaries; there is nothing to compile for other arches.
@@ -37,6 +37,12 @@ options="!check !strip !tracedeps !fhs"
 #   libwebp / libwebpdemux          SDL2_image
 #   libwavpack / libxmp             SDL2_mixer
 #   libnss_files                    glibc user lookups
+#   libtheoradec.so.1 / libtheoraenc / libtheora.so.0
+#     PortMaster's Love 11.5 runtime links libtheoradec.so.1. Alpine ships
+#     theora 1.2.0, whose soname is .so.2, so the host copy cannot satisfy
+#     it - the port only ever worked because glibc's loader falls back to
+#     /usr/lib and Alpine used to ship .so.1. From Ubuntu ports, like the
+#     GCC runtime above.
 #   libisl.so.22 / libmpc / libmpfr / libgmp
 #     Not dlopen'd - needed by a compiler a PORT ships. render96ex extracts
 #     its assets by building four host tools with its own bundled gcc, which
@@ -59,5 +65,5 @@ package() {
 }
 
 sha512sums="
-1514fe73f1d5a5cf4c2b1ef3b795d0cb6a0840483dea0f884c8d4ca18c1b362aa69da0a3b0220e83264c6631e74f7f92b7aaedefaae55d792926b1efc0172776  glibc-sysroot-2.40.tar.gz
+25e928cd531626f2f4614c66e4e7de1a29d965a22992bf28425619f30a5ddbbd8a6f379eef588fc0548e3f5741f690c893797db8e98b10104486cb0474318c39  glibc-sysroot-2.40.tar.gz
 "
