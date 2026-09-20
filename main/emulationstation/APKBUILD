@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=emulationstation
 pkgver=42_git20260917
-pkgrel=1
+pkgrel=2
 _commit="f25c4475a348f534de8ff724e9e42808b7a80a12"
 pkgdesc="Graphical emulator frontend, ArchR fork tuned for handheld consoles"
 url="https://github.com/archr-linux/emulationstation-next"
@@ -30,7 +30,9 @@ depends="
 	fping
 	"
 options="!check"
-source="$pkgname-$_commit.tar.gz::https://github.com/archr-linux/emulationstation-next/archive/$_commit.tar.gz"
+source="$pkgname-$_commit.tar.gz::https://github.com/archr-linux/emulationstation-next/archive/$_commit.tar.gz
+	fix-empty-option-list-crash.patch
+	"
 builddir="$srcdir/emulationstation-next-$_commit"
 
 prepare() {
@@ -138,5 +140,6 @@ package() {
 	cp -r resources "$pkgdir"/usr/share/emulationstation/
 }
 sha512sums="
+cd4a3f91b800553df1bfeb65e8492b35f668011809d6aee2818ae864b78aea60cf76e3219826612d490d936e37d2afde1012667cd6013cd391e4800fe88a71d6  fix-empty-option-list-crash.patch
 f2277c79b506d43d8c2e150ee2d9dbc9cb1883f5153f25c188d447d27122e0f455fac5d8dacfaba47fad053e8722285e3a1a950c80e87169ab1a7b599fcb765f  emulationstation-f25c4475a348f534de8ff724e9e42808b7a80a12.tar.gz
 "

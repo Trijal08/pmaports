@@ -1,0 +1,55 @@
+Fix a crash when leaving SYSTEM SETTINGS
+
+OptionListComponent::getSelected() does selected.at(0) guarded only by an
+assert, which NDEBUG removes in a release build. An option list built
+from a platform enumeration helper can legitimately be empty, and
+GuiMenu's GPU governor save function calls getSelected() outside its
+changed() guard - so opening SYSTEM SETTINGS and pressing back threw
+std::out_of_range out of a UI callback. TRYCATCH in the main loop
+rethrows it, so the frontend aborts:
+
+  ERROR InputManager::parseEvent Exception vector::_M_range_check:
+        __n (which is 0) >= this->size() (which is 0)
+  terminate called after throwing an instance of 'std::exception'
+
+Return a default-constructed value when nothing is selected, and give
+the GPU governor list the same fallback entry the CPU list above it
+already has - selectFirstItem() cannot select anything from an empty
+list.
+
+--- a/es-core/src/components/OptionListComponent.h	2026-09-20 19:55:33.484971179 -0400
++++ b/es-core/src/components/OptionListComponent.h	2026-09-20 19:55:33.509002354 -0400
+@@ -345,7 +345,14 @@
+ 	{
+ 		assert(mMultiSelect == false);
+ 		auto selected = getSelectedObjects();
+-		assert(selected.size() == 1);
++		// An option list can legitimately end up with nothing selected:
++		// menus build these from enumeration helpers that may return
++		// nothing on a given platform. The size assert above is compiled
++		// out by NDEBUG in a release build, so .at(0) then threw
++		// std::out_of_range out of a UI callback - and TRYCATCH in the
++		// main loop rethrows, taking the whole frontend down.
++		if (selected.empty())
++			return T();
+ 		return selected.at(0);
+ 	}
+ 
+--- a/es-app/src/guis/GuiMenu.cpp	2026-09-20 19:55:33.485531286 -0400
++++ b/es-app/src/guis/GuiMenu.cpp	2026-09-20 19:55:33.509752720 -0400
+@@ -2015,7 +2015,14 @@
+ 	}
+ 	
+ 	if (!selectedGpuGovernorFound)
+-		optionsGpuGovernors->selectFirstItem(); // Preselect 'default' 
++	{
++		// Same fallback the CPU governor list above uses. selectFirstItem()
++		// cannot help when the list is empty, which is what happens when
++		// get_available_gpu_governors is unavailable - and this menu's save
++		// function calls getSelected() outside its changed() guard, so
++		// merely opening SYSTEM SETTINGS and backing out was fatal.
++		optionsGpuGovernors->add(selectedGpuGovernor, selectedGpuGovernor, true);
++	}
+ 
+ 	s->addWithLabel(_("DEFAULT GPU SCALING GOVERNOR"), optionsGpuGovernors);
+ 	s->addSaveFunc([selectedGpuGovernor, optionsGpuGovernors]
