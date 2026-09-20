@@ -103,19 +103,34 @@ if [ -d "$HOME/.config/retroarch/system" ]; then
 fi
 [ -f "$RA_CFG" ] || : > "$RA_CFG"
 
-# Flycast: swap A/B and X/Y back to this board's printed labels.
+# Consoles whose face layout is not Nintendo's get A/B and X/Y swapped
+# back to this board's printed labels, per core.
 #
-# Everything below the core measures correct - the DT gives button-a
-# BTN_EAST (right) and button-b BTN_SOUTH (bottom), the mapper forwards
-# those codes unchanged, and RetroArch's Nintendo Switch Pro Controller
-# profile binds a->1 (right, label A) and b->0 (bottom, label B). The
-# swap appears at the core, which is what a per-core remap is for; the
-# Dreamcast's own layout puts A at the bottom and B on the right, the
-# mirror of this board.
+# The pad itself stays positional, which is correct: RetroPad B is the
+# bottom button, so it becomes SNES B, PlayStation Cross, Dreamcast A.
+# That matches a real Switch Pro Controller and keeps SNES, GBA, GBC,
+# NES, N64 and DS correct, because their layout genuinely matches this
+# board. It is only the consoles that disagree that need adjusting:
 #
-# Created only when absent, so it can be deleted or edited by hand.
-_rmp="$RA_DIR/config/remaps/Flycast/Flycast.rmp"
-if [ ! -e "$_rmp" ]; then
+#   Dreamcast   A bottom, B right, X left, Y top
+#   PlayStation X bottom, O right, [] left, /\ top
+#
+# On both, the primary action sits at the bottom - where this board
+# prints B - so without this the printed A cancels. Swapping per core
+# puts accept back under A without disturbing the systems that are
+# already right. Do NOT solve this by swapping the pad binds globally:
+# that fixes these two and breaks every Nintendo system, and it also
+# double-swaps whichever cores already have a remap.
+#
+# Written only when absent, so each stays editable by hand.
+# Named by each core's RetroArch display name, which is also the
+# directory name it uses under config/. Cores that are not installed
+# simply leave an unused file behind, so listing the whole PlayStation
+# family here costs nothing and covers a later install.
+for _core in Flycast \
+	PCSX-ReARMed "Beetle PSX" "Beetle PSX HW" SwanStation DuckStation PPSSPP; do
+	_rmp="$RA_DIR/config/remaps/$_core/$_core.rmp"
+	[ -e "$_rmp" ] && continue
 	mkdir -p "$(dirname "$_rmp")"
 	cat >"$_rmp" <<-'RMP'
 	input_player1_btn_a = "0"
@@ -123,7 +138,7 @@ if [ ! -e "$_rmp" ]; then
 	input_player1_btn_x = "1"
 	input_player1_btn_y = "9"
 	RMP
-fi
+done
 
 while IFS= read -r _kv; do
 	case "$_kv" in '' | \#*) continue ;; esac
