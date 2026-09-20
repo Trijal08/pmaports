@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=portmaster-compat
 pkgver=1
-pkgrel=1
+pkgrel=2
 pkgdesc="Run PortMaster and its glibc game ports on postmarketOS"
 url="https://portmaster.games"
 arch="all"
@@ -46,6 +46,7 @@ source="
 	80-portmaster-compat.preset
 	gamecontrollerdb.txt
 	mod_postmarketOS.txt
+	mapper.txt
 	oga_events.service
 	50-oga-events.rules
 	"
@@ -78,6 +79,14 @@ package() {
 	install -Dm644 "$srcdir"/mod_postmarketOS.txt \
 		-t "$pkgdir"/usr/share/portmaster
 
+	# Replaces PortMaster's own mapper.txt, which get_controls() runs to
+	# build the SDL controller database. Theirs targets LibreELEC/JELOS and
+	# produces an empty database here; the session script copies this one
+	# into PortMaster's tree on every start, since PortMaster updates
+	# itself in place.
+	install -Dm755 "$srcdir"/mapper.txt \
+		-t "$pkgdir"/usr/share/portmaster
+
 	# PortMaster ports restart ArchR's oga_events at exit; provide the unit
 	# and let the session user bounce it without a polkit prompt.
 	install -Dm644 "$srcdir"/oga_events.service \
@@ -95,6 +104,7 @@ e21037d662ae8307fdf4b262b90f413bfc075d91bb615bca2c2a0a05a4002cdfbd9b080c56573846
 871eaef133d6882d5a026c0a6afe4d2feb7921136a7208a7772ce3a5df74a3fdfab18e1a87cd9f67ef29f2ff1083952e0fedc4b127df29e40ce6e181a9d58dcc  80-portmaster-compat.preset
 340ffaf38a731daa4e0e2cefc5abb0db17b5905df148a3394a48aec77ad7c55c828f7be07b0c4546bb43447b9b5213e11978e0641d11f8fb11d35b7f0362412a  gamecontrollerdb.txt
 a079be26bf484bd22c71973f25b2fab08e334830bf55df825dcee31bb5e2fc8c25fc89a072b3b50d24d90019a0371ac3151392b0f19e359cf55a18de533f0c9b  mod_postmarketOS.txt
+78b29253a7aef4d90876a319e011060a1d7c13981035934755419be5168e296997d3273c6cd0f6c22984cefe3096dda4bf8e06b789048166bf101c1ba1fa4140  mapper.txt
 144b3f0edad204b2a71107f389eb62d06398d89be0e2a9a9d7a8097eff7983177eb10a9609f4a7af474c1d05fbb95e7336a81e9132ba9bd10c5e8880a24e0b64  oga_events.service
 ff6912ddb33bb7e9f4d11c946ea7c12fc1624f22b13f9f8d1f75ced5fcd4b2ccd40ab40844fc501f60fc033ff9e34cbd829d69bf869e2c5ba0c1b43726342e9e  50-oga-events.rules
 "

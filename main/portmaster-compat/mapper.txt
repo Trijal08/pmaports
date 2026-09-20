@@ -1,0 +1,34 @@
+#!/bin/bash
+# postmarketOS replacement for PortMaster's mapper.txt.
+#
+# control.txt's get_controls() runs this to build the SDL controller
+# database:  mapper.txt <gamecontrollerdb.txt> <controlfolder>
+#
+# PortMaster's own version is written for LibreELEC/JELOS: it sources
+# /etc/profile.d/001-functions and /etc/profile.d/100-gamecontroller-functions
+# for get_setting() and create_controller_db(), and reads EmulationStation's
+# config from /tmp/es_input.cfg. None of that exists here, so it scrubs the
+# database with `echo ""`, fails to find create_controller_db, and leaves a
+# 1-byte file - SDL then falls back to its built-in Switch Pro mapping, which
+# is positional and reads A/B crossed on this board.
+#
+# mapper.py ships with PortMaster and does the whole job on its own, reading
+# the device name and GUID out of the ES config. Note it ALSO swaps the face
+# buttons unconditionally; es-input-for-portmaster pre-exchanges them in the
+# copy this reads so the two cancel. See that script's header.
+set -u
+
+CONTROLLER_DB="${1:?usage: mapper.txt <gamecontrollerdb.txt> <controlfolder>}"
+controlfolder="${2:-/roms/ports/PortMaster}"
+
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+ES_CONFIG="$XDG_CONFIG_HOME/emulationstation/es_input.cfg"
+
+: > "$CONTROLLER_DB"
+
+# No ES input config yet (pad never configured): leave the database empty
+# rather than failing the port launch.
+[ -f "$ES_CONFIG" ] || exit 0
+
+python3 "$controlfolder/mapper.py" -i "$ES_CONFIG" "$CONTROLLER_DB" >/dev/null 2>&1 || :
+exit 0

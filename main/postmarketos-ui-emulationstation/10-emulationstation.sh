@@ -263,6 +263,20 @@ PM_DIR="$HOME/ROMs/ports/PortMaster"
 if [ -d "$PM_DIR" ] && [ -f /usr/share/portmaster/mod_postmarketOS.txt ]; then
 	cp -f /usr/share/portmaster/mod_postmarketOS.txt "$PM_DIR/"
 
+	# Replace PortMaster's mapper.txt, which get_controls() runs to build
+	# the SDL controller database. The shipped one is written for
+	# LibreELEC/JELOS: it sources /etc/profile.d/001-functions and
+	# /etc/profile.d/100-gamecontroller-functions for get_setting() and
+	# create_controller_db(), neither of which exists here, so it scrubs
+	# the database and leaves a 1-byte file. SDL then falls back to its
+	# built-in Switch Pro mapping, which is positional and puts A and B
+	# the wrong way round on this board.
+	#
+	# Refreshed every session because PortMaster updates itself in place,
+	# and because restoring a ROMs backup puts the JELOS version back.
+	[ -f /usr/share/portmaster/mapper.txt ] &&
+		cp -f /usr/share/portmaster/mapper.txt "$PM_DIR/mapper.txt"
+
 	# PortMaster reads this to pick a device profile. The R36S matches the
 	# rg351mp entry: same SoC family, 640x480, two analog sticks.
 	mkdir -p "$HOME/.config"
