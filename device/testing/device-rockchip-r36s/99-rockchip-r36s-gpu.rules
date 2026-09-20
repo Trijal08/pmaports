@@ -1,0 +1,24 @@
+# Keep the Mali GPU powered and at a fixed frequency.
+#
+# The Rockchip power domain cannot complete its idle handshake for 'gpu'
+# on this SoC. Let runtime PM gate the GPU under load and it never comes
+# back:
+#
+#   rockchip-pm-domain ...: failed to get ack on domain 'gpu', val=0x41644164
+#   panfrost ff400000.gpu: gpu sched timeout (GPU not resumable: -110)
+#
+# and the GPU stays dead until reboot. Before the panfrost job-timeout fix
+# this also took the whole board down with an SError - with panic=0 in the
+# cmdline it read as a silent hang. That fix made the failure graceful; it
+# did not make gating work.
+#
+# Idle gate/resume cycles pass fine, so a quiet system looks healthy - it
+# is load that kills it. Do not "verify" a future fix without a real GPU
+# workload.
+#
+# The cost is idle power, which is the right trade against a GPU that
+# stops until reboot. Revisit when the pmdomain idle-ack path is fixed:
+# the GPU power domain and gpu@ff400000 both list only SCLK_GPU, while the
+# interconnect handshake runs on the bus clock (ACLK_GPU, px30-cru.h 170).
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="ff400000.gpu", ATTR{power/control}="on"
+ACTION=="add|change", SUBSYSTEM=="devfreq", KERNEL=="ff400000.gpu", ATTR{governor}="performance"
