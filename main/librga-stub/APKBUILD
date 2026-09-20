@@ -1,0 +1,29 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=librga-stub
+pkgver=1
+pkgrel=0
+pkgdesc="Stub librga.so.2 so Rockchip game ports load on a mainline kernel"
+url="https://postmarketos.org/"
+# Built everywhere rather than restricted to aarch64: portmaster-compat is
+# arch=all and would otherwise be unsatisfiable on other architectures.
+arch="all"
+license="MIT"
+options="!check"
+source="librga-stub.c"
+
+build() {
+	# -nostdlib: a leaf stub with no libc references, loadable by musl and
+	# by a port's own bundled glibc alike. No crt objects are needed since
+	# there is nothing to initialise.
+	${CC:-${CROSS_COMPILE}gcc} $CFLAGS $LDFLAGS -shared -fPIC -nostdlib \
+		-Wl,-soname,librga.so.2 \
+		-o "$srcdir"/librga.so.2 "$srcdir"/librga-stub.c
+}
+
+package() {
+	install -Dm755 "$srcdir"/librga.so.2 "$pkgdir"/usr/lib/librga.so.2
+}
+
+sha512sums="
+69791abb1d657c1e7b13ef6e041998be09d2c1594196ebf820bc0d9546f2a5165527fd58b4ce2cf1e1bdaae13def3ea31cddb0e5aef506498760bff1fd45c3c5  librga-stub.c
+"

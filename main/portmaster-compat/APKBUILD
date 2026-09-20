@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=portmaster-compat
 pkgver=1
-pkgrel=5
+pkgrel=6
 pkgdesc="Run PortMaster and its glibc game ports on postmarketOS"
 url="https://portmaster.games"
 arch="all"
@@ -30,11 +30,15 @@ install="
 #   port-launch falls back to running ports unsandboxed.
 # glibc-sysroot: the real glibc/Mesa/SDL runtime the ports execute against.
 # python3: es-input-for-portmaster.
+# librga-stub: Rockchip ports link librga.so.2 and will not load without
+#   it. See that aport - mainline cannot provide the real thing, and the
+#   ports only use it to rotate the scanout, which this panel never needs.
 depends="
 	bash
 	bubblewrap
 	gcompat
 	glibc-sysroot
+	librga-stub
 	python3
 	"
 source="
