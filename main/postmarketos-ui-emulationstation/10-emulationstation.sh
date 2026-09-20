@@ -154,10 +154,16 @@ video_fullscreen_x = "640"
 video_fullscreen_y = "480"
 video_scale = "1.000000"
 
-# Menu confirm/cancel. Left OFF: with this pad's layout RetroArch already
-# confirms with A, and enabling the swap inverts it. Set explicitly rather
-# than omitted, so the value is pinned either way.
-menu_swap_ok_cancel = "false"
+# Menu confirm/cancel. ON, so A confirms and B goes back, matching ArchR and
+# the board's printed labels.
+#
+# RetroArch's default (false) binds OK to the SOUTH button and Cancel to
+# EAST. The merged pad impersonates a Switch Pro, i.e. a Nintendo layout
+# where A is EAST - so the default makes you confirm with the button printed
+# B. Swapping restores A-confirms. This is about which PHYSICAL button acts
+# as OK; it is unrelated to the face-button exchange es-input-for-portmaster
+# performs for PortMaster.
+menu_swap_ok_cancel = "true"
 
 # Most 2D cores have no analog input, so the left stick does nothing in them.
 # Mode 1 makes it drive the D-pad for those cores while leaving genuinely
