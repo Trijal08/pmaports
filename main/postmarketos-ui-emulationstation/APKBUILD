@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=3
+pkgrel=4
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -178,7 +178,7 @@ package() {
 
 }
 sha512sums="
-1d43a2ff4c1cf63fd7260113f2181bc854ed87b891143bd1c51f1b5749d938eafd317a1027a8991f8bb9d7caeef4e01ffa9b1142efac42b6e5582cb27bfbad25  10-emulationstation.sh
+3ad4227cb622e27f7e57729a188a065186bf50e69c7afdcc923ce72a341023cb463577b32f7a489f766159768123a0b998b896267030f3c48b606c94a372fb5e  10-emulationstation.sh
 e8ae698b31f93b3588615e82f7b02c48c5b0935b8af5e567d422eea773e034b4f157a90e0e47f5944510723f8aa06db1c3785c1d472a04e815b0ff80f4cbe28d  99-keyd-ignore-pointer.rules
 bf04608cf87ff91bf21551d084aed9cb33849cd708938930c92d8ec1783c806bb77eb2fb82e427489643b2d5357a6fe9910d1d4d3154c6a658078718932c9782  keyd-default.conf
 e9b11cfd3ae7a9a20be95a23984664845df7fd643495604987387972b11ea621eeac39d405043368dcec7000eca346fcdcc3ab054aa31a4822afca0222efd132  r36s-volume
