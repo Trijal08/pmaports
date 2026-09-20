@@ -25,3 +25,6 @@ package() {
 	mkdir -p "$pkgdir"/usr/share/alsa
 	cp -r "$builddir"/ucm2 "$pkgdir"/usr/share/alsa/
 }
+sha512sums="
+63debde91564ee45f047e439c30af71a287bc0a7084f79bfb15cc2b3fcb2bf78714310bcb39cd913741e949230cbad71888785d2f3f0e44e917dea6b41d6df0e  alsa-ucm-conf-rockchip-r36s-rk3326-r36s.tar.gz
+"
