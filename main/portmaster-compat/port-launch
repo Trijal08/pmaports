@@ -199,11 +199,23 @@ if [ -d "$GAMEDIR" ]; then
 	# their binaries. McpeLauncherV2 ships a 1 GB .apk here, and grepping
 	# it off the SD card stalled the launch for minutes with no output,
 	# which looks exactly like a hang. Four bytes per file instead.
+	# Read the dynamic symbol table, do not scan the file. glfwGetX11Display
+	# is an imported symbol, so readelf answers from .dynsym in constant
+	# time, while grep walks every byte looking for a string that is only
+	# ever in one table. On Render96EX's 12 MB binary that is 27s of A35
+	# CPU versus 0.27s - a hundredfold, and it happens before bwrap starts,
+	# so the port shows a black screen for the duration and looks hung.
+	# Both agree on the ports that matter (re3_gl and reVC_gl match, the
+	# rest do not).
 	_x11=
 	for _f in "$GAMEDIR"/*; do
 		[ -f "$_f" ] || continue
 		[ "$(od -An -N4 -tx1 "$_f" 2>/dev/null | tr -d ' \n')" = 7f454c46 ] || continue
-		if grep -qls glfwGetX11Display "$_f"; then _x11=1; break; fi
+		if readelf --dyn-syms -W "$_f" 2>/dev/null |
+		   grep -qw glfwGetX11Display; then
+			_x11=1
+			break
+		fi
 	done
 	if [ -n "$_x11" ]; then
 		set -- "$@" --setenv DISPLAY "${DISPLAY:-:0}"
