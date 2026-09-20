@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=portmaster-compat
 pkgver=1
-pkgrel=3
+pkgrel=4
 pkgdesc="Run PortMaster and its glibc game ports on postmarketOS"
 url="https://portmaster.games"
 arch="all"
@@ -96,7 +96,7 @@ package() {
 }
 
 sha512sums="
-dc0a2f6d5192f139db95c89122f3ce29a3ef73ba7f95115f53514a3393fd51d832857ae5696e592563ded69cd9dfe1c038ebb13802897992f5b844b82ba8cccb  port-launch
+22fb0363c54fb13db9367b0fbc2bfe71072708569545065ff15c5909dee09585c6059f7d6f5637336ac9ae60e4f35a03cf61f70b4c90486604af2ac7a85b051f  port-launch
 f87aa3a8175dc26c9c007b27c558313ac8552c0c40cfd84068f5c1c95b0913a552364912447884a491deff23768167c82e5bdc5cb7027e54a5de494481a6b828  es-input-for-portmaster
 df7fa4586e019d3684add4e7245227f12516739bce9d3a68849f161c9196204fb1a2bb73dacc4a848594bd476fa67efaab8c2d36884b5ebbe1a7cdba1f43b08b  portmaster-compat-links
 e21037d662ae8307fdf4b262b90f413bfc075d91bb615bca2c2a0a05a4002cdfbd9b080c565738467001fa1cadf72a3b7c3dd9aa9540546bb029290e7785a1fa  portmaster-compat.service
