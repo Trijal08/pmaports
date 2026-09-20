@@ -103,6 +103,28 @@ if [ -d "$HOME/.config/retroarch/system" ]; then
 fi
 [ -f "$RA_CFG" ] || : > "$RA_CFG"
 
+# Flycast: swap A/B and X/Y back to this board's printed labels.
+#
+# Everything below the core measures correct - the DT gives button-a
+# BTN_EAST (right) and button-b BTN_SOUTH (bottom), the mapper forwards
+# those codes unchanged, and RetroArch's Nintendo Switch Pro Controller
+# profile binds a->1 (right, label A) and b->0 (bottom, label B). The
+# swap appears at the core, which is what a per-core remap is for; the
+# Dreamcast's own layout puts A at the bottom and B on the right, the
+# mirror of this board.
+#
+# Created only when absent, so it can be deleted or edited by hand.
+_rmp="$RA_DIR/config/remaps/Flycast/Flycast.rmp"
+if [ ! -e "$_rmp" ]; then
+	mkdir -p "$(dirname "$_rmp")"
+	cat >"$_rmp" <<-'RMP'
+	input_player1_btn_a = "0"
+	input_player1_btn_b = "8"
+	input_player1_btn_x = "1"
+	input_player1_btn_y = "9"
+	RMP
+fi
+
 while IFS= read -r _kv; do
 	case "$_kv" in '' | \#*) continue ;; esac
 
