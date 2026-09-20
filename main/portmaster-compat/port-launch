@@ -84,6 +84,30 @@ GAMEDIR=${GAMEDIR##*/}
 
 set -- --dev-bind / / --ro-bind "$LOADER" /lib/ld-linux-aarch64.so.1
 
+# Several PortMaster launchers assume /dev/input/js0 IS the gamepad and read
+# its name straight out of sysfs - GTA3 and Vice City write it into re3.ini
+# as JoystickName, and re3 then opens its joystick BY NAME. Here js0 is
+# "adc-joystick", one of the raw halves the mapper merges and then hides, so
+# those ports look for a device they can never open and get no input at all.
+#
+# The merged pad is the mapper's uinput device, so it is the js* whose sysfs
+# path is under /devices/virtual. If it is not js0, bind its name over js0's
+# inside the sandbox: any port making that assumption then reads the right
+# name, and no port file is touched.
+_pad_name=
+for _js in /sys/class/input/js*; do
+	[ -e "$_js/device/name" ] || continue
+	case "$(readlink -f "$_js/device" 2>/dev/null)" in
+	*/devices/virtual/input/*) _pad_name=$(cat "$_js/device/name" 2>/dev/null) ;;
+	esac
+done
+if [ -n "$_pad_name" ] &&
+   [ "$(cat /sys/class/input/js0/device/name 2>/dev/null)" != "$_pad_name" ]; then
+	mkdir -p "$STAGE"
+	printf '%s\n' "$_pad_name" > "$STAGE/js0-name"
+	set -- "$@" --ro-bind "$STAGE/js0-name" /sys/class/input/js0/device/name
+fi
+
 if [ -d "$GAMEDIR" ]; then
 	# dlopen'd trees, pointed into the sysroot so a glibc binary does not
 	# drag the host's musl libraries into its process and corrupt the heap.
