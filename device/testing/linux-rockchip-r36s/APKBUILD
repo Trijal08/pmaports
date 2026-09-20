@@ -2,7 +2,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 _flavor="rockchip-r36s"
 pkgname=linux-$_flavor
 pkgver=7.3_rc3
-pkgrel=1
+pkgrel=2
 pkgdesc="The linux-rockchip-r36s kernel and modules"
 arch="aarch64"
 _carch="arm64"
@@ -39,7 +39,7 @@ makedepends="
 # Source
 _owner="Trijal08"
 _repository="kernel-mainline"
-_commit="7993f91f8c9e76b8cb1f8e5df4d446a06f4a99f3"
+_commit="4a96c71230f084b702b81c8f62cc776bd7ef45eb"
 _config="config-$_flavor.$arch"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
