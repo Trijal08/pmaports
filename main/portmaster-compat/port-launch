@@ -77,10 +77,28 @@ fi
 # not usable as written and expanding it would mean sourcing the script.
 # Only the last component is ever meaningful, and ports always sit directly
 # under the ports directory, so take the basename and resolve it there.
-GAMEDIR=$(sed -n 's/^[[:space:]]*GAMEDIR=["]*\([^"]*\)["]*.*/\1/p' "$SCRIPT" | head -1)
-GAMEDIR=${GAMEDIR%/}
-GAMEDIR=${GAMEDIR##*/}
-[ -n "$GAMEDIR" ] && GAMEDIR="$PORTS_DIR/$GAMEDIR"
+#
+# Consider EVERY GAMEDIR= line, not just the first. Newer launchers probe a
+# list of candidates, opening with GAMEDIR="" and assigning the real value
+# later - taking the first match yields an empty directory, and the port
+# then runs with no overlay and no glibc environment, which looks exactly
+# like an instant crash. Candidates still holding an unexpanded variable
+# ($candidate) are skipped, and the first one that exists wins.
+#
+# Matched anywhere on the line, not just at its start: v2 assigns its
+# fallback inside a test - [ -n "$GAMEDIR" ] || GAMEDIR="$SCRIPT_DIR/..." -
+# which an anchored pattern never sees. MCPE_GAMEDIR= and friends match too
+# and are harmless, since their values are unexpanded variables.
+GAMEDIR=
+for _cand in $(grep -o 'GAMEDIR=[^[:space:];)]*' "$SCRIPT" | sed 's/^.*GAMEDIR=//; s/"//g'); do
+	_cand=${_cand%/}
+	_cand=${_cand##*/}
+	case "$_cand" in '' | *'$'* | *'*'*) continue ;; esac
+	if [ -d "$PORTS_DIR/$_cand" ]; then
+		GAMEDIR="$PORTS_DIR/$_cand"
+		break
+	fi
+done
 
 set -- --dev-bind / / --ro-bind "$LOADER" /lib/ld-linux-aarch64.so.1
 
