@@ -148,6 +148,14 @@ if [ -d "$GAMEDIR" ]; then
 	# EGL_NO_DISPLAY and SDL reports "Could not get EGL display". The sysroot
 	# ships the JSON; glvnd just needs to be told where it is.
 	set -- "$@" --setenv __EGL_VENDOR_LIBRARY_DIRS "$SYSROOT/usr/share/glvnd/egl_vendor.d"
+	# The same trap one layer down: libgbm dlopens its backend from a
+	# compiled-in ${libdir}/gbm, which inside the sandbox is the HOST's
+	# /usr/lib/gbm - Alpine's MUSL dri_gbm.so, unloadable here. Without a
+	# backend, eglInitialize on the GBM platform fails with
+	# EGL_NOT_INITIALIZED while surfaceless EGL keeps working, so it looks
+	# like a broken driver rather than a missing file. Only KMSDRM ports
+	# use GBM, which is why it went unnoticed until one turned up.
+	set -- "$@" --setenv GBM_BACKENDS_PATH  "$SYSROOT/usr/lib/gbm"
 	set -- "$@" --setenv ALSA_PLUGIN_DIR    "$SYSROOT/usr/lib/alsa-lib"
 	set -- "$@" --setenv ALSA_CONFIG_PATH   "$SYSROOT/usr/share/alsa/alsa.conf"
 	set -- "$@" --setenv SPA_PLUGIN_DIR     "$SYSROOT/usr/lib/spa-0.2"

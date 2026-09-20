@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=glibc-sysroot
-pkgver=2.40
-pkgrel=2
+pkgver=2.41
+pkgrel=0
 pkgdesc="Self-contained glibc runtime under /opt for prebuilt game ports"
 url="https://postmarketos.org/"
 # Prebuilt aarch64 binaries; there is nothing to compile for other arches.
@@ -18,19 +18,52 @@ license="LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later"
 # !strip keeps the binaries byte-identical to the ones validated on device.
 options="!check !strip !tracedeps !fhs"
 
-# This tarball is a curated closure of a donor aarch64 glibc root (glibc
-# 2.40, Mesa 26.1, SDL 2.32), built by build-sysroot.py walking DT_NEEDED
-# from the binaries the ports actually run. It is a binary artefact by
-# nature: the point is to run prebuilt glibc ports unmodified, and
-# rebuilding these libraries from source under musl would defeat that.
+# A curated closure of an aarch64 glibc root (glibc 2.41, Mesa 25.0.7,
+# SDL 2.32), built by build-sysroot.py walking DT_NEEDED from the binaries
+# the ports actually run. It is a binary artefact by nature: the point is
+# to run prebuilt glibc ports unmodified, and rebuilding these libraries
+# from source under musl would defeat that.
+#
+# The donor is DEBIAN, from official packages - not an ArchR card as it
+# was through 2.40, and not Arch either. Two reasons, both learned the
+# hard way:
+#
+#   * ArchR drives this GPU with the proprietary Mali blob, so the Mesa on
+#     that card was a stripped side-installation it never used itself - no
+#     llvmpipe, no dri symlinks, no GBM backend. Ports rendering through
+#     Wayland never noticed; the first KMSDRM port did.
+#   * Arch's Mesa is compiled against a newer glibc than the ports bundle.
+#     McpeLauncherV2 ships Debian 13's glibc 2.41 and puts its own runtime
+#     first on the library path, so Arch's Mesa 26.2 died with
+#     "version `GLIBC_2.43' not found" the moment it was dlopen'd.
+#     PortMaster ports are built on Debian/Ubuntu; matching that removes
+#     the whole class of problem. Debian's Mesa needs only GLIBC_2.38.
 #
 # Regenerating it (see ~/Documents/R36S-K36/portmaster/):
-#   build-sysroot.py <donor-root> sysroot <binaries and dlopen'd libs...>
+#   fetch-debian-sysroot.py donor <package>...   # official .debs + deps
+#   build-sysroot.py donor sysroot <binaries and dlopen'd libs...>
+#   mv sysroot/usr/lib/aarch64-linux-gnu/* sysroot/usr/lib/   # flatten multiarch
+#   cp -a donor/usr/lib/aarch64-linux-gnu/{dri,gbm,pulseaudio,alsa-lib,spa-0.2,pipewire-0.3} sysroot/usr/lib/
+#   cp -a donor/usr/share/{glvnd,drirc.d,alsa} sysroot/usr/share/
+#   cp -a donor/usr/sbin/ldconfig sysroot/usr/bin/
 #   tar -czf glibc-sysroot-$pkgver.tar.gz --transform 's,^\./,glibc-sysroot-$pkgver/,' -C sysroot .
+#
+# Three libraries have no Debian equivalent and are carried forward from
+# the 2.40 tree: libjpeg.so.8 and libtinfow.so.6 (Arch sonames some ports
+# link), and libisl.so.22 (Ubuntu 20.04 vintage, for the compiler
+# render96ex ships).
 #
 # dlopen'd libraries are invisible to a DT_NEEDED walk and must be named
 # explicitly. The set that matters here, each found by something failing:
-#   panfrost_dri.so                 Mesa's driver for this GPU
+#   usr/lib/gbm/dri_gbm.so          libgbm's backend, dlopen'd from a
+#     compiled-in ${libdir}/gbm. Miss it and eglInitialize on the GBM
+#     platform fails with EGL_NOT_INITIALIZED while surfaceless EGL still
+#     reports 130 configs - it reads as a broken driver, not a missing
+#     file. port-launch must also set GBM_BACKENDS_PATH, or the compiled-in
+#     path finds Alpine's MUSL backend instead.
+#   usr/lib/dri/*_dri.so            the whole directory, symlinks included
+#     (they all point at libdril_dri.so; copying only the target leaves
+#     every driver name unresolvable)
 #   libEGL_mesa / libGLX_mesa       glvnd vendor libraries
 #   libGLESv2 / libGLESv1_CM        glvnd dispatches GLES separately from GL
 #   libxkbcommon                    SDL's Wayland backend
@@ -83,5 +116,5 @@ package() {
 }
 
 sha512sums="
-25e928cd531626f2f4614c66e4e7de1a29d965a22992bf28425619f30a5ddbbd8a6f379eef588fc0548e3f5741f690c893797db8e98b10104486cb0474318c39  glibc-sysroot-2.40.tar.gz
+903161b32b24163cd7d22db5243bfcf5dd680386fb06156f8036af3cf0e356229fe80ba4a13e3dce3d56a6eb8fff7caa1bc0f929cb6d93828c25d832217a2622  glibc-sysroot-2.41.tar.gz
 "
