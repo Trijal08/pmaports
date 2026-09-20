@@ -103,27 +103,6 @@ if [ -d "$HOME/.config/retroarch/system" ]; then
 fi
 [ -f "$RA_CFG" ] || : > "$RA_CFG"
 
-# Flycast: swap A/B and X/Y back to this board's printed labels.
-#
-# Everything below the core measures correct - the DT gives button-a
-# BTN_EAST (right) and button-b BTN_SOUTH (bottom), the mapper forwards
-# those codes unchanged, and RetroArch's Nintendo Switch Pro Controller
-# profile binds a->1 (right, label A) and b->0 (bottom, label B). The
-# swap appears at the core, which is what a per-core remap is for; the
-# Dreamcast's own layout puts A at the bottom and B on the right, the
-# mirror of this board.
-#
-# Created only when absent, so it can be deleted or edited by hand.
-_rmp="$RA_DIR/config/remaps/Flycast/Flycast.rmp"
-if [ ! -e "$_rmp" ]; then
-	mkdir -p "$(dirname "$_rmp")"
-	cat >"$_rmp" <<-'RMP'
-	input_player1_btn_a = "0"
-	input_player1_btn_b = "8"
-	input_player1_btn_x = "1"
-	input_player1_btn_y = "9"
-	RMP
-fi
 
 while IFS= read -r _kv; do
 	case "$_kv" in '' | \#*) continue ;; esac
@@ -157,7 +136,11 @@ joypad_autoconfig_dir = "/usr/share/libretro/autoconfig"
 input_enable_hotkey_btn = "9"
 input_exit_emulator_btn = "10"
 input_menu_toggle_btn = "2"
-input_autodetect_enable = "true"
+# Must stay off. RetroArch's udev autoconfig matches this pad (Nintendo
+# Switch Pro Controller, 057e/2009, affinity 50) and would overwrite the
+# player binds below at runtime with the positional layout, silently
+# undoing them.
+input_autodetect_enable = "false"
 input_max_users = "5"
 
 # Explicit player-1 binds rather than relying on a joypad profile.
@@ -174,10 +157,24 @@ input_max_users = "5"
 #   0 SOUTH  1 EAST  2 NORTH  3 WEST  4 Z(unused)  5 TL  6 TR  7 TL2  8 TR2
 #   9 SELECT  10 START  11 MODE  12 THUMBL  13 THUMBR
 # and axes 0/1 left stick, 2/3 right stick, hat 0 for the D-pad.
-input_player1_b_btn = "0"
-input_player1_a_btn = "1"
-input_player1_x_btn = "2"
-input_player1_y_btn = "3"
+# Face buttons are bound by ROLE, not by position.
+#
+# libretro cores map RetroPad positionally: RetroPad B is the bottom
+# button everywhere, so it becomes PlayStation Cross, Dreamcast A, SNES
+# B. Bound positionally (b=0 bottom, a=1 right) that is self-consistent
+# and matches a real Switch Pro Controller - but it puts the primary
+# action under the button this board prints as B, on every console whose
+# face layout is not Nintendo's.
+#
+# So RetroPad B is bound to the RIGHT button and A to the BOTTOM one,
+# which lands Cross / Dreamcast-A / the accept button under the printed
+# A. The deliberate cost: on SNES and GBA, whose layout does match this
+# board, the printed A now produces their B. Chosen knowingly - one
+# convention everywhere beats per-console correctness.
+input_player1_b_btn = "1"
+input_player1_a_btn = "0"
+input_player1_x_btn = "3"
+input_player1_y_btn = "2"
 input_player1_l_btn = "5"
 input_player1_r_btn = "6"
 input_player1_l2_btn = "7"
