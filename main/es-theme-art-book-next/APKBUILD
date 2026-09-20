@@ -30,3 +30,6 @@ package() {
 
 	rm -rf "$pkgdir"/usr/share/emulationstation/themes/$pkgname/.git*
 }
+sha512sums="
+733a29f1cad7aed5847d7d35b23ebd7facb8e748a4f4576233b993a2b458648254e0deb22354d47e7b0fe524ef7f419230e26c8d318d74ebe252d78b2deff847  es-theme-art-book-next-9a50ef366e750aabfab29e6915a2867607212971.tar.gz
+"
