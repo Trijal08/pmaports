@@ -1,0 +1,73 @@
+--- a/es-app/src/guis/GuiMenu.cpp	2026-09-22 18:48:47.717513496 -0400
++++ b/es-app/src/guis/GuiMenu.cpp	2026-09-22 18:49:13.659839622 -0400
+@@ -5554,25 +5554,59 @@
+ 		SystemConf::getInstance()->set("simplehttp.enabled", simplehttpenabled ? "1" : "0");
+ 	});
+ 
+-	const std::string usbGadgetScript = "/usr/bin/usbgadget";
++	// USB gadget function, over the usb_moded D-Bus interface.
++	//
++	// Was a call out to /usr/bin/usbgadget, a distro-specific helper that
++	// only exists downstream. The same job is done by whatever implements
++	// com.meego.usb_moded - usb-moded itself, or usb-signaller, which is
++	// what postmarketOS ships - so talk to that instead and the menu works
++	// on a stock system with no extra tooling.
++	//
++	// dbus-send rather than a library: it is part of dbus, already present
++	// wherever the service is, and the policy lets an unprivileged session
++	// call these, so no helper, sudo or polkit is involved. Modes come back
++	// comma-separated, and --print-reply=literal indents its output, hence
++	// the trim.
++	const std::string usbModedCall =
++		"dbus-send --system --print-reply=literal --dest=com.meego.usb_moded "
++		"/com/meego/usb_moded com.meego.usb_moded.";
++
+ 	auto optionsUSBGadget = std::make_shared<OptionListComponent<std::string> >(mWindow, _("USB GADGET FUNCTION"), false);
+-	std::string selectedUSBGadget = std::string(Utils::Platform::GetShOutput(R"(/usr/bin/usbgadget)"));
+-	if (selectedUSBGadget.empty())
+-		selectedUSBGadget = "disabled";
++	std::string selectedUSBGadget = Utils::String::trim(Utils::Platform::GetShOutput(usbModedCall + "mode_request"));
+ 
+ 	std::string a;
+-	for(std::stringstream ss(Utils::Platform::GetShOutput(R"(/usr/bin/usbgadget --options)")); getline(ss, a, ' '); ) {
++	std::string usbModes = Utils::String::trim(Utils::Platform::GetShOutput(usbModedCall + "get_modes"));
++	for (std::stringstream ss(usbModes); getline(ss, a, ','); ) {
++		a = Utils::String::trim(a);
++		if (a.empty())
++			continue;
+ 		optionsUSBGadget->add(a, a, a == selectedUSBGadget);
+ 	}
++
++	// Never leave the list empty or without a selection: its save function
++	// reads getSelected() unconditionally, and the service may be absent.
++	if (optionsUSBGadget->size() == 0)
++		optionsUSBGadget->add(_("UNAVAILABLE"), selectedUSBGadget, true);
++	else if (!optionsUSBGadget->hasSelection())
++		optionsUSBGadget->selectFirstItem();
++
+ 	s->addWithLabel(_("USB GADGET FUNCTION"), optionsUSBGadget);
+ 
+-	s->addSaveFunc([this, window, usbGadgetScript, optionsUSBGadget, selectedUSBGadget] {
+-		if (optionsUSBGadget->changed()) {
+-			Utils::Platform::runSystemCommand(usbGadgetScript + " " + optionsUSBGadget->getSelected(), "", nullptr);
+-			if (optionsUSBGadget->getSelected() == "network") {
+-				std::string usbip = std::string(Utils::Platform::GetShOutput(R"(/usr/bin/usbgadget address)"));
++	s->addSaveFunc([this, window, usbModedCall, optionsUSBGadget, selectedUSBGadget] {
++		if (!optionsUSBGadget->changed())
++			return;
++
++		Utils::Platform::runSystemCommand(usbModedCall + "set_mode string:" + optionsUSBGadget->getSelected(), "", nullptr);
++
++		// Networking modes are the ones worth reporting an address for;
++		// the others deliberately tear the link down.
++		const std::string mode = optionsUSBGadget->getSelected();
++		if (mode == "developer_mode" || mode == "tethering_mode")
++		{
++			std::string usbip = Utils::String::trim(Utils::Platform::GetShOutput(
++				R"(ip -4 -o addr show usb0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"));
++			if (!usbip.empty())
+ 				mWindow->pushGui(new GuiMsgBox(mWindow, _("USB Networking enabled, the device IP is ") + usbip, _("OK"), nullptr));
+-			}
+ 		}
+ 	});
+ 
