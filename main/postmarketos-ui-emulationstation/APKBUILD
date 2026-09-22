@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=15
+pkgrel=16
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -54,6 +54,7 @@ source="
 	emulationstation-shutdown.sudoers
 	es_systems.cfg
 	99-backlight-permissions.rules
+	unudhcpd-rebind.conf
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
 # "input" is required: the r36s-mapper exposes a uinput node (a virtual
@@ -196,6 +197,15 @@ package() {
 	install -Dm644 "$srcdir"/99-backlight-permissions.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d
 
+	# See the comment in the file: unudhcpd goes deaf after a USB mode
+	# switch. The drop-in stops it with usb0; the symlink is what starts it
+	# again, since BindsTo alone only ever tears down.
+	install -Dm644 "$srcdir"/unudhcpd-rebind.conf \
+		-t "$pkgdir"/usr/lib/systemd/system/unudhcpd@.service.d
+	mkdir -p "$pkgdir"/usr/lib/systemd/system/sys-subsystem-net-devices-usb0.device.wants
+	ln -s ../unudhcpd@.service \
+		"$pkgdir"/usr/lib/systemd/system/sys-subsystem-net-devices-usb0.device.wants/unudhcpd@usb0.service
+
 	# NOTE: bash is a hard dependency, not a recommend. Every PortMaster
 	# launcher and control.txt itself is #!/bin/bash and uses bash-only
 	# syntax ([[ ]], source, $(< file)). Without it EmulationStation's exec
@@ -212,4 +222,5 @@ e9b11cfd3ae7a9a20be95a23984664845df7fd643495604987387972b11ea621eeac39d405043368
 0bda887347a8240957430a300c48df681db445861a69119c244ead167662cc7d4bb34ba1cbdf3a92db35c53f04e55165f77c609074fb795d5e2bb8ab1fc4f879  emulationstation-shutdown.sudoers
 57373e3c1e3c53ac99c0b4d4d8fadef2b86c4679a59d76b545e287378d907a34288b334355b11796d8e3c657c89deca96be2d15ad0edef7076d1cd11e1d7bd60  es_systems.cfg
 93d42b333606ad94f35a0bada5ffd3dcf0e2fcb7b7ba3aecba6110bcd6af215dc00c1c15ae549d449e8d7788cc125d4b5023f575014a27480649943a8fd8948d  99-backlight-permissions.rules
+e71665a5f9524979ff9528b0aa4ab3c99eb58491dcf969aac2c83c38013d1373ae9a24683eccc49dc0ce1291b24ad7b421d49daa0ae3db4605c562c5f6fa59ae  unudhcpd-rebind.conf
 "
