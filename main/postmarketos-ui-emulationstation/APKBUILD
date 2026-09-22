@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=16
+pkgrel=17
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -29,9 +29,21 @@ subpackages="$pkgname-udev"
 # parse their exact output - main.lua matches ls -la column by column - and
 # GNU is the implementation every PortMaster host ships and these scripts
 # were written against.
+# postmarketos-usb-moded: brings usb-signaller (which owns com.meego.usb_moded
+# on the system bus), umtprd and the default profile. Nothing else in the image
+# pulls it in - only the gnome-mobile, phosh and plasma-mobile UIs list it - so
+# without this a fresh flash has no USB mode switching at all: the ES menu entry
+# reads UNAVAILABLE, MTP does not exist, and host mode is unreachable.
+# Not usb-moded itself: it is a second implementation of the same bus name, its
+# Alpine package installs the unit to /usr/lib/systemd/service/ instead of
+# /usr/lib/systemd/system/ so it never starts anyway, and usb-signaller is the
+# one postmarketOS actually runs.
+# dbus: the menu shells out to dbus-send.
 depends="
 	keyd
 	sudo-virt
+	postmarketos-usb-moded
+	dbus
 	emulationstation
 	postmarketos-base-ui-cage
 	bash
