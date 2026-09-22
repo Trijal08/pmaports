@@ -3,7 +3,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=device-rockchip-r36s
 pkgdesc="Rockchip R36S"
 pkgver=7
-pkgrel=1
+pkgrel=2
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -13,6 +13,7 @@ depends="
 	linux-rockchip-r36s
 	postmarketos-base
 	postmarketos-bootsplash
+	rockchip-r36s-storage-partition
 	u-boot-rockchip-r36s
 "
 makedepends="devicepkg-dev"
