@@ -1,1 +1,2 @@
 enable rockchip-r36s-mapper.service
+enable storage-partition.service
