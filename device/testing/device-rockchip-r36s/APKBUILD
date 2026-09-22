@@ -13,15 +13,23 @@ depends="
 	linux-rockchip-r36s
 	postmarketos-base
 	postmarketos-bootsplash
-	rockchip-r36s-storage-partition
 	u-boot-rockchip-r36s
+	exfatprogs
+	postmarketos-mkinitfs
 "
 makedepends="devicepkg-dev"
+# umtprd.conf is shipped by postmarketos-usb-moded. apk refuses to install two
+# packages owning the same path, so claim it explicitly.
+replaces="postmarketos-usb-moded"
 source="
 	80-device-rockchip-r36s.preset
 	99-rockchip-r36s-gpu.rules
 	deviceinfo
 	kernel-cmdline.conf
+	50-storage-partition.sh
+	storage-partition-setup
+	storage-partition.service
+	umtprd.conf
 "
 _pmb_recommends="rockchip-r36s-mapper"
 # abuild moves usr/lib/udev into this via default_udev, with install_if on
@@ -40,11 +48,36 @@ package() {
 
 	install -Dm644 "$srcdir"/99-rockchip-r36s-gpu.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d/
+
+	# Separate STORAGE partition for ROMs, BIOS files and ports.
+	#
+	# pmbootstrap can only install boot + root: partition.py hardcodes
+	# ["mkpart", "primary", mb_root_start, "100%"] and deviceinfo has no
+	# key for extra partitions, so the tail of the card has to be claimed
+	# from the initramfs. /hooks-extra, not /hooks: init_2nd.sh runs it
+	# after udev has settled but before wait_root_partition,
+	# resize_root_partition and mount_root_partition.
+	install -Dm644 "$srcdir"/50-storage-partition.sh \
+		-t "$pkgdir"/usr/share/mkinitfs/hooks-extra/
+
+	# mkfs.exfat is not in the initramfs, so the formatting and the mount
+	# happen on the first real boot. Enabled by the preset above.
+	install -Dm755 "$srcdir"/storage-partition-setup \
+		-t "$pkgdir"/usr/bin/
+	install -Dm644 "$srcdir"/storage-partition.service \
+		-t "$pkgdir"/usr/lib/systemd/system/
+
+	install -Dm644 "$srcdir"/umtprd.conf \
+		"$pkgdir"/etc/umtprd/umtprd.conf
 }
 
 sha512sums="
-15ba9b5aa826056cbd03b593dd776981835d686dfa420f60eee84b117dda504a0762a6069ef5bfa0f6e302c82326fb3bb47db2fdad7535805af697f397f8f09c  80-device-rockchip-r36s.preset
+36b4fb5ee059b360975c12f42c2c8ab9950cf2f6b11311e91802a3fce3a113d3ac197b9db7d3bbc076611ed11332eaf4cf139164d3987c2562d6e93f41e0f721  80-device-rockchip-r36s.preset
 8bdd663bee31c219cf42e3452ac83a21b37774cf51c21c360f4db9f24dec32142d626a02cafd5e3982f1643d8a8e1fb7d038713aae5c3c4eb57ea62b26e2f664  99-rockchip-r36s-gpu.rules
 e04db4430e046c178e367af39f2b900e372d67da323dd10482f4ba0b170357b712dc909b047474b565c26189f1eac25c6e6519bd3f981b64b4a8c357963f1d42  deviceinfo
 ce96e936003e90c659d3e54f31d674f953bc8858b06bed88eaff988a36101dcedd3ce41f2d5a2dc8257bce5e37893457289838fd875fc3a41e0c83b2998ea510  kernel-cmdline.conf
+4cad7e276e4cd60989f6ab633c14762e159e3de67c62aca1a3bac9d8ccca12d520d72547d7c724b6a3c87342eb23fb2b42317560b6b7b6af38be21d93ac985e5  50-storage-partition.sh
+4c43cbd362d68948b3bfada811f32d8cb7f6753341be0d8f077ba715ce9a596561982169b840a3f2f220a8d3ee8c66d378b994b95347b68c1577b43ebafca1b4  storage-partition-setup
+aa2e54d6e6f44548ff8651b10070802db11f8ba0a24a95f24980cdfad7dfbcd1f8069a1b47c0ed335c246067a5856ea1423f0a7b0562d879cae049d24ca7f0f9  storage-partition.service
+1e03a1861d505e81d9e763b9639e5b4dbb56132fddf06969667a250a653a6f89d2a3dbee5266c59015623820ed1bff35719babab309180d2bef501087539b4fb  umtprd.conf
 "
