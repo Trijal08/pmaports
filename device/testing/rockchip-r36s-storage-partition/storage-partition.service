@@ -1,0 +1,14 @@
+[Unit]
+Description=Format and mount the STORAGE partition
+After=local-fs.target
+Before=tinydm.service
+ConditionPathExists=/dev/disk/by-partlabel/storage
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/storage-partition-setup
+ExecStop=/bin/umount /home/user/ROMs
+
+[Install]
+WantedBy=multi-user.target

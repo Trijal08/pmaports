@@ -1,0 +1,29 @@
+#!/bin/sh
+# Format (once) and mount the STORAGE partition created by the initramfs hook
+# in 50-storage-partition.sh. mkfs.exfat cannot run in the initramfs, so the
+# first real boot finishes the job.
+set -e
+
+DEV=/dev/disk/by-partlabel/storage
+MNT=/home/user/ROMs
+
+if [ ! -b "$DEV" ]; then
+	echo "storage-partition: $DEV does not exist, nothing to mount"
+	exit 0
+fi
+
+if [ -z "$(blkid -o value -s TYPE "$DEV" 2>/dev/null)" ]; then
+	echo "storage-partition: formatting $DEV as exFAT"
+	mkfs.exfat -L STORAGE "$DEV"
+fi
+
+mkdir -p "$MNT"
+if ! mountpoint -q "$MNT"; then
+	# exFAT has no on-disk ownership or permission bits, so they come from
+	# the mount: everything belongs to user (uid 10000) and fmask=0022
+	# leaves files 0755, which PortMaster's launchers need to be executable.
+	mount -t exfat \
+		-o uid=10000,gid=10000,fmask=0022,dmask=0022,iocharset=utf8,noatime,errors=remount-ro \
+		"$DEV" "$MNT"
+	echo "storage-partition: mounted $DEV on $MNT"
+fi
