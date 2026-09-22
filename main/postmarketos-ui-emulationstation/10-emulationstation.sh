@@ -9,6 +9,18 @@
 # worst a broken tweak below can do is leave a setting unapplied.
 export CAGE_UI_COMMAND="emulationstation --no-splash"
 
+# The INFORMATION page renders VERSION blank because ES reads it from the
+# ENVIRONMENT, not from any file: ApiSystem::getVersion() is just
+# GetEnv("OS_VERSION"), and the "extra" variant is GetEnv("OS_BUILD").
+# ArchR exports both from its own profile; nothing on postmarketOS does.
+#
+# Read in a subshell rather than sourcing os-release into this one: it
+# defines generic names (NAME, VERSION, ID) that would leak into every
+# login shell and into the ports launched from here.
+OS_VERSION=$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-${NAME:-postmarketOS} ${VERSION_ID:-}}")
+OS_BUILD=$(. /etc/os-release 2>/dev/null; echo "${BUILD_ID:-${VERSION_ID:-}}")
+export OS_VERSION OS_BUILD
+
 # EmulationStation needs a writable config tree and will not create the
 # resources link itself. CMake installs only the binary, so point at the
 # copy this package ships.
