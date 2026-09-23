@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=22
+pkgrel=23
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -70,6 +70,8 @@ source="
 	99-backlight-permissions.rules
 	gzdoom.ini
 	gzdoom-launch
+	es-run
+	es-killswitch
 	unudhcpd-rebind.conf
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
@@ -222,6 +224,11 @@ package() {
 		-t "$pkgdir"/usr/share/emulationstation
 	install -Dm755 "$srcdir"/gzdoom-launch -t "$pkgdir"/usr/bin
 
+	# SELECT+START as a force quit for anything EmulationStation launches
+	# that does not already have one of its own.
+	install -Dm755 "$srcdir"/es-run -t "$pkgdir"/usr/bin
+	install -Dm755 "$srcdir"/es-killswitch -t "$pkgdir"/usr/bin
+
 	# See the comment in the file: unudhcpd goes deaf after a USB mode
 	# switch. The drop-in stops it with usb0; the symlink is what starts it
 	# again, since BindsTo alone only ever tears down.
@@ -245,10 +252,12 @@ e9b11cfd3ae7a9a20be95a23984664845df7fd643495604987387972b11ea621eeac39d405043368
 4e994036d4ce7266b5378909866e455632fd3b69bb33c4a156e363ffb27083e18a2dc0d7533cd7953c246622fac1b75cda26692714ae3a618970ea2f9b579655  51-default-sink-volume.conf
 973d4e16673ade069ca174146b31ce98f68674c268856bb7a15c78e8a6e419bb2df4c979a0da8e0176845b256cc5db946b4605aba912fb19c1a544735abef2f9  51-min-quantum.conf
 0bda887347a8240957430a300c48df681db445861a69119c244ead167662cc7d4bb34ba1cbdf3a92db35c53f04e55165f77c609074fb795d5e2bb8ab1fc4f879  emulationstation-shutdown.sudoers
-afb21c3cedaabe82c53abfbff715c942728872efe713d27c28a30341e1eabac80ed40690c5d3c4e189575f69a4ff97af23094107c84fd8de3951dd9e56ec1097  es_systems.cfg
+6cb4eb93ad238bdba2832b6b6a5bb9288508a58446d262a6fc7ab377e3e152dd4f3f8b3337dac4b21a6584599896faba1a66b888b853b69be63877b8f6ee0ff2  es_systems.cfg
 07605142349a396bbd6aef316af2e93bd57439e1e41552e6c6dc0b6ee47d36daa61913275ec2741457c7110f99f4bbdab8c26ec1248ebc048a2778eeb7794508  es_input.cfg
 93d42b333606ad94f35a0bada5ffd3dcf0e2fcb7b7ba3aecba6110bcd6af215dc00c1c15ae549d449e8d7788cc125d4b5023f575014a27480649943a8fd8948d  99-backlight-permissions.rules
 1fcc635673b1a9828851a6db0ad52e3c5255a45b87c94c93c2a29f5670d009374bb024c6e3b2e9f4b4a150edb77fd2960454f6e79d61fac517998a011eb9ec91  gzdoom.ini
 69b823bb870681cdbe78cd9df64118f33d83fde164c41a3f0f33d38827e17c86b7dd82876b00012bf03a5e18730c07b28e71b8b000dec201d63a0c0351feeae4  gzdoom-launch
+0620d4038f7852f7c7b65a7461f4b25db4927f124c0b41f90b59d377b08cdee926045d36a08584e1c26ae79f49b1faa9546532da45f907279fdee9c989bf3c88  es-run
+02d57a910a7a6b2f1e4adae580196fe49dffb731fda7b14b953c5cbe782f266ef35f2f06a0dc4a503167a62852780427ce7207dccf3fec89868e240c47891ac0  es-killswitch
 e71665a5f9524979ff9528b0aa4ab3c99eb58491dcf969aac2c83c38013d1373ae9a24683eccc49dc0ce1291b24ad7b421d49daa0ae3db4605c562c5f6fa59ae  unudhcpd-rebind.conf
 "

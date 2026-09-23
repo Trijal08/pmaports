@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Terminate a process when SELECT+START are held together on the pad.
+
+EmulationStation's own launchers each solve this differently - RetroArch has
+input_exit_emulator_btn, PortMaster ports get it from gptokeyb - which leaves
+anything else (GZDoom, PPSSPP) with no way out but the power button.
+
+ArchR does it with a daemon plus a /tmp/.process-kill-data file that every
+launcher writes with the name of whatever it wants killed. This watches the
+pad directly and signals a pid it was handed, so there is no global state, no
+name matching, and nothing to clear if a launcher exits badly.
+"""
+
+import glob
+import os
+import signal
+import struct
+import sys
+import time
+
+# struct input_event on 64-bit: two longs of timeval, then type, code, value.
+_FMT = "llHHi"
+_SIZE = struct.calcsize(_FMT)
+
+EV_KEY = 0x01
+BTN_SELECT = 0x13a
+BTN_START = 0x13b
+
+PAD_NAME = "Nintendo Switch Pro Controller"
+
+
+def find_pad():
+    """The merged pad from r36s-mapper, by name - the raw halves it reads are
+    separate devices and carry only part of the buttons."""
+    for syspath in sorted(glob.glob("/sys/class/input/event*")):
+        try:
+            with open(os.path.join(syspath, "device", "name")) as handle:
+                if handle.read().strip() == PAD_NAME:
+                    return os.path.join("/dev/input", os.path.basename(syspath))
+        except OSError:
+            continue
+    return None
+
+
+def terminate(pid):
+    """Ask, then insist."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    for _ in range(30):
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit("usage: es-killswitch PID")
+    pid = int(sys.argv[1])
+
+    device = find_pad()
+    if device is None:
+        return
+
+    held = set()
+    # Unbuffered: a buffered reader would sit on a partial event.
+    with open(device, "rb", buffering=0) as events:
+        while True:
+            data = events.read(_SIZE)
+            if not data or len(data) < _SIZE:
+                return
+            _, _, etype, code, value = struct.unpack(_FMT, data)
+            if etype != EV_KEY or code not in (BTN_SELECT, BTN_START):
+                continue
+            if value:
+                held.add(code)
+            else:
+                held.discard(code)
+            if len(held) == 2:
+                terminate(pid)
+                return
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Run a game or tool with SELECT+START as a force quit.
+#
+# RetroArch and PortMaster ports already have their own combo; this is for
+# everything else EmulationStation launches directly, so the behaviour is the
+# same no matter what is running. The watcher is handed this invocation's own
+# child pid and dies with it, so nothing is left running between games.
+set -e
+
+[ $# -ge 1 ] || { echo "usage: es-run COMMAND [ARGS...]" >&2; exit 2; }
+
+"$@" &
+child=$!
+
+es-killswitch "$child" &
+watcher=$!
+
+# Not exec: the watcher has to be reaped once the game exits.
+status=0
+wait "$child" || status=$?
+kill "$watcher" 2>/dev/null || :
+wait "$watcher" 2>/dev/null || :
+exit "$status"
