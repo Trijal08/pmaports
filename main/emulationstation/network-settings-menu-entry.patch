@@ -1,0 +1,23 @@
+--- a/es-app/src/guis/GuiMenu.cpp	2026-09-22 21:57:01.853624501 -0400
++++ b/es-app/src/guis/GuiMenu.cpp	2026-09-22 21:57:01.870045293 -0400
+@@ -191,6 +191,20 @@
+ 			addEntry(_("CONFIGURE INPUT"), true, [this] { openConfigInput(); }, "iconControllers");
+ 
+ 		addEntry(_("SOUND SETTINGS").c_str(), true, [this] { openSoundSettings(); }, "iconSound");
++
++		// The USB gadget selector lives in openNetworkSettings(), but the row
++		// that opens it is compiled only for BATOCERA/ARCHR builds, and even
++		// there it is gated on a "wifictl" executable that comes from ArchR
++		// and is not packaged here. This board has no wifi of any kind, so
++		// that gate can never pass - and without the row the whole page is
++		// unreachable, including the USB mode switching that is the only way
++		// into MTP and host mode on a device whose single port is also its
++		// only network link. Everything on the page is built conditionally
++		// and the option lists tolerate being empty, so opening it without
++		// the wifi helpers is harmless: the wifi widgets simply have nothing
++		// to offer.
++		addEntry(_("NETWORK SETTINGS").c_str(), true, [this] { openNetworkSettings(); }, "iconNetwork");
++
+ 		addEntry(_("GAME COLLECTION SETTINGS").c_str(), true, [this] { openCollectionSystemSettings(); }, "iconAdvanced");
+ 
+ 		if (!ApiSystem::getInstance()->isScriptingSupported(ApiSystem::GAMESETTINGS))

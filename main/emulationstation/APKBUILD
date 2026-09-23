@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=emulationstation
 pkgver=42_git20260917
-pkgrel=3
+pkgrel=4
 _commit="f25c4475a348f534de8ff724e9e42808b7a80a12"
 pkgdesc="Graphical emulator frontend, ArchR fork tuned for handheld consoles"
 url="https://github.com/archr-linux/emulationstation-next"
@@ -33,6 +33,7 @@ options="!check"
 source="$pkgname-$_commit.tar.gz::https://github.com/archr-linux/emulationstation-next/archive/$_commit.tar.gz
 	fix-empty-option-list-crash.patch
 	usb-gadget-via-usb-moded.patch
+	network-settings-menu-entry.patch
 	"
 builddir="$srcdir/emulationstation-next-$_commit"
 
@@ -144,4 +145,5 @@ sha512sums="
 f2277c79b506d43d8c2e150ee2d9dbc9cb1883f5153f25c188d447d27122e0f455fac5d8dacfaba47fad053e8722285e3a1a950c80e87169ab1a7b599fcb765f  emulationstation-f25c4475a348f534de8ff724e9e42808b7a80a12.tar.gz
 cd4a3f91b800553df1bfeb65e8492b35f668011809d6aee2818ae864b78aea60cf76e3219826612d490d936e37d2afde1012667cd6013cd391e4800fe88a71d6  fix-empty-option-list-crash.patch
 87e8e52f9c8d0c8f08f996d800ebd7c2c911c6c04360cc1884b248578b2173c9f5931016b352d413be47c73666a081bfc0d0cf9ba5f0918de23a06c9c9d9ef11  usb-gadget-via-usb-moded.patch
+12adb0420dddc65cdf8122cfb1dc463adadbb0f1b3e03c35c4cd5e377165cff15b494072a52321418d0e1c96172d57d94a04989b3105f3b162b0e46d3e3c42b4  network-settings-menu-entry.patch
 "
