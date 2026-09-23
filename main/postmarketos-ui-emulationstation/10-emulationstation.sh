@@ -94,6 +94,34 @@ RA_CFG="$RA_DIR/retroarch.cfg"
 mkdir -p "$RA_DIR" "$HOME/ROMs/bios" "$HOME/ROMs/saves" \
 	"$HOME/ROMs/states" "$HOME/ROMs/screenshots" "$HOME/ROMs/config/retroarch"
 
+# Every system directory es_systems.cfg declares, created up front on the ROM
+# share. EmulationStation logs "System <x> path does not exist" and skips the
+# system otherwise, so a fresh card shows nothing and gives no hint of where
+# games are meant to go - and with the share on its own partition the tree no
+# longer arrives with the rootfs. Cheap: 91 empty directories.
+sed -n 's|.*<path>~/\(.*\)</path>.*|\1|p' /etc/emulationstation/es_systems.cfg |
+	sort -u | while read -r _sysdir; do
+		case "$_sysdir" in
+			ROMs/*) mkdir -p "$HOME/$_sysdir" ;;
+		esac
+	done
+
+# Preinstall Freedoom, so a fresh card has something to launch. With no game
+# anywhere EmulationStation has no system to show and opens on its "no games
+# found" error, which reads like a broken image rather than an empty one.
+# Freedoom is a complete, freely licensed IWAD pair, and the doom system is
+# already wired to gzdoom - which art-book-next themes as "id".
+#
+# Copied rather than symlinked: the ROM share is exFAT and has no symlinks.
+# Skipped once anything is in there, so deleting them makes them stay gone.
+if [ -z "$(ls -A "$HOME/ROMs/doom" 2>/dev/null)" ]; then
+	for _wad in /usr/share/doom/freedoom*.wad \
+			/usr/share/games/doom/freedoom*.wad \
+			/usr/share/freedoom/freedoom*.wad; do
+		[ -f "$_wad" ] && cp -f "$_wad" "$HOME/ROMs/doom/"
+	done
+fi
+
 # Anything a core previously wrote into the old system directory moves
 # across once, so Dreamcast VMU saves and MAME hiscore data are not
 # stranded.
