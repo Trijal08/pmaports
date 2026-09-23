@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=postmarketos-ui-emulationstation
 pkgver=1
-pkgrel=20
+pkgrel=21
 pkgdesc="(Wayland) EmulationStation emulator frontend, fullscreen under cage"
 url="https://postmarketos.org/"
 arch="all"
@@ -68,6 +68,7 @@ source="
 	es_systems.cfg
 	99-backlight-permissions.rules
 	gzdoom.ini
+	gzdoom-launch
 	unudhcpd-rebind.conf
 	"
 # https://gitlab.postmarketos.org/postmarketOS/pmbootstrap/-/issues/2347
@@ -212,6 +213,7 @@ package() {
 		-t "$pkgdir"/usr/lib/udev/rules.d
 	install -Dm644 "$srcdir"/gzdoom.ini \
 		-t "$pkgdir"/usr/share/emulationstation
+	install -Dm755 "$srcdir"/gzdoom-launch -t "$pkgdir"/usr/bin
 
 	# See the comment in the file: unudhcpd goes deaf after a USB mode
 	# switch. The drop-in stops it with usb0; the symlink is what starts it
@@ -229,15 +231,16 @@ package() {
 
 }
 sha512sums="
-706d2bcd8a5cbba5a13fb954072097f49018d89a73ebabb0c93d3d2629011f0174305849416f7f0fb223fa235d8c6953ac53e82e2e72c47bb02ac95cc74c75e6  10-emulationstation.sh
+dd165f3d588aa36654618f48261d90b625be0133c1270337b12363a5f1061066d4fc120d53ce96f740a65ea960a202e445fcb40d7d62ffc7835654d50015cf60  10-emulationstation.sh
 e8ae698b31f93b3588615e82f7b02c48c5b0935b8af5e567d422eea773e034b4f157a90e0e47f5944510723f8aa06db1c3785c1d472a04e815b0ff80f4cbe28d  99-keyd-ignore-pointer.rules
 bf04608cf87ff91bf21551d084aed9cb33849cd708938930c92d8ec1783c806bb77eb2fb82e427489643b2d5357a6fe9910d1d4d3154c6a658078718932c9782  keyd-default.conf
 e9b11cfd3ae7a9a20be95a23984664845df7fd643495604987387972b11ea621eeac39d405043368dcec7000eca346fcdcc3ab054aa31a4822afca0222efd132  r36s-volume
 4e994036d4ce7266b5378909866e455632fd3b69bb33c4a156e363ffb27083e18a2dc0d7533cd7953c246622fac1b75cda26692714ae3a618970ea2f9b579655  51-default-sink-volume.conf
 973d4e16673ade069ca174146b31ce98f68674c268856bb7a15c78e8a6e419bb2df4c979a0da8e0176845b256cc5db946b4605aba912fb19c1a544735abef2f9  51-min-quantum.conf
 0bda887347a8240957430a300c48df681db445861a69119c244ead167662cc7d4bb34ba1cbdf3a92db35c53f04e55165f77c609074fb795d5e2bb8ab1fc4f879  emulationstation-shutdown.sudoers
-8ef0d6d8d3b0d25e1fb29c077910544422d9a6f247ced3d1f828df0933eee6600df755ceaf6c7748b517a1cba8a49c2deb87545721cb241b086ea2e1b64b04b2  es_systems.cfg
+afb21c3cedaabe82c53abfbff715c942728872efe713d27c28a30341e1eabac80ed40690c5d3c4e189575f69a4ff97af23094107c84fd8de3951dd9e56ec1097  es_systems.cfg
 93d42b333606ad94f35a0bada5ffd3dcf0e2fcb7b7ba3aecba6110bcd6af215dc00c1c15ae549d449e8d7788cc125d4b5023f575014a27480649943a8fd8948d  99-backlight-permissions.rules
 f52d0ae403d47cdd0b80382252a7f1e0fa4cc532488ee85c80e46cfa74a9197946ec3bf7946236ea0b4c4776c912b5c353b4fdbd56364aa1608a7f4599740617  gzdoom.ini
+69b823bb870681cdbe78cd9df64118f33d83fde164c41a3f0f33d38827e17c86b7dd82876b00012bf03a5e18730c07b28e71b8b000dec201d63a0c0351feeae4  gzdoom-launch
 e71665a5f9524979ff9528b0aa4ab3c99eb58491dcf969aac2c83c38013d1373ae9a24683eccc49dc0ce1291b24ad7b421d49daa0ae3db4605c562c5f6fa59ae  unudhcpd-rebind.conf
 "

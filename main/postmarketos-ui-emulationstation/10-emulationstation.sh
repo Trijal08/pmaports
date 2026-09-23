@@ -123,11 +123,22 @@ if [ ! -f "$HOME/.config/gzdoom/gzdoom.ini" ]; then
 fi
 
 if [ -z "$(ls -A "$HOME/ROMs/doom" 2>/dev/null)" ]; then
+	mkdir -p "$HOME/ROMs/doom/iwads"
 	for _wad in /usr/share/doom/freedoom*.wad \
 			/usr/share/games/doom/freedoom*.wad \
 			/usr/share/freedoom/freedoom*.wad; do
-		[ -f "$_wad" ] && cp -f "$_wad" "$HOME/ROMs/doom/"
+		[ -f "$_wad" ] && cp -f "$_wad" "$HOME/ROMs/doom/iwads/"
 	done
+
+	# One game list entry per game, named here rather than after whatever
+	# the wad happens to be called. Only .doom is scanned, so the wads
+	# themselves stay out of the list.
+	if [ -f "$HOME/ROMs/doom/iwads/freedoom1.wad" ]; then
+		echo "IWAD=iwads/freedoom1.wad" >"$HOME/ROMs/doom/Freedoom - Phase 1.doom"
+	fi
+	if [ -f "$HOME/ROMs/doom/iwads/freedoom2.wad" ]; then
+		echo "IWAD=iwads/freedoom2.wad" >"$HOME/ROMs/doom/Freedoom - Phase 2.doom"
+	fi
 fi
 
 # Anything a core previously wrote into the old system directory moves

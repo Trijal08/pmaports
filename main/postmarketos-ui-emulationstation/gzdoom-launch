@@ -1,0 +1,43 @@
+#!/bin/sh
+# Launch GZDoom from a .doom descriptor.
+#
+# A .doom file is a key=value list naming the IWAD and any mods, the format
+# 351ELEC/ArchR use:
+#
+#	IWAD=iwads/freedoom1.wad
+#	MOD=mods/something.pk3
+#
+# The point of the indirection is the game list. Dropping the wads straight
+# into ~/ROMs/doom makes EmulationStation show one entry per wad - "freedoom1"
+# and "freedoom2" - rather than one entry per game. With .doom as the only
+# scanned extension the wads can live in a subdirectory and be named properly
+# in one place.
+#
+# Paths are relative to the descriptor, or absolute.
+set -e
+
+rom="$1"
+[ -f "$rom" ] || { echo "gzdoom-launch: no such file: $rom" >&2; exit 1; }
+dir=$(dirname "$rom")
+
+# Saves go on the ROM share, not under ~/.config, so a reflash keeps them.
+savedir="$HOME/ROMs/saves/gzdoom"
+mkdir -p "$savedir"
+
+set -- -savedir "$savedir"
+
+# tr: these are hand-edited files and CRLF is common.
+while IFS='=' read -r key value; do
+	value=$(printf '%s' "$value" | tr -d '\r')
+	[ -n "$value" ] || continue
+	case "$value" in
+		/*) path="$value" ;;
+		*)  path="$dir/$value" ;;
+	esac
+	case "$key" in
+		IWAD) set -- "$@" -iwad "$path" ;;
+		MOD|FILE) set -- "$@" -file "$path" ;;
+	esac
+done <"$rom"
+
+exec gzdoom "$@"
