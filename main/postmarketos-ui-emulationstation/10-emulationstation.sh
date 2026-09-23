@@ -114,6 +114,14 @@ sed -n 's|.*<path>~/\(.*\)</path>.*|\1|p' /etc/emulationstation/es_systems.cfg |
 #
 # Copied rather than symlinked: the ROM share is exFAT and has no symlinks.
 # Skipped once anything is in there, so deleting them makes them stay gone.
+# GZDoom ships no joystick bindings at all, so a pad does nothing until a
+# config exists. Seed ours once; GZDoom rewrites the file on exit, so anything
+# changed from its own menus is kept.
+if [ ! -f "$HOME/.config/gzdoom/gzdoom.ini" ]; then
+	mkdir -p "$HOME/.config/gzdoom"
+	cp /usr/share/emulationstation/gzdoom.ini "$HOME/.config/gzdoom/gzdoom.ini"
+fi
+
 if [ -z "$(ls -A "$HOME/ROMs/doom" 2>/dev/null)" ]; then
 	for _wad in /usr/share/doom/freedoom*.wad \
 			/usr/share/games/doom/freedoom*.wad \
