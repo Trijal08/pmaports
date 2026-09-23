@@ -91,7 +91,8 @@ fi
 # START (Plus), 2 is X (BTN_NORTH).
 RA_DIR="$HOME/.config/retroarch"
 RA_CFG="$RA_DIR/retroarch.cfg"
-mkdir -p "$RA_DIR" "$HOME/ROMs/bios"
+mkdir -p "$RA_DIR" "$HOME/ROMs/bios" "$HOME/ROMs/saves" \
+	"$HOME/ROMs/states" "$HOME/ROMs/screenshots" "$HOME/ROMs/config/retroarch"
 
 # Anything a core previously wrote into the old system directory moves
 # across once, so Dreamcast VMU saves and MAME hiscore data are not
@@ -174,6 +175,17 @@ done <<'RACFG'
 # Cores also WRITE here (Dreamcast VMU saves, MAME hiscore data), so the
 # directory has to stay writable - it is not a read-only asset store.
 system_directory = "~/ROMs/bios"
+
+# Everything a player would be upset to lose goes on the ROM share too, for
+# the same reason the BIOS does: it is content, not configuration. It also
+# makes the partition the only thing worth preserving across a reinstall -
+# flash boot and root, leave STORAGE alone, and saves, states, screenshots
+# and per-core overrides all survive. Left under ~/.config they sit on the
+# root filesystem and every reflash wipes them.
+savefile_directory = "~/ROMs/saves"
+savestate_directory = "~/ROMs/states"
+screenshot_directory = "~/ROMs/screenshots"
+rgui_config_directory = "~/ROMs/config/retroarch"
 
 # Input. The pad impersonates a Switch Pro Controller, so RetroArch's own
 # profile configures it; only the hotkeys are ours. 9 is SELECT (Minus), 10 is
