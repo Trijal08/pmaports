@@ -32,6 +32,20 @@ if [ ! -e "$HOME/.emulationstation/resources" ]; then
 		"$HOME/.emulationstation/resources"
 fi
 
+# Pad mapping. Without es_input.cfg EmulationStation opens on its CONFIGURE
+# INPUT wizard on a brand new card, and every button has to be walked through
+# by hand before the UI is usable at all. The shipped file is the merged pad
+# from r36s-mapper, mapped on this hardware - b=0 is the bottom face button,
+# 4 is the unused Capture button, and the d-pad is a hat rather than buttons.
+#
+# Seeded only when absent, so reconfiguring input from the menu sticks: ES
+# rewrites this file itself and must stay the owner of it.
+if [ ! -f "$HOME/.emulationstation/es_input.cfg" ] && \
+   [ -f /usr/share/emulationstation/es_input.cfg ]; then
+	cp /usr/share/emulationstation/es_input.cfg \
+		"$HOME/.emulationstation/es_input.cfg"
+fi
+
 # ES looks for themes under ~/.emulationstation/themes as well as the system
 # path; link them so installed theme packages are picked up.
 if [ ! -e "$HOME/.emulationstation/themes" ] && \
