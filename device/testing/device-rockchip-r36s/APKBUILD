@@ -3,7 +3,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=device-rockchip-r36s
 pkgdesc="Rockchip R36S"
 pkgver=7
-pkgrel=4
+pkgrel=5
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -25,7 +25,8 @@ replaces="postmarketos-usb-moded"
 source="
 	80-device-rockchip-r36s.preset
 	99-rockchip-r36s-gpu.rules
-	99-rockchip-r36s-usb-role.rules
+	usb-role-default
+	usb-role-default.service
 	deviceinfo
 	kernel-cmdline.conf
 	50-storage-partition.sh
@@ -50,8 +51,12 @@ package() {
 
 	install -Dm644 "$srcdir"/99-rockchip-r36s-gpu.rules \
 		-t "$pkgdir"/usr/lib/udev/rules.d/
-	install -Dm644 "$srcdir"/99-rockchip-r36s-usb-role.rules \
-		-t "$pkgdir"/usr/lib/udev/rules.d/
+
+	# See the comment in the script: as a udev rule this hangs dwc2's core
+	# reset at boot. It has to run once the controller has settled.
+	install -Dm755 "$srcdir"/usb-role-default -t "$pkgdir"/usr/bin
+	install -Dm644 "$srcdir"/usb-role-default.service \
+		-t "$pkgdir"/usr/lib/systemd/system
 
 	# Separate STORAGE partition for ROMs, BIOS files and ports.
 	#
@@ -76,9 +81,10 @@ package() {
 }
 
 sha512sums="
-36b4fb5ee059b360975c12f42c2c8ab9950cf2f6b11311e91802a3fce3a113d3ac197b9db7d3bbc076611ed11332eaf4cf139164d3987c2562d6e93f41e0f721  80-device-rockchip-r36s.preset
+12921902c204081a6dc93b829549745b837725aa78054ebea3d21d1ca7d1c5c847159e8a1cdde0a2d715913d462a48744b634a585f8ec6fe2fbf2d589e55fa6b  80-device-rockchip-r36s.preset
 8bdd663bee31c219cf42e3452ac83a21b37774cf51c21c360f4db9f24dec32142d626a02cafd5e3982f1643d8a8e1fb7d038713aae5c3c4eb57ea62b26e2f664  99-rockchip-r36s-gpu.rules
-da9b70f5daeff9be3475a4e0e2b429525ab006dedb533cff41c232cbed86aefafb6dfcff311751253d50c9d85f03905f76545eef68f6c6200d3212a07389d356  99-rockchip-r36s-usb-role.rules
+7c00550ca39d33ef556409da21d7366c439b942717221c055ee7c807bf8365fdbe82c6eb95c47ce5c2e63cd872083b07403e205236787aa6c429054292dcde84  usb-role-default
+7cf29a2d969128ee8c167f7cd51bdda97b1ba993ff3395ae96f42b88a7524a8ea2623fc0d91fb64ac49bcfb9e60d1768a787eb0e1f1dbfc1c400bd929251155d  usb-role-default.service
 e04db4430e046c178e367af39f2b900e372d67da323dd10482f4ba0b170357b712dc909b047474b565c26189f1eac25c6e6519bd3f981b64b4a8c357963f1d42  deviceinfo
 ce96e936003e90c659d3e54f31d674f953bc8858b06bed88eaff988a36101dcedd3ce41f2d5a2dc8257bce5e37893457289838fd875fc3a41e0c83b2998ea510  kernel-cmdline.conf
 39016d617e68324675c041ba44ae1fdceed2cba3ccfa3c5b8350e5a3399ea39be0742ee03c0446cc6d26e7352d1114db75ad707c44d40eabfd260af77c46b194  50-storage-partition.sh

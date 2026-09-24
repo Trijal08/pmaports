@@ -1,0 +1,13 @@
+[Unit]
+Description=Default the USB role switch to peripheral
+ConditionPathExistsGlob=/sys/class/usb_role/*
+After=local-fs.target
+Before=usb-signaller.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/usb-role-default
+
+[Install]
+WantedBy=multi-user.target
