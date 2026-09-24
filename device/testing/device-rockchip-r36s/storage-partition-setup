@@ -30,10 +30,26 @@ fi
 
 mkdir -p "$MNT"
 if ! mountpoint -q "$MNT"; then
-	# noatime: otherwise every read writes an access time back, which on an
-	# SD card is both slow and pointless wear.
-	mount -o noatime,errors=remount-ro "$DEV" "$MNT"
-	echo "storage-partition: mounted $DEV on $MNT"
+	# Mount according to what is actually there, not what we would create.
+	# A card carried over from an earlier install still has an exFAT share:
+	# the image write recreates the partition table, but the hook lays
+	# partition 3 down at the same offsets, so the old filesystem is still
+	# in those sectors and is adopted rather than destroyed.
+	#
+	# exFAT stores no ownership at all, so it has to come from the mount, or
+	# the whole share belongs to root and the session cannot write to it.
+	# noatime on both: otherwise every read writes an access time back,
+	# which on an SD card is slow and pointless wear.
+	case "$(blkid -o value -s TYPE "$DEV" 2>/dev/null)" in
+		exfat|vfat)
+			mount -o "noatime,uid=$OWNER,gid=$OWNER,fmask=0000,dmask=0000" \
+				"$DEV" "$MNT"
+			;;
+		*)
+			mount -o noatime,errors=remount-ro "$DEV" "$MNT"
+			;;
+	esac
+	echo "storage-partition: mounted $DEV ($(blkid -o value -s TYPE "$DEV" 2>/dev/null)) on $MNT"
 fi
 
 # Everything on the share is world read/write/execute.
@@ -51,9 +67,18 @@ fi
 #    exactly how a port's launcher lands when copied over MTP.
 #  - The sweep catches those. It only touches entries that are not already
 #    0777, so a second run writes nothing and costs one pass over the inodes.
-if command -v setfacl >/dev/null 2>&1; then
-	setfacl -d -m u::rwx,g::rwx,o::rwx "$MNT" 2>/dev/null || :
-fi
-
-find "$MNT" ! -perm 0777 -exec chmod 0777 {} + 2>/dev/null || :
-find "$MNT" ! -uid "$OWNER" -exec chown "$OWNER:$OWNER" {} + 2>/dev/null || :
+case "$(findmnt -no FSTYPE "$MNT" 2>/dev/null)" in
+	exfat|vfat)
+		# Nothing to do: the mount options above already give every file
+		# to the user with full permissions, which is the whole reason
+		# exFAT needed them.
+		;;
+	*)
+		if command -v setfacl >/dev/null 2>&1; then
+			setfacl -d -m u::rwx,g::rwx,o::rwx "$MNT" 2>/dev/null || :
+		fi
+		find "$MNT" ! -perm 0777 -exec chmod 0777 {} + 2>/dev/null || :
+		find "$MNT" ! -uid "$OWNER" -exec chown "$OWNER:$OWNER" {} + \
+			2>/dev/null || :
+		;;
+esac
