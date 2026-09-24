@@ -3,7 +3,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=device-rockchip-r36s
 pkgdesc="Rockchip R36S"
 pkgver=7
-pkgrel=8
+pkgrel=9
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -29,6 +29,8 @@ source="
 	usb-role-default.service
 	usb-gadget-reconnect
 	usb-gadget-reconnect.service
+	usb-gadget-rebind.service
+	99-rockchip-r36s-usb-hotplug.rules
 	deviceinfo
 	kernel-cmdline.conf
 	50-storage-partition.sh
@@ -66,6 +68,10 @@ package() {
 	install -Dm755 "$srcdir"/usb-gadget-reconnect -t "$pkgdir"/usr/bin
 	install -Dm644 "$srcdir"/usb-gadget-reconnect.service \
 		-t "$pkgdir"/usr/lib/systemd/system
+	install -Dm644 "$srcdir"/usb-gadget-rebind.service \
+		-t "$pkgdir"/usr/lib/systemd/system
+	install -Dm644 "$srcdir"/99-rockchip-r36s-usb-hotplug.rules \
+		-t "$pkgdir"/usr/lib/udev/rules.d
 
 	# Separate STORAGE partition for ROMs, BIOS files and ports.
 	#
@@ -94,8 +100,10 @@ sha512sums="
 8bdd663bee31c219cf42e3452ac83a21b37774cf51c21c360f4db9f24dec32142d626a02cafd5e3982f1643d8a8e1fb7d038713aae5c3c4eb57ea62b26e2f664  99-rockchip-r36s-gpu.rules
 7c00550ca39d33ef556409da21d7366c439b942717221c055ee7c807bf8365fdbe82c6eb95c47ce5c2e63cd872083b07403e205236787aa6c429054292dcde84  usb-role-default
 7cf29a2d969128ee8c167f7cd51bdda97b1ba993ff3395ae96f42b88a7524a8ea2623fc0d91fb64ac49bcfb9e60d1768a787eb0e1f1dbfc1c400bd929251155d  usb-role-default.service
-bef1c7cc0189f2254ffd4c0668d921a3fc867178945215cedc782db23912e8fb60d392c974aed2123832b5b2819978ad0054462786558eafbd8583fca884fadf  usb-gadget-reconnect
+61be814c8defb8e3f0c1bf3346558361f170d7c6e7a9224c5fa40b813df9172fb9783e864380c388e144df4184ede799dec670bd7120259f580920ee8faac2d6  usb-gadget-reconnect
 a36917755c9e415b2a9425ba60d3512fc8faaa78999ee040b93eeeafbcdb8b89932e7a6b4177e674691198ddd22368d00f89d5665d89416a64214bee641c0a4e  usb-gadget-reconnect.service
+a189fd8d62f274d9fb84c46f0aafe5ce0c5a88eb97d0797d1a437f628df15db16679128fac35a9fb5a0d07246bd8bafc302706d56b8a72831b5c7dc71faa73cb  usb-gadget-rebind.service
+ebc7ec03035070bc370fce09132d8013b9db058d7174cd96649ffe9cedbcc449cdbfeb9b45612212ee8c4dbdb50541a1156fe69285484b04893147cd3c7c0c5e  99-rockchip-r36s-usb-hotplug.rules
 e04db4430e046c178e367af39f2b900e372d67da323dd10482f4ba0b170357b712dc909b047474b565c26189f1eac25c6e6519bd3f981b64b4a8c357963f1d42  deviceinfo
 ce96e936003e90c659d3e54f31d674f953bc8858b06bed88eaff988a36101dcedd3ce41f2d5a2dc8257bce5e37893457289838fd875fc3a41e0c83b2998ea510  kernel-cmdline.conf
 39016d617e68324675c041ba44ae1fdceed2cba3ccfa3c5b8350e5a3399ea39be0742ee03c0446cc6d26e7352d1114db75ad707c44d40eabfd260af77c46b194  50-storage-partition.sh

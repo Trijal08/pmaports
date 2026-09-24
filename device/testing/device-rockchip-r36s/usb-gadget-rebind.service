@@ -1,0 +1,7 @@
+[Unit]
+Description=Bring the USB gadget back after a cable event
+ConditionPathExistsGlob=/sys/class/usb_role/*
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/usb-gadget-reconnect --once

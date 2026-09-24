@@ -1,0 +1,10 @@
+# The PHY raises an extcon event the moment B-session-valid changes, so the
+# gadget can be brought back as soon as the cable is sensed rather than on the
+# next poll. usb-gadget-reconnect --once does the same check the polling loop
+# does and exits, so a spurious event costs nothing.
+#
+# Runtime only, and it touches configfs rather than the controller's registers
+# - unlike setting the role switch from a udev "add" rule, which fires while
+# dwc2 is still coming up and hangs its core reset.
+SUBSYSTEM=="extcon", ACTION=="change", \
+	RUN+="/usr/bin/systemctl --no-block start usb-gadget-rebind.service"
