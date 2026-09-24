@@ -233,6 +233,40 @@ for _core in Flycast \
 	RMP
 done
 
+# PSP core options, from ArchR's own RK3326 profile - same SoC, so its
+# numbers are measured rather than guessed
+# (packages/emulators/standalone/ppsspp-sa/sources/RK3326/ppsspp.ini):
+#
+#	CPUCore = 1  InternalResolution = 1  FrameSkip = 3  AutoFrameSkip = True
+#	SoftwareSkinning = True  SplineBezierQuality = 0  AudioLatency = 2
+#	SkipGPUReadbackMode = 1  TextureBackoffCache = True
+#
+# Aggressive frameskip plus a deep audio buffer is the whole trick: a
+# 1.3 GHz quad A35 cannot hold 60 fps in a PSP title, and without frameskip
+# the audio underruns every couple of seconds instead of dropping frames.
+#
+# CPUCore = 1 is PPSSPP's native ARM64 dynarec (0 is the interpreter, 2 the
+# IR interpreter), which is "JIT" here. Getting this wrong is the difference
+# between playable and not.
+CORE_CFG="$RA_DIR/retroarch-core-options.cfg"
+[ -f "$CORE_CFG" ] || : >"$CORE_CFG"
+while IFS= read -r _kv; do
+	case "$_kv" in '' | \#*) continue ;; esac
+	_k=${_kv%% =*}
+	sed -i "\\|^$_k *=|d" "$CORE_CFG"
+	echo "$_kv" >>"$CORE_CFG"
+done <<'CORECFG'
+ppsspp_cpu_core = "JIT"
+ppsspp_internal_resolution = "480x272"
+ppsspp_frameskip = "3"
+ppsspp_frameskiptype = "Number of frames"
+ppsspp_auto_frameskip = "enabled"
+ppsspp_software_skinning = "enabled"
+ppsspp_spline_quality = "Low"
+ppsspp_lazy_texture_caching = "enabled"
+ppsspp_skip_gpu_readbacks = "enabled"
+CORECFG
+
 while IFS= read -r _kv; do
 	case "$_kv" in '' | \#*) continue ;; esac
 
