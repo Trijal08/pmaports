@@ -17,7 +17,7 @@
 # image's root is already larger than the target it is kept as-is - and the
 # whole thing is a no-op once partition 3 exists.
 #
-# Formatting is deliberately not done here: mkfs.exfat is not in the
+# Formatting is deliberately not done here: mkfs is not in the
 # initramfs, so storage-partition.service does it on the first real boot.
 
 ROOT_SIZE_MIB=8192

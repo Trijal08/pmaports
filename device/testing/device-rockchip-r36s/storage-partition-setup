@@ -1,11 +1,15 @@
 #!/bin/sh
-# Format (once) and mount the STORAGE partition created by the initramfs hook
-# in 50-storage-partition.sh. mkfs.exfat cannot run in the initramfs, so the
-# first real boot finishes the job.
+# Format (once), mount, and open up the permissions on the STORAGE partition
+# created by the initramfs hook in 50-storage-partition.sh. mkfs cannot run in
+# the initramfs, so the first real boot finishes the job.
+#
+# Safe to re-run at any time: everything here is idempotent, so after copying
+# files on over MTP or SSH this can be run again instead of rebooting.
 set -e
 
 DEV=/dev/disk/by-partlabel/storage
 MNT=/home/user/ROMs
+OWNER=10000
 
 if [ ! -b "$DEV" ]; then
 	echo "storage-partition: $DEV does not exist, nothing to mount"
@@ -13,17 +17,43 @@ if [ ! -b "$DEV" ]; then
 fi
 
 if [ -z "$(blkid -o value -s TYPE "$DEV" 2>/dev/null)" ]; then
-	echo "storage-partition: formatting $DEV as exFAT"
-	mkfs.exfat -L STORAGE "$DEV"
+	echo "storage-partition: formatting $DEV as ext4"
+	# -m 0: ext4 holds 5% back so a full *system* filesystem can still be
+	#   logged into and repaired. This is a ROM share; on ~50 GiB that
+	#   reserve is ~2.5 GiB of games for no benefit.
+	# -i 131072: the default ratio makes one inode per 16 KiB - ~3.2M inodes
+	#   and roughly 800 MB of inode table. One per 128 KiB still allows
+	#   ~400k files, far more than ROMs and PortMaster's file-heavy ports
+	#   need, and hands most of that space back.
+	mkfs.ext4 -q -L STORAGE -m 0 -i 131072 "$DEV"
 fi
 
 mkdir -p "$MNT"
 if ! mountpoint -q "$MNT"; then
-	# exFAT has no on-disk ownership or permission bits, so they come from
-	# the mount: everything belongs to user (uid 10000) and fmask=0022
-	# leaves files 0755, which PortMaster's launchers need to be executable.
-	mount -t exfat \
-		-o uid=10000,gid=10000,fmask=0022,dmask=0022,iocharset=utf8,noatime,errors=remount-ro \
-		"$DEV" "$MNT"
+	# noatime: otherwise every read writes an access time back, which on an
+	# SD card is both slow and pointless wear.
+	mount -o noatime,errors=remount-ro "$DEV" "$MNT"
 	echo "storage-partition: mounted $DEV on $MNT"
 fi
+
+# Everything on the share is world read/write/execute.
+#
+# exFAT gave this for free through fmask/dmask because it stores no
+# permissions at all; ext4 stores real ones, so they have to be set. Worth
+# doing rather than reverting: a ROM share wants no permission model, but it
+# does want symlinks, case-sensitive names and a filesystem e2fsck can repair.
+#
+# Two halves, because neither covers everything on its own:
+#
+#  - A default ACL makes newly created entries inherit rwx. It replaces the
+#    umask, but a file is still capped by the mode its creator asks for, so
+#    something written with 0644 arrives without the execute bit - which is
+#    exactly how a port's launcher lands when copied over MTP.
+#  - The sweep catches those. It only touches entries that are not already
+#    0777, so a second run writes nothing and costs one pass over the inodes.
+if command -v setfacl >/dev/null 2>&1; then
+	setfacl -d -m u::rwx,g::rwx,o::rwx "$MNT" 2>/dev/null || :
+fi
+
+find "$MNT" ! -perm 0777 -exec chmod 0777 {} + 2>/dev/null || :
+find "$MNT" ! -uid "$OWNER" -exec chown "$OWNER:$OWNER" {} + 2>/dev/null || :

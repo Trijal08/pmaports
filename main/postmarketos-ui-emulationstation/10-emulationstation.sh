@@ -126,8 +126,9 @@ sed -n 's|.*<path>~/\(.*\)</path>.*|\1|p' /etc/emulationstation/es_systems.cfg |
 # Freedoom is a complete, freely licensed IWAD pair, and the doom system is
 # already wired to gzdoom - which art-book-next themes as "id".
 #
-# Copied rather than symlinked: the ROM share is exFAT and has no symlinks.
-# Skipped once anything is in there, so deleting them makes them stay gone.
+# Copied rather than symlinked so the share stays self contained: it is meant
+# to survive a reflash that replaces /usr underneath it. Skipped once anything
+# is in there, so deleting them makes them stay gone.
 # GZDoom ships no joystick bindings at all, so a pad does nothing until a
 # config exists. Seed ours once; GZDoom rewrites the file on exit, so anything
 # changed from its own menus is kept.
