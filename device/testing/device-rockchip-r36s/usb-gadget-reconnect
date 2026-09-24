@@ -25,6 +25,12 @@
 # the session is valid and the gadget still has not been reached, so an idle
 # port is left alone.
 
+# --once: called from udev the moment the PHY reports the session changing,
+# so the port comes back without waiting for the next poll. The loop stays as
+# a backstop for anything that does not raise an extcon event.
+once=
+[ "$1" = "--once" ] && once=1
+
 udc_name=$(ls /sys/class/udc 2>/dev/null | head -1)
 [ -n "$udc_name" ] || exit 0
 
@@ -36,6 +42,28 @@ session_valid() {
 	done
 	return 1
 }
+
+rebind() {
+	for gadget in /sys/kernel/config/usb_gadget/*/UDC; do
+		[ -e "$gadget" ] || continue
+		[ -n "$(cat "$gadget" 2>/dev/null)" ] || continue
+		echo "" >"$gadget" 2>/dev/null || continue
+		sleep 1
+		echo "$udc_name" >"$gadget" 2>/dev/null || :
+	done
+}
+
+if [ -n "$once" ]; then
+	# Give the host its own chance first; only step in if it gets nowhere.
+	sleep 1
+	role=$(cat /sys/class/usb_role/*/role 2>/dev/null)
+	[ "$role" = "device" ] || exit 0
+	state=$(cat "/sys/class/udc/$udc_name/state" 2>/dev/null)
+	[ "$state" = "configured" ] && exit 0
+	session_valid || exit 0
+	rebind
+	exit 0
+fi
 
 stale=0
 while :; do
@@ -56,12 +84,5 @@ while :; do
 	stale=$((stale + 1))
 	[ "$stale" -lt 2 ] && continue
 	stale=0
-
-	for gadget in /sys/kernel/config/usb_gadget/*/UDC; do
-		[ -e "$gadget" ] || continue
-		[ -n "$(cat "$gadget" 2>/dev/null)" ] || continue
-		echo "" >"$gadget" 2>/dev/null || continue
-		sleep 1
-		echo "$udc_name" >"$gadget" 2>/dev/null || :
-	done
+	rebind
 done
