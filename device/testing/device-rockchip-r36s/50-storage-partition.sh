@@ -101,4 +101,25 @@ fi
 partprobe "$disk" 2>/dev/null || blockdev --rereadpt "$disk" 2>/dev/null || true
 udevadm settle 2>/dev/null || true
 
+# Destroy whatever filesystem the new partition happens to land on.
+#
+# A full image write replaces the partition table but not the sectors past
+# it, and this partition is laid down at deterministic offsets - so the
+# previous install's share is still sitting there, and blkid would find it
+# and adopt it instead of formatting. Reaching this point means the table had
+# no partition 3, which means a whole image was written and a clean slate is
+# what was asked for. Preserving a share across a reinstall is the job of
+# writing only partitions 1 and 2, where this code never runs.
+#
+# One megabyte is enough: it covers the exFAT boot sector at offset 0 and the
+# ext4 superblock at 1024, which is all blkid reads. mkfs does the rest.
+case "$disk" in
+	*[0-9]) part3="${disk}p3" ;;
+	*)      part3="${disk}3" ;;
+esac
+if [ -b "$part3" ]; then
+	info "wiping any filesystem left on $part3"
+	dd if=/dev/zero of="$part3" bs=1M count=1 conv=fsync 2>/dev/null || :
+fi
+
 info "created $(parted -ms "$disk" unit B print | grep '^3:' || echo 'partition 3')"
