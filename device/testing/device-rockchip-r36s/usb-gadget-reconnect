@@ -1,32 +1,66 @@
 #!/bin/sh
-# Re-assert the gadget's pull-up once the host goes away.
+# Re-bind the gadget when a cable arrives and nothing enumerates.
 #
-# The board drives the port's VBUS itself, so B-session-valid never drops and
-# the controller is never told the cable left or came back. The gadget stops
-# advertising itself after a disconnect and nothing ever makes it start again,
-# so attaching the cable after boot does nothing until the gadget is torn down
-# and rebuilt - which is what switching USB modes and back was doing by hand.
+# dwc2_ovr_init() overrides B-session-valid so the session reads permanently
+# valid - which is what makes a role-switch-only board work at all - but it
+# also means attaching a cable raises no session interrupt, so nothing
+# re-connects the gadget. Measured on the device, booting with the cable out:
 #
-# soft_connect is write-only and calls usb_gadget_connect(), so writing
-# "connect" while nothing is attached simply leaves the pull-up asserted,
-# ready for whenever the cable does arrive. That is the state the port was
-# accidentally in when the role switch still read "none", which is the one
-# configuration hot-plug was ever observed to work in.
+#   17:57:21  pullup=OFF udc=not attached extconUSB=0
+#   17:57:41  pullup=OFF udc=not attached extconUSB=1   <- cable in, port silent
 #
-# Skipped in host mode: there is no gadget to connect, and the UDC is the
-# wrong thing to be touching while the controller is driving a downstream
-# device.
+# Re-driving the role switch is not enough. dwc2_drd_role_sw_set() calls only
+# dwc2_hsotg_core_connect() for USB_ROLE_DEVICE, skipping the
+# dwc2_hsotg_core_init_disconnected() that dwc2_hsotg_pullup() does first, so
+# the core attaches without being set up and the host times out:
+#
+#   usb 1-1: new high-speed USB device number 37 using xhci_hcd
+#   usb 1-1: device descriptor read/64, error -110
+#
+# soft_connect cannot be used either: dwc2_hsotg_pullup() returns early unless
+# op_state is OTG_STATE_B_PERIPHERAL, so the write is silently dropped.
+#
+# Unbinding and re-binding the UDC runs udc_stop/udc_start, which does the full
+# init - the same thing switching USB modes by hand was doing. Only done when
+# the session is valid and the gadget still has not been reached, so an idle
+# port is left alone.
 
-while :; do
-	for udc in /sys/class/udc/*; do
-		[ -e "$udc/state" ] || continue
+udc_name=$(ls /sys/class/udc 2>/dev/null | head -1)
+[ -n "$udc_name" ] || exit 0
 
-		role=$(cat /sys/class/usb_role/*/role 2>/dev/null)
-		[ "$role" = "host" ] && continue
-
-		if [ "$(cat "$udc/state" 2>/dev/null)" = "not attached" ]; then
-			echo connect >"$udc/soft_connect" 2>/dev/null || :
-		fi
+session_valid() {
+	for c in /sys/class/extcon/*/cable.*; do
+		[ -e "$c/name" ] || continue
+		[ "$(cat "$c/name" 2>/dev/null)" = "USB" ] || continue
+		[ "$(cat "$c/state" 2>/dev/null)" = "1" ] && return 0
 	done
+	return 1
+}
+
+stale=0
+while :; do
 	sleep 2
+
+	role=$(cat /sys/class/usb_role/*/role 2>/dev/null)
+	[ "$role" = "device" ] || { stale=0; continue; }
+
+	state=$(cat "/sys/class/udc/$udc_name/state" 2>/dev/null)
+	if [ "$state" = "configured" ] || ! session_valid; then
+		stale=0
+		continue
+	fi
+
+	# A cable is present and the host still has not reached us. Give it a
+	# few seconds in case enumeration is simply in flight.
+	stale=$((stale + 1))
+	[ "$stale" -lt 3 ] && continue
+	stale=0
+
+	for gadget in /sys/kernel/config/usb_gadget/*/UDC; do
+		[ -e "$gadget" ] || continue
+		[ -n "$(cat "$gadget" 2>/dev/null)" ] || continue
+		echo "" >"$gadget" 2>/dev/null || continue
+		sleep 1
+		echo "$udc_name" >"$gadget" 2>/dev/null || :
+	done
 done
