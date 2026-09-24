@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep the USB gadget advertising itself after a disconnect
+After=usb-signaller.service usb-role-default.service
+ConditionPathExistsGlob=/sys/class/usb_role/*
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/usb-gadget-reconnect
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
