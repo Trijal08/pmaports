@@ -131,11 +131,20 @@ sed -n 's|.*<path>~/\(.*\)</path>.*|\1|p' /etc/emulationstation/es_systems.cfg |
 # is in there, so deleting them makes them stay gone.
 # The PSP core reads its atlas, fonts and shaders from <system>/PPSSPP and
 # gives a black screen without them. Staged by libretro-ppsspp under
-# /usr/share; link rather than copy, since the ROM share is ext4 and the
-# assets are read-only package content that should follow the package.
-if [ -d /usr/share/libretro/system/PPSSPP ] && \
+# /usr/share.
+#
+# A link is preferable - the assets are read-only package content and should
+# follow the package - but a card carried over from an earlier install still
+# has an exFAT share, which has no symlinks and reports EPERM for the
+# attempt. Fall back to copying, and never let any of it fail: this file is
+# SOURCED, so one failing command takes the whole session down and leaves the
+# display looping on a login prompt.
+if [ -d /usr/share/libretro/system/PPSSPP ] &&
    [ ! -e "$HOME/ROMs/bios/PPSSPP" ]; then
-	ln -sfn /usr/share/libretro/system/PPSSPP "$HOME/ROMs/bios/PPSSPP"
+	ln -sfn /usr/share/libretro/system/PPSSPP "$HOME/ROMs/bios/PPSSPP" 2>/dev/null ||
+		cp -r /usr/share/libretro/system/PPSSPP \
+			"$HOME/ROMs/bios/PPSSPP" 2>/dev/null ||
+		:
 fi
 
 # GZDoom ships no joystick bindings at all, so a pad does nothing until a
