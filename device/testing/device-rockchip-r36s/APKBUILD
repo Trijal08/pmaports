@@ -3,7 +3,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=device-rockchip-r36s
 pkgdesc="Rockchip R36S"
 pkgver=7
-pkgrel=3
+pkgrel=4
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -14,7 +14,8 @@ depends="
 	postmarketos-base
 	postmarketos-bootsplash
 	u-boot-rockchip-r36s
-	exfatprogs
+	e2fsprogs
+	acl
 	postmarketos-mkinitfs
 "
 makedepends="devicepkg-dev"
@@ -63,7 +64,7 @@ package() {
 	install -Dm644 "$srcdir"/50-storage-partition.sh \
 		-t "$pkgdir"/usr/share/mkinitfs/hooks-extra/
 
-	# mkfs.exfat is not in the initramfs, so the formatting and the mount
+	# mkfs cannot run in the initramfs, so the formatting and the mount
 	# happen on the first real boot. Enabled by the preset above.
 	install -Dm755 "$srcdir"/storage-partition-setup \
 		-t "$pkgdir"/usr/bin/
@@ -80,8 +81,8 @@ sha512sums="
 da9b70f5daeff9be3475a4e0e2b429525ab006dedb533cff41c232cbed86aefafb6dfcff311751253d50c9d85f03905f76545eef68f6c6200d3212a07389d356  99-rockchip-r36s-usb-role.rules
 e04db4430e046c178e367af39f2b900e372d67da323dd10482f4ba0b170357b712dc909b047474b565c26189f1eac25c6e6519bd3f981b64b4a8c357963f1d42  deviceinfo
 ce96e936003e90c659d3e54f31d674f953bc8858b06bed88eaff988a36101dcedd3ce41f2d5a2dc8257bce5e37893457289838fd875fc3a41e0c83b2998ea510  kernel-cmdline.conf
-4cad7e276e4cd60989f6ab633c14762e159e3de67c62aca1a3bac9d8ccca12d520d72547d7c724b6a3c87342eb23fb2b42317560b6b7b6af38be21d93ac985e5  50-storage-partition.sh
-4c43cbd362d68948b3bfada811f32d8cb7f6753341be0d8f077ba715ce9a596561982169b840a3f2f220a8d3ee8c66d378b994b95347b68c1577b43ebafca1b4  storage-partition-setup
+39016d617e68324675c041ba44ae1fdceed2cba3ccfa3c5b8350e5a3399ea39be0742ee03c0446cc6d26e7352d1114db75ad707c44d40eabfd260af77c46b194  50-storage-partition.sh
+8baaead764d47172db12606076391339b706be68008c6e895936ba5a03135a323c9eb7e662bb4e236caeff55221f96a65f1aef826987375a89dd2be3f9a1573a  storage-partition-setup
 aa2e54d6e6f44548ff8651b10070802db11f8ba0a24a95f24980cdfad7dfbcd1f8069a1b47c0ed335c246067a5856ea1423f0a7b0562d879cae049d24ca7f0f9  storage-partition.service
 1e03a1861d505e81d9e763b9639e5b4dbb56132fddf06969667a250a653a6f89d2a3dbee5266c59015623820ed1bff35719babab309180d2bef501087539b4fb  umtprd.conf
 "
