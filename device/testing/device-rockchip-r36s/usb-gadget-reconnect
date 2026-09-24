@@ -39,7 +39,7 @@ session_valid() {
 
 stale=0
 while :; do
-	sleep 2
+	sleep 1
 
 	role=$(cat /sys/class/usb_role/*/role 2>/dev/null)
 	[ "$role" = "device" ] || { stale=0; continue; }
@@ -50,10 +50,11 @@ while :; do
 		continue
 	fi
 
-	# A cable is present and the host still has not reached us. Give it a
-	# few seconds in case enumeration is simply in flight.
+	# A cable is present and the host still has not reached us. A fresh
+	# attach enumerates in well under a second, so two misses is already
+	# generous - any longer is just dead time the user sits through.
 	stale=$((stale + 1))
-	[ "$stale" -lt 3 ] && continue
+	[ "$stale" -lt 2 ] && continue
 	stale=0
 
 	for gadget in /sys/kernel/config/usb_gadget/*/UDC; do
