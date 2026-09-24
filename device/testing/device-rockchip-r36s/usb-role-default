@@ -1,0 +1,25 @@
+#!/bin/sh
+# Put the USB role switch into the mode the device tree asked for.
+#
+# The port has no Type-C controller and no ID pin, so nothing ever drives the
+# switch: role-switch-default-mode programs the controller but never calls
+# usb_role_switch_set_role(), so the sysfs attribute keeps reporting "none"
+# and usb-signaller gives up with "Unknown USB role, cannot proceed".
+#
+# Deliberately not a udev rule. Setting it from an "add" rule fires while dwc2
+# is still coming up, and the core never recovers:
+#
+#	dwc2 ff300000.usb: bound driver configfs-gadget.g1
+#	dwc2 ff300000.usb: dwc2_core_reset: HANG! Soft Reset timeout GRSTCTL_CSFTRST
+#	dwc2 ff300000.usb: dwc2_wait_for_mode: Couldn't set device mode
+#
+# after which the port is dead for the rest of the uptime and only a gadget
+# teardown and rebuild brings it back. The same write is harmless once the
+# controller has settled, so this runs from a service ordered before
+# usb-signaller instead.
+for role in /sys/class/usb_role/*/role; do
+	[ -e "$role" ] || continue
+	# Never override a role something else has deliberately set.
+	[ "$(cat "$role")" = "none" ] || continue
+	echo device >"$role"
+done

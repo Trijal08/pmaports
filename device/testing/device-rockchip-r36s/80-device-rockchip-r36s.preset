@@ -1,2 +1,3 @@
 enable rockchip-r36s-mapper.service
 enable storage-partition.service
+enable usb-role-default.service
