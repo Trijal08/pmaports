@@ -1,0 +1,74 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=libretro-ppsspp
+pkgver=1.19.3
+pkgrel=0
+pkgdesc="PPSSPP PSP emulator for libretro"
+url="https://www.ppsspp.org/"
+# Upstream only supports these; the rest fail to build.
+arch="aarch64 x86 x86_64 ppc64le"
+license="GPL-2.0-only"
+options="!check" # no test suite
+# Alpine packages PPSSPP's Qt desktop frontend but not its libretro core, and
+# there is no other PSP core - libretro-gpsp is Game Boy Advance. Built from
+# the same release tarball the ppsspp aport uses, which already carries the
+# submodules, with -DLIBRETRO=ON (CMakeLists.txt: "Set to ON to generate the
+# libretro target").
+makedepends="
+	cmake
+	ffmpeg7-dev
+	glew-dev
+	libzip-dev
+	mesa-dev
+	miniupnpc-dev
+	python3
+	samurai
+	snappy-dev
+	zlib-dev
+	zstd-dev
+	"
+source="ppsspp-$pkgver.tar.xz::https://github.com/hrydgard/ppsspp/releases/download/v$pkgver/ppsspp-$pkgver.tar.xz"
+builddir="$srcdir/ppsspp-$pkgver"
+
+build() {
+	# cmake3.5 rather than cmake, as the ppsspp aport does: the tree still
+	# declares compatibility with CMake < 3.5, which current CMake refuses.
+	#
+	# No Qt and no SDL - LIBRETRO builds only a shared object, and the
+	# frontend, windowing and input all come from RetroArch. GLES2/EGL to
+	# match the rest of this device's stack.
+	cmake3.5 -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DLIBRETRO=ON \
+		-DUSING_QT_UI=OFF \
+		-DUSE_DISCORD=OFF \
+		-DUSE_SYSTEM_FFMPEG=ON \
+		-DUSE_SYSTEM_LIBPNG=ON \
+		-DUSE_SYSTEM_LIBZIP=ON \
+		-DUSE_SYSTEM_MINIUPNPC=ON \
+		-DUSE_SYSTEM_SNAPPY=ON \
+		-DUSE_SYSTEM_ZSTD=ON \
+		-DUSING_GLES2=ON \
+		-DUSING_EGL=ON \
+		-Wno-dev
+	cmake --build build
+}
+
+package() {
+	# 0644: RetroArch dlopens its cores, it does not execute them - the
+	# same mode the other libretro-* aports install with.
+	local core
+	core="$(find "$builddir"/build -name 'ppsspp_libretro.so' -print -quit)"
+	install -Dm644 "$core" "$pkgdir"/usr/lib/libretro/ppsspp_libretro.so
+
+	# The core reads its atlas, fonts and shaders from <system>/PPSSPP at
+	# startup and gives a black screen without them. RetroArch's system
+	# directory is per-user, so stage them here; the session script puts
+	# them in place.
+	mkdir -p "$pkgdir"/usr/share/libretro/system/PPSSPP
+	cp -r "$builddir"/assets/* \
+		"$pkgdir"/usr/share/libretro/system/PPSSPP/
+}
+
+sha512sums="
+4c6af875cb3867bed8618fc289b5391fc49fbfcb884ccbc3fe7ad33b7cf3f2f538b3e4e6e01d5234dba12b64b2f1196c68f60c95d564286ca2e2626ffd9ecdaa  ppsspp-1.19.3.tar.xz
+"
