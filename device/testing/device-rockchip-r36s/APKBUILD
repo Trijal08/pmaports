@@ -3,7 +3,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 pkgname=device-rockchip-r36s
 pkgdesc="Rockchip R36S"
 pkgver=7
-pkgrel=5
+pkgrel=6
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -27,6 +27,8 @@ source="
 	99-rockchip-r36s-gpu.rules
 	usb-role-default
 	usb-role-default.service
+	usb-gadget-reconnect
+	usb-gadget-reconnect.service
 	deviceinfo
 	kernel-cmdline.conf
 	50-storage-partition.sh
@@ -58,6 +60,13 @@ package() {
 	install -Dm644 "$srcdir"/usb-role-default.service \
 		-t "$pkgdir"/usr/lib/systemd/system
 
+	# The board powers the port itself, so the controller never sees the
+	# cable move; this keeps the gadget advertising itself after a
+	# disconnect so attaching later still enumerates.
+	install -Dm755 "$srcdir"/usb-gadget-reconnect -t "$pkgdir"/usr/bin
+	install -Dm644 "$srcdir"/usb-gadget-reconnect.service \
+		-t "$pkgdir"/usr/lib/systemd/system
+
 	# Separate STORAGE partition for ROMs, BIOS files and ports.
 	#
 	# pmbootstrap can only install boot + root: partition.py hardcodes
@@ -81,10 +90,12 @@ package() {
 }
 
 sha512sums="
-12921902c204081a6dc93b829549745b837725aa78054ebea3d21d1ca7d1c5c847159e8a1cdde0a2d715913d462a48744b634a585f8ec6fe2fbf2d589e55fa6b  80-device-rockchip-r36s.preset
+7e72c0b6e893fae32c325607f0f71420ce9a75780ed7c044411539b3131ded95454d615c0be009eebc5320d01e404d0e99b76ceb0a41e43362e34510f27abea2  80-device-rockchip-r36s.preset
 8bdd663bee31c219cf42e3452ac83a21b37774cf51c21c360f4db9f24dec32142d626a02cafd5e3982f1643d8a8e1fb7d038713aae5c3c4eb57ea62b26e2f664  99-rockchip-r36s-gpu.rules
 7c00550ca39d33ef556409da21d7366c439b942717221c055ee7c807bf8365fdbe82c6eb95c47ce5c2e63cd872083b07403e205236787aa6c429054292dcde84  usb-role-default
 7cf29a2d969128ee8c167f7cd51bdda97b1ba993ff3395ae96f42b88a7524a8ea2623fc0d91fb64ac49bcfb9e60d1768a787eb0e1f1dbfc1c400bd929251155d  usb-role-default.service
+60379341bb66f929c27f875315db1ce5627da11ee3378c19a2cec4cce18a79e451968bd750a64b3080a7b724d797df9136f1df626d5f113d9d3d9185e281a94d  usb-gadget-reconnect
+a36917755c9e415b2a9425ba60d3512fc8faaa78999ee040b93eeeafbcdb8b89932e7a6b4177e674691198ddd22368d00f89d5665d89416a64214bee641c0a4e  usb-gadget-reconnect.service
 e04db4430e046c178e367af39f2b900e372d67da323dd10482f4ba0b170357b712dc909b047474b565c26189f1eac25c6e6519bd3f981b64b4a8c357963f1d42  deviceinfo
 ce96e936003e90c659d3e54f31d674f953bc8858b06bed88eaff988a36101dcedd3ce41f2d5a2dc8257bce5e37893457289838fd875fc3a41e0c83b2998ea510  kernel-cmdline.conf
 39016d617e68324675c041ba44ae1fdceed2cba3ccfa3c5b8350e5a3399ea39be0742ee03c0446cc6d26e7352d1114db75ad707c44d40eabfd260af77c46b194  50-storage-partition.sh
