@@ -250,12 +250,17 @@ done
 # between playable and not.
 CORE_CFG="$RA_DIR/retroarch-core-options.cfg"
 [ -f "$CORE_CFG" ] || : >"$CORE_CFG"
-while IFS= read -r _kv; do
-	case "$_kv" in '' | \#*) continue ;; esac
-	_k=${_kv%% =*}
-	sed -i "\\|^$_k *=|d" "$CORE_CFG"
-	echo "$_kv" >>"$CORE_CFG"
-done <<'CORECFG'
+
+# The values go to a temp file because they have to be applied to more than
+# one place. The first time a core registers its options, RetroArch writes a
+# snapshot of ALL of them to config/<Core>/<Core>.opt, and that file SHADOWS
+# retroarch-core-options.cfg. So installing a new build of a core silently
+# reverts everything set here to the core's own defaults. That is exactly
+# what the Sep 2026 Flycast bump did: hle_bios went back to disabled, which
+# with no dc_boot.bin present is "Unable to find bios in .../system/dc/.
+# Exiting...", and region/language went back to Default, i.e. Japanese.
+_opts=$(mktemp 2>/dev/null) || _opts="$RA_DIR/.core-options.tmp"
+cat >"$_opts" <<'CORECFG'
 ppsspp_cpu_core = "JIT"
 ppsspp_internal_resolution = "480x272"
 ppsspp_frameskip = "3"
@@ -271,8 +276,8 @@ ppsspp_skip_gpu_readbacks = "enabled"
 # exists, which come up Japanese. The same USA disc therefore boots in
 # Japanese here and in English on a machine whose flash was set up already.
 #
-# Region and broadcast are left at Default deliberately: the region option
-# has no "USA" value in this build, and forcing NTSC would be wrong for a PAL
+# Region is what actually decides it - language alone only changes save-slot
+# text. Broadcast is left at Default: forcing NTSC would be wrong for a PAL
 # disc later.
 reicast_language = "English"
 reicast_region = "USA"
@@ -282,9 +287,9 @@ reicast_region = "USA"
 # have. Dreamcast runs below full speed on a 1.3 GHz quad A35, and audio
 # underruns follow the frame rate, so CPU headroom is the only real lever.
 #
-# Note the prefix: this core is libretro-flycast 0_git20220406, which still
-# uses reicast_*. Upstream renamed these to flycast_* years ago, which is
-# what ArchR's file uses.
+# Note the prefix: the libretro mirror still uses reicast_* even at its
+# 2026 HEAD - libretro_core_option_defines.h reads CORE_OPTION_NAME
+# "reicast". Only flyinghead's upstream tree renamed them to flycast_*.
 reicast_enable_dsp = "disabled"
 reicast_enable_rttb = "disabled"
 reicast_threaded_rendering = "enabled"
@@ -308,6 +313,23 @@ flycast_internal_resolution = "640x480"
 reicast_hle_bios = "enabled"
 flycast_hle_bios = "enabled"
 CORECFG
+
+while IFS= read -r _kv; do
+	case "$_kv" in '' | \#*) continue ;; esac
+	_k=${_kv%% =*}
+	sed -i "\\|^$_k *=|d" "$CORE_CFG"
+	echo "$_kv" >>"$CORE_CFG"
+
+	# And in any per-core snapshot that already declares the key. Only keys
+	# the file already has, so one core's .opt never collects another's.
+	for _optf in "$RA_DIR"/config/*/*.opt; do
+		[ -f "$_optf" ] || continue
+		grep -q "^$_k *=" "$_optf" || continue
+		sed -i "\\|^$_k *=|d" "$_optf"
+		echo "$_kv" >>"$_optf"
+	done
+done <"$_opts"
+rm -f "$_opts"
 
 while IFS= read -r _kv; do
 	case "$_kv" in '' | \#*) continue ;; esac
