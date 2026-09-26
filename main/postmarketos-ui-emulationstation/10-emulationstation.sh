@@ -323,44 +323,27 @@ input_menu_toggle_btn = "2"
 input_autodetect_enable = "true"
 input_max_users = "5"
 
-# Explicit player-1 binds rather than relying on a joypad profile.
+# No explicit player-1 binds: let autoconfig map every pad.
 #
-# RetroArch's own "Nintendo Switch Pro Controller" profile matches this pad on
-# name and on 1406/8201, and still logs "not configured" - with the profile
-# present in the driver's directory and its input_driver field matching the
-# running driver. Under Wayland the input driver resolves to "x" from the GL
-# context regardless of what input_driver is set to, and autoconfig never
-# takes. Binding directly sidesteps the whole mechanism.
+# These used to be bound by hand because RetroArch's own "Nintendo Switch Pro
+# Controller" profile logged "not configured" even though it matches this pad
+# on name and on 1406/8201. That was with joypad_autoconfig_dir still pointing
+# at the empty per-user directory, and with the input driver resolving to "x"
+# from the GL context - both since fixed, the directory above and the driver
+# pinned to udev.
 #
-# Indices are the pad's capability bitmap in ascending evdev code order, which
-# is also exactly what RetroArch's own profile uses:
-#   0 SOUTH  1 EAST  2 NORTH  3 WEST  4 Z(unused)  5 TL  6 TR  7 TL2  8 TR2
-#   9 SELECT  10 START  11 MODE  12 THUMBL  13 THUMBR
-# and axes 0/1 left stick, 2/3 right stick, hat 0 for the D-pad.
-input_player1_b_btn = "0"
-input_player1_a_btn = "1"
-input_player1_x_btn = "2"
-input_player1_y_btn = "3"
-input_player1_l_btn = "5"
-input_player1_r_btn = "6"
-input_player1_l2_btn = "7"
-input_player1_r2_btn = "8"
-input_player1_select_btn = "9"
-input_player1_start_btn = "10"
-input_player1_l3_btn = "12"
-input_player1_r3_btn = "13"
-input_player1_up_btn = "h0up"
-input_player1_down_btn = "h0down"
-input_player1_left_btn = "h0left"
-input_player1_right_btn = "h0right"
-input_player1_l_x_plus_axis = "+0"
-input_player1_l_x_minus_axis = "-0"
-input_player1_l_y_plus_axis = "+1"
-input_player1_l_y_minus_axis = "-1"
-input_player1_r_x_plus_axis = "+2"
-input_player1_r_x_minus_axis = "-2"
-input_player1_r_y_plus_axis = "+3"
-input_player1_r_y_minus_axis = "-3"
+# Binding player 1 by hand is also actively wrong once anything else is
+# plugged in: the binds are global to player 1, not per device, so a DualSense
+# inherits the built-in pad's button numbers and comes out scrambled. Stock
+# profiles exist for both ("Nintendo Switch Pro Controller.cfg" and "Sony
+# Interactive Entertainment DualSense Wireless Controller.cfg"), so autoconfig
+# is the only thing that can map both correctly.
+#
+# Logging is on so the match can be checked: /tmp/retroarch.log will name the
+# profile it picked, or say the pad is unconfigured.
+log_to_file = "true"
+log_dir = "/tmp"
+log_verbosity = "true"
 
 # Render at the panel's native resolution. Without this RetroArch sizes the
 # window from video_scale against the core geometry - 879x576 for a 256x192
