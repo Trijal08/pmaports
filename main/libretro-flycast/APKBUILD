@@ -5,7 +5,10 @@ pkgrel=0
 _commit="45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d"
 pkgdesc="libretro core for flycast"
 url="https://github.com/libretro/flycast"
-arch="x86_64 aarch64"
+# aarch64 only, on purpose: "pmbootstrap build" with no --arch builds for
+# the native architecture whenever the APKBUILD lists it, so listing
+# x86_64 here quietly builds a package the R36S cannot use.
+arch="aarch64"
 license="GPL-2.0-only"
 options="!check" # No tests
 # Overrides Alpine's aport, which is pinned at 0_git20220406 - an April 2022
@@ -18,19 +21,20 @@ options="!check" # No tests
 # builds - which is what makes this a version bump rather than a packaging
 # project.
 makedepends="mesa-dev zlib-dev"
-source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz"
+source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz
+	0001-libzip-include-unistd-h-unconditionally.patch
+	"
 builddir="$srcdir/flycast-$_commit"
 
 case $CARCH in
 aarch64)
-	_args="WITH_DYNAREC=arm64 HOST_CPU_FLAGS=-DTARGET_LINUX_ARMv8" ;;
+	# HOST_CPU_FLAGS is computed by the Makefile from WITH_DYNAREC
+	# (-DHOST_CPU=0x20000006 for arm64). Passing it on the command line
+	# would override that assignment and leave HOST_CPU undefined.
+	_args="WITH_DYNAREC=arm64 HAVE_GENERIC_JIT=0 HAVE_VULKAN=0" ;;
 arm*)
-	_args="WITH_DYNAREC=arm" ;;
+	_args="WITH_DYNAREC=arm HAVE_GENERIC_JIT=0 HAVE_VULKAN=0" ;;
 esac
-
-if [ "$CARCH" != "x86" ]; then
-	_args="$_args HAVE_GENERIC_JIT=0 HAVE_VULKAN=0"
-fi
 
 build() {
 	# Built against the bundled deps. The old aport unbundled libzip,
@@ -47,4 +51,5 @@ package() {
 
 sha512sums="
 7eabfae2ccaf7c310badc4ff736a20f21548b9978d67871fda5cb441e24fb9c8fa2aaabb3ae34cbbc8a9531f859b23e27acc0a0e8ffe6419b535b57275f0226c  libretro-flycast-45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d.tar.gz
+a156c5f5b5492126b4128db00aae7cd550b1d4053fe80513c432ee78c7fd2180102f90f54c0e1934a8cd318f13927c388058a8e6699b7f1334fc297132b7f402  0001-libzip-include-unistd-h-unconditionally.patch
 "
