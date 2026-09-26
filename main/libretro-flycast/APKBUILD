@@ -64,6 +64,19 @@ build() {
 	_b=""
 	if [ -d /native/usr/lib/gcc ]; then
 		_b="-B/native/usr/lib/gcc/ -B/native/usr/libexec/gcc/"
+
+		# And the target's binutils, or collect2 gets as far as the
+		# link and then says "fatal error: cannot find 'ld'". gcc
+		# normally reaches ld by walking out of its own lib/gcc
+		# directory (-print-prog-name=ld resolves to
+		# .../lib/gcc/<triplet>/<ver>/../../../../<triplet>/bin/ld),
+		# and a -B prefix is searched directly instead, so the walk
+		# never happens. Deliberately NOT /native/usr/bin: the ld in
+		# there is the x86_64 one, which would try to link aarch64
+		# objects. The glob matches exactly one directory.
+		for _d in /native/usr/*-linux-musl*/bin; do
+			[ -x "$_d/ld" ] && _b="$_b -B$_d/"
+		done
 	fi
 
 	# HAVE_OPENMP=0: -B does not repair the compiler's internal include
