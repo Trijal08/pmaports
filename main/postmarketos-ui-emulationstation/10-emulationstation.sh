@@ -300,6 +300,13 @@ flycast_enable_dsp = "disabled"
 flycast_enable_rttb = "disabled"
 flycast_threaded_rendering = "enabled"
 flycast_internal_resolution = "640x480"
+
+# Use the HLE boot ROM, not a real dc_boot.bin: it skips the Dreamcast boot
+# animation and starts games straight away. This costs nothing here -
+# the BIOS and the flash are separate, and region and language live in the
+# flash (dc_nvmem.bin), which is loaded either way.
+reicast_hle_bios = "enabled"
+flycast_hle_bios = "enabled"
 CORECFG
 
 while IFS= read -r _kv; do
