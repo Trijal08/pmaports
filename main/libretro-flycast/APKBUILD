@@ -50,7 +50,20 @@ build() {
 	# fallback - and softrend.cpp, the only other omp.h user, is not in
 	# the source list. All it costs is a single-threaded texture
 	# upscaler, which a 4x Cortex-A35 was never going to run anyway.
-	make $_args HAVE_LTCG=0 HAVE_OPENMP=0
+	#
+	# LDFLAGS_END carries -fno-use-linker-plugin to the link. Alpine's gcc
+	# is built with HAVE_LTO_PLUGIN=2, so it hands the linker an LTO plugin
+	# on every link unless told otherwise, and through crossdirect it
+	# cannot locate one:
+	#
+	#     c++: fatal error: '-fuse-linker-plugin', but liblto_plugin.so
+	#     not found
+	#
+	# The file is present in both chroots; the wrapper is what loses it.
+	# Nothing here is compiled with LTO (HAVE_LTCG=0), so declining the
+	# plugin is exact rather than a workaround. LDFLAGS_END is empty on
+	# every non-Windows target and appears only in the link rule.
+	make $_args HAVE_LTCG=0 HAVE_OPENMP=0 LDFLAGS_END=-fno-use-linker-plugin
 }
 
 package() {
