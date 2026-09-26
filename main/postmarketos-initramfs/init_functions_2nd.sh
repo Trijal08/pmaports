@@ -124,7 +124,24 @@ resize_root_filesystem() {
 		ext4)
 			echo "Resize 'ext4' root filesystem ($partition)"
 			modprobe ext4
-			resize2fs "$partition"
+			# resize2fs refuses outright when the filesystem has not had
+			# a full check, before it even looks at whether a resize is
+			# needed. check_filesystem() above only preens, which is not
+			# enough once a journal recovery has touched the superblock:
+			#
+			#   pmOS_root: recovering journal
+			#   pmOS_root: clean, 60306/1021952 files
+			#   resize2fs: Please run 'e2fsck -f /dev/mmcblk0p2' first.
+			#
+			# A filesystem that already fills its partition loses nothing
+			# to that, but one that does not is silently left small. Pay
+			# for the full check only when resize2fs actually refused -
+			# it exits zero when there is simply nothing to do, so this
+			# does not fire on a normal boot.
+			if ! resize2fs "$partition"; then
+				e2fsck -fp "$partition"
+				resize2fs "$partition"
+			fi
 			;;
 		f2fs)
 			echo "Resize 'f2fs' root filesystem ($partition)"
