@@ -275,6 +275,31 @@ ppsspp_skip_gpu_readbacks = "enabled"
 # has no "USA" value in this build, and forcing NTSC would be wrong for a PAL
 # disc later.
 reicast_language = "English"
+reicast_region = "USA"
+
+# Dreamcast performance, from ArchR's own Flycast defaults - the AICA DSP is
+# pure CPU and render-to-texture-buffer costs bandwidth this GPU does not
+# have. Dreamcast runs below full speed on a 1.3 GHz quad A35, and audio
+# underruns follow the frame rate, so CPU headroom is the only real lever.
+#
+# Note the prefix: this core is libretro-flycast 0_git20220406, which still
+# uses reicast_*. Upstream renamed these to flycast_* years ago, which is
+# what ArchR's file uses.
+reicast_enable_dsp = "disabled"
+reicast_enable_rttb = "disabled"
+reicast_threaded_rendering = "enabled"
+reicast_internal_resolution = "640x480"
+
+# Same settings again under the current names. Upstream renamed every option
+# from reicast_* to flycast_* years ago, and both spellings are written so
+# this is correct either side of the core bump - RetroArch ignores keys the
+# running core does not declare.
+flycast_language = "English"
+flycast_region = "USA"
+flycast_enable_dsp = "disabled"
+flycast_enable_rttb = "disabled"
+flycast_threaded_rendering = "enabled"
+flycast_internal_resolution = "640x480"
 CORECFG
 
 while IFS= read -r _kv; do
