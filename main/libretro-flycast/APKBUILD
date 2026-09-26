@@ -1,0 +1,50 @@
+# Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
+pkgname=libretro-flycast
+pkgver=0_git20260706
+pkgrel=0
+_commit="45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d"
+pkgdesc="libretro core for flycast"
+url="https://github.com/libretro/flycast"
+arch="x86_64 aarch64"
+license="GPL-2.0-only"
+options="!check" # No tests
+# Overrides Alpine's aport, which is pinned at 0_git20220406 - an April 2022
+# snapshot. Four years of Dreamcast work were missing, and it showed: the
+# core still used the old reicast_* option names, and its region handling
+# left USA discs booting in Japanese.
+#
+# The libretro mirror vendors everything under core/deps (no .gitmodules,
+# unlike flyinghead/flycast which has 22 submodules), so a plain archive
+# builds - which is what makes this a version bump rather than a packaging
+# project.
+makedepends="mesa-dev zlib-dev"
+source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz"
+builddir="$srcdir/flycast-$_commit"
+
+case $CARCH in
+aarch64)
+	_args="WITH_DYNAREC=arm64 HOST_CPU_FLAGS=-DTARGET_LINUX_ARMv8" ;;
+arm*)
+	_args="WITH_DYNAREC=arm" ;;
+esac
+
+if [ "$CARCH" != "x86" ]; then
+	_args="$_args HAVE_GENERIC_JIT=0 HAVE_VULKAN=0"
+fi
+
+build() {
+	# Built against the bundled deps. The old aport unbundled libzip,
+	# miniupnpc and zlib via two local patches plus SYSTEM_LIBZIP=1 and
+	# SYSTEM_ZLIB=1; those Makefile switches no longer exist, and the
+	# patches were written against the 2022 tree.
+	make $_args HAVE_LTCG=0
+}
+
+package() {
+	install -Dm644 flycast_libretro.so \
+		"$pkgdir"/usr/lib/libretro/flycast_libretro.so
+}
+
+sha512sums="
+7eabfae2ccaf7c310badc4ff736a20f21548b9978d67871fda5cb441e24fb9c8fa2aaabb3ae34cbbc8a9531f859b23e27acc0a0e8ffe6419b535b57275f0226c  libretro-flycast-45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d.tar.gz
+"
