@@ -46,28 +46,44 @@ build() {
 	# SYSTEM_ZLIB=1; those Makefile switches no longer exist, and the
 	# patches were written against the 2022 tree.
 	#
-	# HAVE_OPENMP=0 because Alpine's *cross* gcc ships no omp.h: the
-	# aarch64 buildroot has one (and libgomp), but crossdirect runs the
-	# native cross-compiler, whose own include directory is searched
-	# instead. The switch defines TARGET_NO_OPENMP, which TexCache.cpp
-	# guards every omp use behind - including a serial xbrz::scale()
-	# fallback - and softrend.cpp, the only other omp.h user, is not in
-	# the source list. All it costs is a single-threaded texture
-	# upscaler, which a 4x Cortex-A35 was never going to run anyway.
+	# gcc locates its own toolchain relative to argv[0], and under
+	# crossdirect argv[0] is the wrapper in /native/usr/lib/crossdirect,
+	# so it looks in a directory that does not exist:
 	#
-	# LDFLAGS_END carries -fno-use-linker-plugin to the link. Alpine's gcc
-	# is built with HAVE_LTO_PLUGIN=2, so it hands the linker an LTO plugin
-	# on every link unless told otherwise, and through crossdirect it
-	# cannot locate one:
+	#     $ c++ -print-search-dirs
+	#     install: /native/usr/lib/crossdirect/aarch64/../lib/gcc/...
+	#     $ c++ -print-file-name=crtbeginS.o
+	#     crtbeginS.o                     # i.e. not found
 	#
-	#     c++: fatal error: '-fuse-linker-plugin', but liblto_plugin.so
-	#     not found
+	# That one misresolution is why the link could not find crtbeginS.o or
+	# -lgcc, and why omp.h and liblto_plugin.so went missing before it.
+	# -B points the driver back at the real toolchain. gcc appends
+	# <triplet>/<version>/ to a -B prefix itself, so nothing is pinned to
+	# gcc 15.2.0, and the flags are skipped when /native is absent - a
+	# build on real aarch64 hardware needs none of this.
+	_b=""
+	if [ -d /native/usr/lib/gcc ]; then
+		_b="-B/native/usr/lib/gcc/ -B/native/usr/libexec/gcc/"
+	fi
+
+	# HAVE_OPENMP=0: -B does not repair the compiler's internal include
+	# directory, and Alpine's cross gcc has no omp.h there (the target's
+	# gcc does). Flycast wants OpenMP in exactly one place, the xBRZ
+	# texture upscaler, which a 4x Cortex-A35 cannot run at a playable
+	# speed anyway. The switch defines TARGET_NO_OPENMP, which
+	# TexCache.cpp guards every omp use behind - the upscaler falls back
+	# to a serial xbrz::scale() - and softrend.cpp, the only other omp.h
+	# user, is not in Makefile.common's source list.
 	#
-	# The file is present in both chroots; the wrapper is what loses it.
-	# Nothing here is compiled with LTO (HAVE_LTCG=0), so declining the
-	# plugin is exact rather than a workaround. LDFLAGS_END is empty on
-	# every non-Windows target and appears only in the link rule.
-	make $_args HAVE_LTCG=0 HAVE_OPENMP=0 LDFLAGS_END=-fno-use-linker-plugin
+	# LDFLAGS_END=-fno-use-linker-plugin: Alpine's gcc is built with
+	# HAVE_LTO_PLUGIN=2 and offers the linker an LTO plugin on every link.
+	# Nothing here is compiled with LTO (HAVE_LTCG=0). LDFLAGS_END is
+	# empty on every non-Windows target and appears only in the link rule.
+	#
+	# LD is "$(CXX)" deferred, so the CXX override carries -B to the link.
+	make $_args HAVE_LTCG=0 HAVE_OPENMP=0 \
+		LDFLAGS_END=-fno-use-linker-plugin \
+		CC="${CC:-cc} $_b" CXX="${CXX:-c++} $_b"
 }
 
 package() {
