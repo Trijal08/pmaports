@@ -41,7 +41,16 @@ build() {
 	# miniupnpc and zlib via two local patches plus SYSTEM_LIBZIP=1 and
 	# SYSTEM_ZLIB=1; those Makefile switches no longer exist, and the
 	# patches were written against the 2022 tree.
-	make $_args HAVE_LTCG=0
+	#
+	# HAVE_OPENMP=0 because Alpine's *cross* gcc ships no omp.h: the
+	# aarch64 buildroot has one (and libgomp), but crossdirect runs the
+	# native cross-compiler, whose own include directory is searched
+	# instead. The switch defines TARGET_NO_OPENMP, which TexCache.cpp
+	# guards every omp use behind - including a serial xbrz::scale()
+	# fallback - and softrend.cpp, the only other omp.h user, is not in
+	# the source list. All it costs is a single-threaded texture
+	# upscaler, which a 4x Cortex-A35 was never going to run anyway.
+	make $_args HAVE_LTCG=0 HAVE_OPENMP=0
 }
 
 package() {
