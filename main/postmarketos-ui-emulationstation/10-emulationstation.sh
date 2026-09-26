@@ -307,6 +307,16 @@ rgui_config_directory = "~/ROMs/config/retroarch"
 input_driver = "udev"
 input_joypad_driver = "udev"
 joypad_autoconfig_dir = "/usr/share/libretro/autoconfig"
+
+# Menu assets. Without these Ozone draws its icons as black squares - the
+# glyphs are PNGs on disk, not built into the binary. Pinned to the system
+# path for the same reason joypad_autoconfig_dir is: RetroArch's default is
+# relative to its own directory and does not resolve here.
+#
+# Alpine has one combined retroarch-assets package rather than Arch's
+# per-menu split (retroarch-assets-ozone and friends), so there is nothing
+# narrower to depend on.
+assets_directory = "/usr/share/libretro/assets"
 input_enable_hotkey_btn = "9"
 input_exit_emulator_btn = "10"
 input_menu_toggle_btn = "2"
