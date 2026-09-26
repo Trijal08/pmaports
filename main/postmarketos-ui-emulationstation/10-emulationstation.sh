@@ -437,12 +437,21 @@ video_hard_sync = "false"
 video_black_frame_insertion = "0"
 aspect_ratio_index = "22"
 
-# Audio. ArchR's values and ArchR's driver. RetroArch has NO pipewire driver -
-# its list here is alsa/alsathread/tinyalsa/oss/sdl2/pulse/null - so setting
-# one silently falls back to plain alsa, which is what was happening. Note
-# SDL_AUDIODRIVER=pipewire below is unrelated: that is EmulationStation's
+# Audio. This build's drivers are alsathread/jack/null/pipewire/pulse - there
+# is no plain "alsa", and a native pipewire driver does exist, which an
+# earlier note here denied. Talk to PipeWire directly.
+#
+# alsathread went mute: the ALSA "default" device is PipeWire's own plugin
+# here, and it fails to open at all -
+#
+#   [ALSA] Failed to open PLAYBACK stream on device "default": Host is down.
+#   [ERROR] Failed to initialize audio driver. Will continue without audio.
+#
+# so every game ran silent. Going native skips the plugin entirely.
+#
+# SDL_AUDIODRIVER=pipewire below is unrelated: that is EmulationStation's own
 # audio, not RetroArch's.
-audio_driver = "alsathread"
+audio_driver = "pipewire"
 audio_latency = "128"
 audio_out_rate = "48000"
 audio_sync = "true"
