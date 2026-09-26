@@ -12,14 +12,18 @@ arch="aarch64"
 license="GPL-2.0-only"
 options="!check" # No tests
 # Overrides Alpine's aport, which is pinned at 0_git20220406 - an April 2022
-# snapshot. Four years of Dreamcast work were missing, and it showed: the
-# core still used the old reicast_* option names, and its region handling
-# left USA discs booting in Japanese.
+# snapshot. This is the libretro mirror's HEAD as of 2026-07-06: four years
+# of Dreamcast fixes, and nothing more exotic than that. The option keys are
+# unchanged (libretro_core_option_defines.h still says CORE_OPTION_NAME
+# "reicast"), so reicast_region and the rest of the tuning carry over.
 #
-# The libretro mirror vendors everything under core/deps (no .gitmodules,
-# unlike flyinghead/flycast which has 22 submodules), so a plain archive
-# builds - which is what makes this a version bump rather than a packaging
-# project.
+# Not flyinghead/flycast, which is what Arch packages: upstream moved the
+# libretro target to CMake and needs nine git submodules (asio, glslang,
+# libchdr, tinycmmc, tinygettext, Vulkan-Headers, VulkanMemoryAllocator,
+# xbyak). The mirror still ships the legacy Makefile and vendors everything
+# under core/deps, so a plain archive builds - a version bump rather than a
+# packaging project. Upstream is also the heavier renderer, which is the
+# wrong direction for a 4x Cortex-A35.
 makedepends="mesa-dev zlib-dev"
 source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz
 	0001-libzip-include-unistd-h-unconditionally.patch
