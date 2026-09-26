@@ -34,6 +34,28 @@ once=
 udc_name=$(ls /sys/class/udc 2>/dev/null | head -1)
 [ -n "$udc_name" ] || exit 0
 
+in_host_mode() {
+	# Do not touch the gadget while the controller is acting as a host.
+	#
+	# The role attribute alone is not enough: with a device attached the
+	# board sources VBUS, so the session reads valid, and the UDC reads
+	# "not attached" precisely because we are in host mode - which is this
+	# script's trigger condition. That combination rebinds the UDC in a
+	# tight loop against a controller in host mode:
+	#
+	#   dwc2 ff300000.usb: dwc2_hsotg_ep_disable: called in host mode?
+	#
+	# repeated until the kernel died. Check for an actually enumerated
+	# downstream device as well, which is unambiguous.
+	[ "$(cat /sys/class/usb_role/*/role 2>/dev/null)" = "host" ] && return 0
+	for dev in /sys/bus/usb/devices/*; do
+		[ -e "$dev/idVendor" ] || continue
+		[ "$(cat "$dev/idVendor" 2>/dev/null)" = "1d6b" ] && continue
+		return 0
+	done
+	return 1
+}
+
 session_valid() {
 	for c in /sys/class/extcon/*/cable.*; do
 		[ -e "$c/name" ] || continue
@@ -56,8 +78,17 @@ rebind() {
 if [ -n "$once" ]; then
 	# Give the host its own chance first; only step in if it gets nowhere.
 	sleep 1
+	in_host_mode && exit 0
 	role=$(cat /sys/class/usb_role/*/role 2>/dev/null)
 	[ "$role" = "device" ] || exit 0
+
+	# Never more than once every 15s, however many events arrive.
+	stamp=/run/usb-gadget-rebind.stamp
+	now=$(cut -d. -f1 /proc/uptime)
+	if [ -f "$stamp" ] && [ $((now - $(cat "$stamp" 2>/dev/null || echo 0))) -lt 15 ]; then
+		exit 0
+	fi
+	echo "$now" >"$stamp"
 	state=$(cat "/sys/class/udc/$udc_name/state" 2>/dev/null)
 	[ "$state" = "configured" ] && exit 0
 	session_valid || exit 0
@@ -69,6 +100,10 @@ stale=0
 while :; do
 	sleep 1
 
+	if in_host_mode; then
+		stale=0
+		continue
+	fi
 	role=$(cat /sys/class/usb_role/*/role 2>/dev/null)
 	[ "$role" = "device" ] || { stale=0; continue; }
 
