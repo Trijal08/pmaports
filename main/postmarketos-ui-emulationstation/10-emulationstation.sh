@@ -265,6 +265,16 @@ ppsspp_software_skinning = "enabled"
 ppsspp_spline_quality = "Low"
 ppsspp_lazy_texture_caching = "enabled"
 ppsspp_skip_gpu_readbacks = "enabled"
+
+# Dreamcast language. The disc is not what decides this - the console's flash
+# is, and Flycast writes its own (dc_nvmem.bin) with defaults when none
+# exists, which come up Japanese. The same USA disc therefore boots in
+# Japanese here and in English on a machine whose flash was set up already.
+#
+# Region and broadcast are left at Default deliberately: the region option
+# has no "USA" value in this build, and forcing NTSC would be wrong for a PAL
+# disc later.
+reicast_language = "English"
 CORECFG
 
 while IFS= read -r _kv; do
