@@ -502,21 +502,28 @@ video_hard_sync = "false"
 video_black_frame_insertion = "0"
 aspect_ratio_index = "22"
 
-# Audio. This build's drivers are alsathread/jack/null/pipewire/pulse - there
-# is no plain "alsa", and a native pipewire driver does exist, which an
-# earlier note here denied. Talk to PipeWire directly.
+# Audio. THERE IS NO "pipewire" DRIVER in this RetroArch, whatever an earlier
+# note here claimed. The build prints its own list:
 #
-# alsathread went mute: the ALSA "default" device is PipeWire's own plugin
-# here, and it fails to open at all -
+#   [ERROR] Couldn't find any audio driver named "pipewire"
+#   [INFO] Available audio drivers are: alsa alsathread tinyalsa oss sdl2
+#          pulse null
+#   [WARN] Going to default to first audio driver...
 #
-#   [ALSA] Failed to open PLAYBACK stream on device "default": Host is down.
-#   [ERROR] Failed to initialize audio driver. Will continue without audio.
+# and "first" is plain alsa - so asking for pipewire silently selected a
+# SYNCHRONOUS driver over PipeWire's ALSA compat plugin. RetroArch then
+# blocks inside the write when the buffer drains, which on a core that runs
+# short of time gave clicks, a grinding replay loop, and hard freezes where
+# the picture died but the pad still worked and only pkill helped.
 #
-# so every game ran silent. Going native skips the plugin entirely.
+# pulse talks to pipewire-pulse (the socket is at
+# $XDG_RUNTIME_DIR/pulse/native) and is callback-driven, so a starved buffer
+# can no longer wall off the emulator's main loop. It also honours the
+# requested latency: the ALSA path silently gave ~139 ms whatever we asked.
 #
 # SDL_AUDIODRIVER=pipewire below is unrelated: that is EmulationStation's own
 # audio, not RetroArch's.
-audio_driver = "pipewire"
+audio_driver = "pulse"
 # 256 ms, not the usual 64. Dreamcast runs below full speed here and audio
 # underruns follow the frame rate, so the buffer is the difference between
 # occasional frame drops and audible skipping. The input lag this adds is a
