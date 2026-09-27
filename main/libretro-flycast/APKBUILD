@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=libretro-flycast
 pkgver=0_git20260706
-pkgrel=1
+pkgrel=2
 _commit="45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d"
 pkgdesc="libretro core for flycast"
 url="https://github.com/libretro/flycast"
@@ -25,7 +25,9 @@ options="!check" # No tests
 # packaging project. Upstream is also the heavier renderer, which is the
 # wrong direction for a 4x Cortex-A35.
 makedepends="libzip-dev mesa-dev zlib-dev"
-source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz"
+source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz
+	libretro-flycast-flags.patch
+	"
 builddir="$srcdir/flycast-$_commit"
 
 case $CARCH in
@@ -52,6 +54,16 @@ build() {
 	# This also drops the need for the vendored-libzip unistd.h patch:
 	# SYSTEM_LIBZIP=1 removes those sources from the build entirely.
 	rm -rf core/deps/libzip core/deps/zlib
+	#
+	# The flags patch is why abuild's CFLAGS/CXXFLAGS/LDFLAGS reach the
+	# compiler at all: the Makefile assigns them empty (CFLAGS := ) and so
+	# discards the environment, which left this core the one package on the
+	# system built without the distro's flags - including _FORTIFY_SOURCE
+	# and the stack protector. Beyond consistency, that has diagnostic
+	# value here: fortify turns a silent overflow into a named abort, and a
+	# silent overflow is exactly what the intermittent segfault looks like.
+	# -O3 still wins over abuild's -Os, because the Makefile appends it
+	# after this assignment.
 	#
 	# gcc locates its own startup files relative to argv[0], and under
 	# crossdirect argv[0] is the wrapper in /native/usr/lib/crossdirect,
@@ -99,4 +111,5 @@ package() {
 
 sha512sums="
 7eabfae2ccaf7c310badc4ff736a20f21548b9978d67871fda5cb441e24fb9c8fa2aaabb3ae34cbbc8a9531f859b23e27acc0a0e8ffe6419b535b57275f0226c  libretro-flycast-45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d.tar.gz
+28671dd58700a505cc300b14a73e1e2d7bd7c374a2f93d2b335d92e737f8c0463fd8a3dd19c678836f71527a98a0c34f27ff45edc03b462dd1bdeddaf34a9c8e  libretro-flycast-flags.patch
 "
