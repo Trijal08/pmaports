@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=libretro-flycast
 pkgver=0_git20260706
-pkgrel=2
+pkgrel=3
 _commit="45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d"
 pkgdesc="libretro core for flycast"
 url="https://github.com/libretro/flycast"
@@ -27,6 +27,7 @@ options="!check" # No tests
 makedepends="libzip-dev mesa-dev zlib-dev"
 source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz
 	libretro-flycast-flags.patch
+	0001-use-the-system-zlib-and-libzip-headers.patch
 	"
 builddir="$srcdir/flycast-$_commit"
 
@@ -112,4 +113,5 @@ package() {
 sha512sums="
 7eabfae2ccaf7c310badc4ff736a20f21548b9978d67871fda5cb441e24fb9c8fa2aaabb3ae34cbbc8a9531f859b23e27acc0a0e8ffe6419b535b57275f0226c  libretro-flycast-45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d.tar.gz
 28671dd58700a505cc300b14a73e1e2d7bd7c374a2f93d2b335d92e737f8c0463fd8a3dd19c678836f71527a98a0c34f27ff45edc03b462dd1bdeddaf34a9c8e  libretro-flycast-flags.patch
+7ab8b6c5d693c3c368924f2d72830f8dd4c08cacf7ec1aec190ff13792628483c398acbc6271431e12baea1621a55d5414dd84d701e21422573b37beee91c5b1  0001-use-the-system-zlib-and-libzip-headers.patch
 "
