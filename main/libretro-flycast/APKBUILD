@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=libretro-flycast
 pkgver=0_git20260706
-pkgrel=0
+pkgrel=1
 _commit="45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d"
 pkgdesc="libretro core for flycast"
 url="https://github.com/libretro/flycast"
@@ -24,10 +24,8 @@ options="!check" # No tests
 # under core/deps, so a plain archive builds - a version bump rather than a
 # packaging project. Upstream is also the heavier renderer, which is the
 # wrong direction for a 4x Cortex-A35.
-makedepends="mesa-dev zlib-dev"
-source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz
-	0001-libzip-include-unistd-h-unconditionally.patch
-	"
+makedepends="libzip-dev mesa-dev zlib-dev"
+source="$pkgname-$_commit.tar.gz::https://github.com/libretro/flycast/archive/$_commit.tar.gz"
 builddir="$srcdir/flycast-$_commit"
 
 case $CARCH in
@@ -41,10 +39,19 @@ arm*)
 esac
 
 build() {
-	# Built against the bundled deps. Alpine's aport unbundles libzip,
-	# miniupnpc and zlib with SYSTEM_LIBZIP=1 / SYSTEM_ZLIB=1 plus two
-	# local patches; those switches do still exist in Makefile.common, so
-	# that route is open if the vendored copies ever become a problem.
+	# Unbundle libzip and zlib, as Alpine's aport does. Keeping them
+	# vendored builds an inconsistency: there is no -I for core/deps/zlib,
+	# so every #include <zlib.h> resolves to the SYSTEM header while the
+	# vendored 1.2.8 implementation is what gets linked. Alpine's core,
+	# built this way, does not crash; ours, built against the bundled
+	# copies, segfaults intermittently a frame or two into a game and
+	# hangs (Flycast's SIGSEGV handler cannot attribute the fault, so it
+	# hits DEBUGBREAK and the process freezes with the display dead).
+	# miniupnpc has no SYSTEM_ switch in this tree, so it stays vendored.
+	#
+	# This also drops the need for the vendored-libzip unistd.h patch:
+	# SYSTEM_LIBZIP=1 removes those sources from the build entirely.
+	rm -rf core/deps/libzip core/deps/zlib
 	#
 	# gcc locates its own startup files relative to argv[0], and under
 	# crossdirect argv[0] is the wrapper in /native/usr/lib/crossdirect,
@@ -81,6 +88,7 @@ build() {
 	# Nothing here is compiled with LTO (HAVE_LTCG=0). LDFLAGS_END is
 	# empty on every non-Windows target and appears only in the link rule.
 	make $_args HAVE_LTCG=0 HAVE_OPENMP=0 \
+		SYSTEM_LIBZIP=1 SYSTEM_ZLIB=1 \
 		LDFLAGS_END=-fno-use-linker-plugin
 }
 
@@ -91,5 +99,4 @@ package() {
 
 sha512sums="
 7eabfae2ccaf7c310badc4ff736a20f21548b9978d67871fda5cb441e24fb9c8fa2aaabb3ae34cbbc8a9531f859b23e27acc0a0e8ffe6419b535b57275f0226c  libretro-flycast-45bd2f4e59708a7c16a5bb1cb90a94d1b39e330d.tar.gz
-a156c5f5b5492126b4128db00aae7cd550b1d4053fe80513c432ee78c7fd2180102f90f54c0e1934a8cd318f13927c388058a8e6699b7f1334fc297132b7f402  0001-libzip-include-unistd-h-unconditionally.patch
 "
