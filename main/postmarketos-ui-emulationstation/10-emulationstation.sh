@@ -282,10 +282,25 @@ ppsspp_skip_gpu_readbacks = "enabled"
 reicast_language = "English"
 reicast_region = "USA"
 
-# Dreamcast performance, from ArchR's own Flycast defaults - the AICA DSP is
-# pure CPU and render-to-texture-buffer costs bandwidth this GPU does not
-# have. Dreamcast runs below full speed on a 1.3 GHz quad A35, and audio
-# underruns follow the frame rate, so CPU headroom is the only real lever.
+# Dreamcast is NOT PLAYABLE on this hardware, and no setting below changes
+# that. Measured Sep 2026 on Sonic Adventure 2 and Soulcalibur: ~10-13 fps,
+# a fifth of realtime, with the arm64 dynarec confirmed active (17 MB RWX
+# code cache in the core), the CPU pinned at its 1.296 GHz ceiling, and two
+# of four cores saturated - Flycast cannot split the work further, so the
+# other two idle. frame_skipping made it SLOWER, which proves rendering was
+# never the constraint: the wall is SH4 CPU emulation on a Cortex-A35, and it
+# is a 3-5x per-core shortfall.
+#
+# The audio follows from that and cannot be fixed separately. Below realtime,
+# audio_sync on gives slow, stretched sound and off gives correct pitch with
+# gaps; there is no third option, because the samples are not being produced.
+# Do not spend time on audio_latency, rate control or frame pacing for
+# Dreamcast again - measure the frame rate first.
+#
+# The options below are still worth keeping: they are the cheapest settings
+# for the systems that DO run at speed, and they come from ArchR's own
+# Flycast defaults - the AICA DSP is pure CPU and render-to-texture-buffer
+# costs bandwidth this GPU does not have.
 #
 # Note the prefix: the libretro mirror still uses reicast_* even at its
 # 2026 HEAD - libretro_core_option_defines.h reads CORE_OPTION_NAME
@@ -523,11 +538,11 @@ aspect_ratio_index = "22"
 # SDL_AUDIODRIVER=pipewire below is unrelated: that is EmulationStation's own
 # audio, not RetroArch's.
 audio_driver = "pulse"
-# 256 ms, not the usual 64. Dreamcast runs below full speed here and audio
-# underruns follow the frame rate, so the buffer is the difference between
-# occasional frame drops and audible skipping. The input lag this adds is a
-# deliberate trade.
-audio_latency = "256"
+# 128 ms, twice the usual 64, which is enough slack for the systems that do
+# run at speed here. It was briefly 256 to chase Dreamcast audio; that turned
+# out to be a CPU wall rather than a buffering problem (see below), and the
+# extra latency only cost input lag on everything else.
+audio_latency = "128"
 audio_out_rate = "48000"
 audio_sync = "true"
 audio_rate_control = "true"
