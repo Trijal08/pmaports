@@ -295,6 +295,16 @@ reicast_enable_rttb = "disabled"
 reicast_threaded_rendering = "enabled"
 reicast_internal_resolution = "640x480"
 
+# The one that matters for audio. Its own description: "Waits for the GPU to
+# finish rendering the previous frame instead of dropping the current one" -
+# and it only applies when Threaded Rendering is on, which it is above. That
+# wait stalls the emulation loop, the audio buffer starves, and you get
+# clicks between gaps plus a grinding loop when PipeWire runs dry and repeats
+# a fragment. Upstream already defaults this to disabled under #ifdef
+# LOW_END; a 1.3 GHz quad A35 with a Mali-G31 is exactly that. Dropping a
+# frame is free here, stalling is not.
+reicast_synchronous_rendering = "disabled"
+
 # Same settings again under the current names. Upstream renamed every option
 # from reicast_* to flycast_* years ago, and both spellings are written so
 # this is correct either side of the core bump - RetroArch ignores keys the
@@ -305,6 +315,7 @@ flycast_enable_dsp = "disabled"
 flycast_enable_rttb = "disabled"
 flycast_threaded_rendering = "enabled"
 flycast_internal_resolution = "640x480"
+flycast_synchronous_rendering = "disabled"
 
 # Use the HLE boot ROM, not a real dc_boot.bin: it skips the Dreamcast boot
 # animation and starts games straight away. This costs nothing here -
@@ -506,7 +517,11 @@ aspect_ratio_index = "22"
 # SDL_AUDIODRIVER=pipewire below is unrelated: that is EmulationStation's own
 # audio, not RetroArch's.
 audio_driver = "pipewire"
-audio_latency = "128"
+# 256 ms, not the usual 64. Dreamcast runs below full speed here and audio
+# underruns follow the frame rate, so the buffer is the difference between
+# occasional frame drops and audible skipping. The input lag this adds is a
+# deliberate trade.
+audio_latency = "256"
 audio_out_rate = "48000"
 audio_sync = "true"
 audio_rate_control = "true"
