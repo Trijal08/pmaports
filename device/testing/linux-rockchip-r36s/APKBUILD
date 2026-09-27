@@ -2,7 +2,7 @@ maintainer="Vitaliy Ognev <vitaliy.ognev@gmail.com>"
 _flavor="rockchip-r36s"
 pkgname=linux-$_flavor
 pkgver=7.3_rc3
-pkgrel=8
+pkgrel=9
 pkgdesc="The linux-rockchip-r36s kernel and modules"
 arch="aarch64"
 _carch="arm64"
@@ -39,7 +39,7 @@ makedepends="
 # Source
 _owner="Trijal08"
 _repository="kernel-mainline"
-_commit="a171f9255b33d5003b57ffd187e2ebd6b0c80fea"
+_commit="35931f00f9218fba3e9493828d28e23ba68f985c"
 _config="config-$_flavor.$arch"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
@@ -79,6 +79,6 @@ package() {
 }
 
 sha512sums="
-d55a331bf83299362075260e7325d5bc8548bd6927cd7f3515db82e74376c66258363c0e4bbe477ac87fa55a665cd580e1c27dd2305844d566fdc0f58ff1d319  linux-rockchip-r36s-a171f9255b33d5003b57ffd187e2ebd6b0c80fea.tar.gz
+58ff3c34123fccf8f5ec008faa1d5328374e55beabcb9252e3b935ff7ac72abf4874d4718df960ea96d6a65335f20995801e2695a784455127231fadb76ec790  linux-rockchip-r36s-35931f00f9218fba3e9493828d28e23ba68f985c.tar.gz
 d83185c64046e8b446155fa05f81ab50fa2959a2380253ae7a3b0297a12c7d4fd75f462de1efcc389820e9cb8a6e45ca7e52fefc76a585487e527a3d497918e6  config-rockchip-r36s.aarch64
 "
