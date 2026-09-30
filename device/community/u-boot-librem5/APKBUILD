@@ -1,5 +1,4 @@
 # Mainline u-boot with Librem 5 support and config
-# Co-Maintainer: Stefan Hansson <newbyte@postmarketos.org>
 maintainer="Alistair Francis <alistair@alistair23.me>"
 pkgname=u-boot-librem5
 pkgver=2022.10

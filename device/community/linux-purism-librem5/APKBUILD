@@ -1,5 +1,4 @@
 # Reference: <https://postmarketos.org/vendorkernel>
-# Co-Maintainer: Stefan Hansson <newbyte@postmarketos.org>
 maintainer="Alistair Francis <alistair@alistair23.me>"
 pkgname=linux-purism-librem5
 pkgver=6.18.56
