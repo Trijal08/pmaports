@@ -39,7 +39,7 @@ makedepends="
 # Source
 _owner="Trijal08"
 _repository="kernel-mainline"
-_commit="35931f00f9218fba3e9493828d28e23ba68f985c"
+_commit="9b1feb5f87e1728edfd00e9c43357d65036d0e84"
 _config="config-$_flavor.$arch"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
@@ -79,6 +79,6 @@ package() {
 }
 
 sha512sums="
-58ff3c34123fccf8f5ec008faa1d5328374e55beabcb9252e3b935ff7ac72abf4874d4718df960ea96d6a65335f20995801e2695a784455127231fadb76ec790  linux-rockchip-r36s-35931f00f9218fba3e9493828d28e23ba68f985c.tar.gz
+f4bb61480f998c6ce7e48ae10c970effc122e6f9719a6b14ecf4306017d16d10908b147ee2f6e751bbac0948447845aab2492789baa63dbab84ca35ac0df2bc9  linux-rockchip-r36s-6854337b2a38953edf1f46a02aef132e10e8ba2b.tar.gz
 d83185c64046e8b446155fa05f81ab50fa2959a2380253ae7a3b0297a12c7d4fd75f462de1efcc389820e9cb8a6e45ca7e52fefc76a585487e527a3d497918e6  config-rockchip-r36s.aarch64
 "
