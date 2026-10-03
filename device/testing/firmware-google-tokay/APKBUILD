@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-tokay
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9"
 subpackages="
 	$pkgname-brcm_a0
@@ -10,6 +10,7 @@ subpackages="
 	$pkgname-modem
 	$pkgname-aoc
 	$pkgname-audio
+	$pkgname-mfc
 	"
 arch="aarch64"
 _carch="arm64"
@@ -157,7 +158,7 @@ aoc() {
 
 	# Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/aoc.bin \
-		"$subpkgdir/lib/firmware/google/aoc.bin"
+		"$subpkgdir/lib/firmware/google/zumapro/aoc.bin"
 
 	# AoC Sensor USF Registry
 	install -d "$subpkgdir/lib/firmware/google/usf/tokay/"
@@ -178,6 +179,14 @@ audio() {
 	# Right Speaker Tuning Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/R-cs35l41-dsp1-spk-prot.bin \
 		"$subpkgdir/lib/firmware/cirrus/cs35l41-dsp1-spk-prot-tokay-r.bin"
+}
+
+mfc() {
+	pkgdesc="Google Pixel 9 MFC (Multi-format Codec) firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/mfc_fw.bin \
+		"$subpkgdir/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
 3793aafaed0779a69241859269877312fa7474ed99c1fe85cd3478ca0a79b044a39d435fcdc0ddfc36b5dab5d82d44d6bc5c8084ddf624ee25824002fbab251a  firmware-google-tokay-lineage-24.0.tar.gz

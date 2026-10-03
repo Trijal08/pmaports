@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-comet
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9 Pro Fold"
 subpackages="
 	$pkgname-brcm_a0
@@ -9,6 +9,7 @@ subpackages="
 	$pkgname-brcm_b1
 	$pkgname-modem
 	$pkgname-aoc
+	$pkgname-mfc
 	"
 arch="aarch64"
 _carch="arm64"
@@ -156,7 +157,7 @@ aoc() {
 
 	# Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/aoc.bin \
-		"$subpkgdir/lib/firmware/google/aoc.bin"
+		"$subpkgdir/lib/firmware/google/zumapro/aoc.bin"
 
 	# AoC Sensor USF Registry
 	install -d "$subpkgdir/lib/firmware/google/usf/comet/"
@@ -177,6 +178,14 @@ audio() {
 	# Right Speaker Tuning Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/R-cs35l41-dsp1-spk-prot.bin \
 		"$subpkgdir/lib/firmware/cirrus/cs35l41-dsp1-spk-prot-comet-r.bin"
+}
+
+mfc() {
+	pkgdesc="Google Pixel 9 Pro Fold MFC (Multi-format Codec) firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/mfc_fw.bin \
+		"$subpkgdir/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
 44df848cccd0394703989758f28f0eeef8dd345f5e751bf214c88ef1001368502543f6590ec09353ea932572ff5feeb8b3378f53866d41dece58247d21c83376  firmware-google-comet-lineage-24.0.tar.gz

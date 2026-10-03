@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-komodo
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9 Pro XL"
 subpackages="
 	$pkgname-brcm_a0
@@ -10,6 +10,7 @@ subpackages="
 	$pkgname-modem
 	$pkgname-aoc
 	$pkgname-audio
+	$pkgname-mfc
 	"
 arch="aarch64"
 _carch="arm64"
@@ -157,7 +158,7 @@ aoc() {
 
 	# Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/aoc.bin \
-		"$subpkgdir/lib/firmware/google/aoc.bin"
+		"$subpkgdir/lib/firmware/google/zumapro/aoc.bin"
 
 	# AoC Sensor USF Registry
 	install -d "$subpkgdir/lib/firmware/google/usf/komodo/"
@@ -178,6 +179,14 @@ audio() {
 	# Right Speaker Tuning Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/R-cs35l41-dsp1-spk-prot.bin \
 		"$subpkgdir/lib/firmware/cirrus/cs35l41-dsp1-spk-prot-komodo-r.bin"
+}
+
+mfc() {
+	pkgdesc="Google Pixel 9 Pro XL MFC (Multi-format Codec) firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/mfc_fw.bin \
+		"$subpkgdir/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
 36bee610036ed512d02609cd5ac52d2798d3b2e1e9489d3288a2b25521c94f9e91b7e1c07a993be4c9c0e5ad9fea9cbd1fd7f97a1f79bdd78e43a12760f40474  firmware-google-komodo-lineage-24.0.tar.gz

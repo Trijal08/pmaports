@@ -1,12 +1,13 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-tegu
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9a"
 subpackages="
 	$pkgname-brcm_a3
 	$pkgname-modem
 	$pkgname-aoc
+	$pkgname-mfc
 	"
 arch="aarch64"
 _carch="arm64"
@@ -85,11 +86,19 @@ aoc() {
 
 	# Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/aoc.bin \
-		"$subpkgdir/lib/firmware/google/aoc.bin"
+		"$subpkgdir/lib/firmware/google/zumapro/aoc.bin"
 
 	# AoC Sensor USF Registry
 	install -d "$subpkgdir/lib/firmware/google/usf/tegu/"
 	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/etc/sensors/registry/ "$subpkgdir/lib/firmware/google/usf/tegu/"
+}
+
+mfc() {
+	pkgdesc="Google Pixel 9a MFC (Multi-format Codec) firmware"
+
+	# Main Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/mfc_fw.bin \
+		"$subpkgdir/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
 0756158d4bcc4258624c532f630f573387f7e60a87ae9a096c95e6eadd99735dbceb58853bfa34d93633fb646380c3a0eecd2187ece4c6786b2d1745554b5ec6  firmware-google-tegu-lineage-24.0.tar.gz
