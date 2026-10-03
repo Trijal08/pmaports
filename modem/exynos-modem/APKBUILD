@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=1
+pkgrel=3
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -16,10 +16,12 @@ depends="
 "
 subpackages="
 	libsamsung-sit-ffi:libsamsung_sit_ffi
+	$pkgname-lpa:lpa
+	$pkgname-polkit:polkit
 "
 options="net"
 
-_commit="9cee4624713f6a0029e451790c8d2e2db642e809"
+_commit="eba1e23aea1be111aa30796cc84dc4678bae2b46"
 source="
 	$pkgname-$_commit.tar.gz::https://git.deusch.me/api/v1/repos/pixel-mainline/exynos-modem/archive/$_commit.tar.gz
 	gipc-serve-uecap-fetch.patch
@@ -44,7 +46,10 @@ prepare() {
 
 build() {
 	# Compile the full workspace so both daemons and the static library are produced
-	RUSTC_WRAPPER= cargo auditable build --release --frozen
+	# sit-proxy/polkit adds the authorization transport sit-lpa asks for when
+	# /run/sit-proxy/0.auth exists; without it the bridge falls back to raw
+	# filesystem-controlled sockets.
+	RUSTC_WRAPPER= cargo auditable build --release --frozen --features sit-proxy/polkit
 }
 
 package() {
@@ -79,6 +84,34 @@ package() {
 		"$pkgdir/usr/lib/systemd/system/multi-user.target.wants/sit-proxy.service"
 }
 
+polkit() {
+	pkgdesc="Polkit authorization policy for the Exynos SIT proxy"
+	depends="$pkgname=$pkgver-r$pkgrel polkit"
+
+	install -Dm644 "$builddir"/crates/sit-proxy/org.exynosmodem.sit-proxy.policy \
+		-t "$subpkgdir/usr/share/polkit-1/actions"
+	install -Dm644 "$builddir"/crates/sit-proxy/polkit.conf \
+		"$subpkgdir/usr/lib/systemd/system/sit-proxy.service.d/50-polkit.conf"
+}
+
+lpa() {
+	pkgdesc="lpac APDU bridge for eSIM management over Exynos SIT"
+	# Stock lpac 2.3.0-r0 returns failure from its stdio callbacks even on
+	# success and dies in euicc_init before a single SIT request goes out.
+	depends="$pkgname=$pkgver-r$pkgrel lpac>=2.3.0-r1"
+	provides="sit-lpa-session=1"
+
+	install -Dm755 "$builddir"/target/release/sit-lpa \
+		-t "$subpkgdir/usr/bin"
+	install -Dm755 "$builddir"/crates/sit-lpa/lpa-gtk-sit \
+		-t "$subpkgdir/usr/bin"
+
+	# Compatibility path for unpatched clients: a private PATH entry whose
+	# "lpac" is the bridge itself. The patched lpa-gtk calls sit-lpa directly.
+	install -dm755 "$subpkgdir/usr/libexec/sit-lpa"
+	ln -s /usr/bin/sit-lpa "$subpkgdir/usr/libexec/sit-lpa/lpac"
+}
+
 libsamsung_sit_ffi() {
 	pkgdesc="C ABI for the samsung-sit SIT (Exynos RIL) wire codec"
 
@@ -97,7 +130,7 @@ libsamsung_sit_ffi() {
 		> "$subpkgdir/usr/lib/pkgconfig/samsung-sit-ffi.pc"
 }
 sha512sums="
-227430cf7f35e4e7ac309a68ef5301dd9cd44e770b35f79ef4415d7866414cb59fe6acca7a320263fa463347e5788bd5d6a0e6dcbc2f7232816b38179cc19620  exynos-modem-9cee4624713f6a0029e451790c8d2e2db642e809.tar.gz
+f26ec9ba9cea0671e3d642db1733f5f9083ec65765872039b196f320a8e8f8696210bcbc051bf0932b8a2c6ab602590b9c72d7725bb0f1ed716fbaad28843b65  exynos-modem-eba1e23aea1be111aa30796cc84dc4678bae2b46.tar.gz
 f6e7ea677e08d47cbb10155ebb45ffbe064a9303bdac687b091f451df876b221ac7a80314cf1ca0086ec91f30c27fb9469a07ef989c1b93b2284e1bd9710943e  gipc-serve-uecap-fetch.patch
 7e28d42a2895902225774e8a90527493470d7760690078119c7aa2beab18f5cb8d144219f0d70cc7050db5e26ece4e067189035e3b2136242a111f2eae976fbc  gipc-uecap-type2-and-wrapper.patch
 e3e25178dd5b8d8667218ad74d4d58bdd4825b9b54f96b7edc6d15592851b6fa77678a1fca378b51b5fd1a0884a9d6dcb68ad682711bc9689aa861c90d33a462  gipc-serve-requested-block.patch
@@ -106,5 +139,5 @@ f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968a
 582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
 2567c643be561149c49526234f7538a6757659daac1b7ab853306cef60cb9ee41be50d20eb168b46be23de3b9e0b4e8aae65a08461fa0126ef9d5f5db29572e4  exynos-modem.service
 afdba8af1f0e3bb4634c229e5ce51d796468a42f7d032347eef074b9a2ef8b86ceda18dd8b6b4b87f795e6f340c6ba2256bddf084b6ef6d4fb9faa5fae11dc61  sit-proxy.service
-e501aad6278922796e53d6477148ce97885fa233433bfcfb8d9f28ece02034c841569748a25e93672926ad9f1bb327924017b38f19b04d7a7261d51135d609f4  99-google-komodo-modem.rules
+23bdc9d991952ac4d765efa99b1dcb2ef80160bf5da4d232f4e3783dc25e48306334aee8daa46da32f281fc4ff1d9c2134fc43ee6e32dc101555238de31d3ace  99-google-komodo-modem.rules
 "

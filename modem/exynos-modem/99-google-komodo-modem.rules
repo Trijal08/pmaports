@@ -21,3 +21,23 @@ ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
 # network. The plugin grabs it as ignored anyway; this stops ModemManager
 # probing it at all and leaves it free for manual use.
 ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ENV{ID_MM_PORT_IGNORE}="1"
+
+# Both logical SIM stacks are used. ModemManager groups ports by physdev, and
+# every port here hangs off the one /sys/devices/platform/modem node, so
+# without distinct grouping UIDs both SIT ports collapse into a single modem
+# and the plugin sees logical_stack = -1. Give each stack its own UID while
+# keeping the shared physical CP path for initialization and internet-data
+# ownership. $id is the matched s5xxx-modem parent, so the DRIVERS match is
+# required for it to be defined.
+#
+# CID 1-15 belong to SIT0 and CID 16-30 to SIT1; the netdev is rmnet(CID-1),
+# hence the rmnet0-14 / rmnet15-29 split. The AT port follows stack 0.
+ACTION!="add|change|move|bind", GOTO="google_komodo_modem_end"
+SUBSYSTEM!="wwan|net", GOTO="google_komodo_modem_end"
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit0", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0", ENV{ID_MM_SIT_LOGICAL_STACK}="0"
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit1", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack1", ENV{ID_MM_SIT_LOGICAL_STACK}="1"
+SUBSYSTEM=="net", DRIVERS=="s5xxx-modem", KERNEL=="rmnet[0-9]|rmnet1[0-4]", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0"
+SUBSYSTEM=="net", DRIVERS=="s5xxx-modem", KERNEL=="rmnet1[5-9]|rmnet2[0-9]", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack1"
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*at*", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0"
+
+LABEL="google_komodo_modem_end"
