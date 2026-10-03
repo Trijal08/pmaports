@@ -2,7 +2,7 @@ maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=device-google-caiman
 pkgdesc="Google Pixel 9 Pro"
 pkgver=1
-pkgrel=0
+pkgrel=2
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -16,6 +16,7 @@ depends="
 	firmware-google-caiman-modem
 	firmware-google-caiman-aoc
 	firmware-google-caiman-audio
+	firmware-google-caiman-mfc
 	alsa-ucm-conf-zumapro
 	linux-firmware-arm
 	linux-firmware-cirrus
@@ -25,6 +26,21 @@ depends="
 	modemmanager-samsung-sit
 	neard
 	postmarketos-base
+"
+
+# eSIM support. Pinned to the device because both halves are modem transport,
+# not a user preference, and no UI meta pulls either in.
+#
+# exynos-modem-polkit is the gate: without it sit-proxy defaults to --auth none
+# and serves only the root-only /run/sit-proxy/{0,1} sockets, so the desktop
+# backend gets EACCES on connect and the app reports "No eSIM support". The
+# drop-in sets SIT_PROXY_AUTH=polkit, which is what creates the 0.auth endpoint.
+#
+# lpa-gtk is the only GUI frontend for lpac; it pulls exynos-modem-lpa and the
+# patched lpac 2.3.0-r1 (stock r0 dies in euicc_init) in behind it.
+depends="$depends
+	exynos-modem-polkit
+	lpa-gtk
 "
 makedepends="devicepkg-dev"
 source="

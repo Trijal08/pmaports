@@ -2,7 +2,7 @@ maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=device-google-tegu
 pkgdesc="Google Pixel 9a"
 pkgver=1
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -13,6 +13,7 @@ depends="
 	firmware-google-tegu-brcm_a3
 	firmware-google-tegu-modem
 	firmware-google-tegu-aoc
+	firmware-google-tegu-mfc
 	alsa-ucm-conf-zumapro
 	linux-firmware-arm
 	linux-firmware-cirrus
