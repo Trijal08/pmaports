@@ -1,7 +1,7 @@
 # Maintainer: Trijal Saha <trijalsaha2012@gmail.com>
 pkgname=emulationstation
 pkgver=42_git20260917
-pkgrel=4
+pkgrel=5
 _commit="f25c4475a348f534de8ff724e9e42808b7a80a12"
 pkgdesc="Graphical emulator frontend, ArchR fork tuned for handheld consoles"
 url="https://github.com/archr-linux/emulationstation-next"
@@ -115,11 +115,25 @@ build() {
 	#
 	# GLES2 rather than GL: the RK3326 Mali runs through panfrost, and this
 	# is what ArchR ships for the same SoC.
-	# ENABLE_PULSE=OFF: it makes VolumeControl talk to a PulseAudio
-	# server, and this image has neither libpulse nor pipewire-pulse -
-	# the audio backend is PipeWire reached through its ALSA plugin. ES
-	# drives the hw:0 mixer directly instead, which is what the session
-	# script's AudioCard=hw:0 selects.
+	# ENABLE_PULSE=OFF: it makes VolumeControl talk to a PulseAudio server.
+	# pipewire-pulse IS present here (the socket is at
+	# $XDG_RUNTIME_DIR/pulse/native, and RetroArch's pulse driver uses it),
+	# so the old note here claiming otherwise was wrong - but ES driving
+	# the hw:0 mixer directly is still what we want, because that is what
+	# the session script's AudioCard=hw:0 selects.
+	# crossdirect puts its wrapper first on PATH, and gcc locates its own
+	# toolchain relative to argv[0] - so it looks for the LTO plugin under
+	# /native/usr/lib/crossdirect/libexec/gcc, which does not exist.
+	# Alpine's gcc is built with HAVE_LTO_PLUGIN=2 and hands the linker a
+	# plugin on every link, so even CMake's trivial compiler test dies:
+	#
+	#   cc: fatal error: '-fuse-linker-plugin', but liblto_plugin.so
+	#   not found
+	#
+	# Nothing here is built with LTO, so declining the plugin is exact.
+	# Same fix as main/libretro-flycast, which hit this at its final link.
+	export LDFLAGS="$LDFLAGS -fno-use-linker-plugin"
+
 	cmake -B build -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_INSTALL_PREFIX=/usr \
