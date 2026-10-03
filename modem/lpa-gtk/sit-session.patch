@@ -1,0 +1,262 @@
+--- a/src/esim.py
++++ b/src/esim.py
+@@ -13,6 +13,7 @@
+ import shutil
+ import subprocess
+ import time
++from .sit_session import SitSession, SitSessionError
+
+
+ class ESimError(Exception):
+@@ -155,6 +156,7 @@
+         MBIM = "mbim"
+         QMI = "qmi"
+         QMI_QRTR = "qmi_qrtr"
++        SIT = "sit"
+
+     @staticmethod
+     def get_operational_backends() -> list[ESimBackend]:
+@@ -163,6 +165,26 @@
+         """
+         if os.getenv("LPA_GTK_BACKEND") == "dummy":
+             return [DummyBackend(1), DummyBackend(2)]
++
++        # Keep one approved helper alive for this app. Do not probe the same
++        # eUICC repeatedly through the three upstream transport candidates.
++        if os.getenv("LPA_GTK_BACKEND") == "sit" or (
++                os.getenv("LPA_GTK_BACKEND") is None and
++                os.path.exists("/run/sit-proxy/0") and shutil.which("sit-lpa")):
++            session = None
++            try:
++                session = SitSession()
++                backends = [LpacBackend(slot, LpacBackend.Type.SIT, session)
++                            for slot in session.slots]
++                usable = [backend for backend in backends if backend.is_operational()]
++                if not usable:
++                    session.close()
++                return usable
++            except (SitSessionError, OSError, ValueError) as error:
++                if session:
++                    session.close()
++                print(f"Cannot initialize SIT eSIM session: {error}")
++                return []
+
+         backends = []
+         for slot in [1, 2]:
+@@ -265,10 +287,11 @@
+
+     LpacProgressTypes = LpacData | LpacProgress | LpacMisc
+
+-    def __init__(self, slot: int, backend_type: LpacBackend.Type):
++    def __init__(self, slot: int, backend_type: LpacBackend.Type, sit_session: SitSession | None = None):
+         """Initialize the lpac eSIM backend with the given slot number"""
+         self.slot = slot
+         self.backend_type = backend_type
++        self.sit_session = sit_session
+         self.lpac_exe = shutil.which("lpac")
+         if not self.lpac_exe:
+             raise ESimError("Required executable 'lpac' not found.")
+@@ -326,6 +349,18 @@
+         raise ESimError(f"Unknown lpac output type {data_type}")
+
+     def __run_lpac(self, lpac_args) -> dict:
++        if self.sit_session is not None:
++            try:
++                messages = list(self.sit_session.run_command(self.slot, lpac_args))
++            except SitSessionError as error:
++                raise ESimError(str(error)) from error
++            results = [message for message in messages if message.get("type") == "lpa"]
++            if len(results) != 1:
++                raise ESimError("Expected one lpac result")
++            res = self.__parse_output(results[0])
++            if not isinstance(res, LpacBackend.LpacData):
++                raise ESimError("Unexpected lpac result")
++            return res.data
+         try:
+             output = subprocess.check_output([self.lpac_exe] + lpac_args, env=self.__get_lpac_env())
+         except subprocess.CalledProcessError as e:
+@@ -336,6 +371,13 @@
+         return res.data
+
+     def __run_lpac_stream(self, lpac_args) -> Iterator[LpacProgressTypes]:
++        if self.sit_session is not None:
++            try:
++                for message in self.sit_session.run_command(self.slot, lpac_args):
++                    yield self.__parse_output(message)
++            except SitSessionError as error:
++                raise ESimError(str(error)) from error
++            return
+         with subprocess.Popen([self.lpac_exe] + lpac_args, env=self.__get_lpac_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
+             for line_obj in process.stdout:
+                 line = line_obj.decode('utf8')
+@@ -369,11 +411,47 @@
+         res = self.__run_lpac_stream(["profile", "download", "-a", activation_code])
+         return res
+
++    def __change_profile(self, action: str, iccid: str, state: ESimProfileState) -> None:
++        args = ["profile", action, iccid]
++        if self.backend_type != ESimBackend.Type.SIT:
++            self.__run_lpac(args)
++            return
++        # lpac 2.3.0 defaults refresh to zero. An embedded modem needs the
++        # refresh, and the card may acknowledge before the reset completes.
++        # Keep the notification worker out until profile queries settle.
++        with self.sit_session.lock:
++            self.__run_lpac(args + ["1"])
++            deadline = time.monotonic() + 15
++            matches = 0
++            last_error = None
++            for attempt in range(15):
++                if time.monotonic() >= deadline:
++                    break
++                time.sleep(1)
++                try:
++                    profiles = self.get_profiles()
++                except ESimError as error:
++                    # A card-level lpac failure during reset is retryable.
++                    # Loss of the approved helper is not: never reconnect it.
++                    process = self.sit_session.process
++                    if process is None or process.poll() is not None:
++                        raise
++                    last_error = error
++                    matches = 0
++                    continue
++                if any(p.iccid == iccid and p.state == state for p in profiles):
++                    matches += 1
++                    if matches == 2:
++                        return
++                else:
++                    matches = 0
++            raise ESimError("SIM refresh did not settle; refresh the profile list") from last_error
++
+     def enable_profile(self, iccid: str) -> None:
+-        self.__run_lpac(["profile", "enable", iccid])
++        self.__change_profile("enable", iccid, ESimProfileState.ENABLED)
+
+     def disable_profile(self, iccid: str) -> None:
+-        self.__run_lpac(["profile", "disable", iccid])
++        self.__change_profile("disable", iccid, ESimProfileState.DISABLED)
+
+     def delete_profile(self, iccid: str) -> None:
+         self.__run_lpac(["profile", "delete", iccid])
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -61,6 +61,7 @@
+ py_sources = [
+   '__init__.py',
+   'esim.py',
++  'sit_session.py',
+   'helpers.py',
+   'main.py',
+   'mainwindow.py',
+--- /dev/null
++++ b/src/sit_session.py
+@@ -0,0 +1,108 @@
++# SPDX-License-Identifier: GPL-3.0-only
++"""One unprivileged SIT helper per application, using private stdio pipes."""
++import atexit
++import json
++import os
++import shutil
++import subprocess
++import threading
++import weakref
++
++_sessions = weakref.WeakSet()
++MAX_LINE = 16 * 1024 * 1024
++
++
++class SitSessionError(RuntimeError):
++    pass
++
++
++class SitSession:
++    def __init__(self):
++        self.lock = threading.RLock()
++        self.process = None
++        executable = shutil.which("sit-lpa")
++        if not executable:
++            raise SitSessionError("The sit-lpa helper is not installed")
++        args = [executable, "--session"]
++        if os.path.exists("/run/sit-proxy/0.auth"):
++            args.append("--authorize")
++        self.process = subprocess.Popen(args, stdin=subprocess.PIPE,
++            stdout=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
++        _sessions.add(self)
++        try:
++            ready = self._read()
++            if ready.get("type") != "session" or ready.get("version") != 1:
++                payload = ready.get("payload", {})
++                raise SitSessionError(f"Cannot open modem session: {payload.get('data', ready)}")
++            self.slots = ready["slots"]
++            if not isinstance(self.slots, list) or any(type(n) is not int or n < 1 for n in self.slots):
++                raise SitSessionError("Invalid modem slot list")
++        except Exception:
++            self.close()
++            raise
++
++    def _read(self):
++        if self.process is None:
++            raise SitSessionError("Modem session closed; reopen the application")
++        line = self.process.stdout.readline(MAX_LINE + 1)
++        if not line:
++            raise SitSessionError("Modem session ended; reopen the application")
++        if len(line) > MAX_LINE:
++            raise SitSessionError("Modem session response is too large")
++        message = json.loads(line)
++        if not isinstance(message, dict):
++            raise SitSessionError("Invalid modem session response")
++        return message
++
++    def run_command(self, slot, args):
++        # Profile operations and the background notification worker must not
++        # interleave their APDU channels or consume each other's responses.
++        with self.lock:
++            finished = False
++            try:
++                if self.process is None:
++                    raise SitSessionError("Modem session closed; reopen the application")
++                self.process.stdin.write(json.dumps({"type": "command", "slot": slot, "args": args}) + "\n")
++                self.process.stdin.flush()
++                while True:
++                    message = self._read()
++                    if message.get("type") == "exit":
++                        finished = True
++                        if message.get("code") != 0:
++                            raise SitSessionError(f"lpac exited with status {message.get('code')}")
++                        return
++                    if message.get("type") not in ("lpa", "progress"):
++                        raise SitSessionError("Unexpected modem session message")
++                    yield message
++            except (OSError, ValueError) as error:
++                raise SitSessionError(str(error)) from error
++            finally:
++                # A cancelled consumer must not leave part of one reply for
++                # the next command. Fail closed instead of silently reopening.
++                if not finished:
++                    self.close()
++
++    def close(self):
++        process, self.process = self.process, None
++        if process is None:
++            return
++        try:
++            process.stdin.close()
++        except (OSError, ValueError):
++            pass
++        try:
++            process.wait(timeout=2)
++        except subprocess.TimeoutExpired:
++            process.terminate()
++            try:
++                process.wait(timeout=2)
++            except subprocess.TimeoutExpired:
++                process.kill()
++                process.wait()
++        process.stdout.close()
++
++
++@atexit.register
++def close_sessions():
++    for session in list(_sessions):
++        session.close()
