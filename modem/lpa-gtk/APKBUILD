@@ -1,0 +1,51 @@
+# Contributor: Luca Weiss <luca@lucaweiss.eu>
+# Maintainer: Steffen Deusch <steffen@deusch.me>
+pkgname=lpa-gtk
+pkgver=0.4
+pkgrel=3
+pkgdesc="Download and manage eSIM profiles"
+url="https://codeberg.org/lucaweiss/lpa-gtk"
+license="GPL-3.0-only"
+arch="noarch"
+depends="
+	gtk4.0
+	libadwaita
+	lpac
+	py3-gobject3
+	exynos-modem-lpa
+	sit-lpa-session=1
+	"
+checkdepends="appstream"
+makedepends="
+	blueprint-compiler
+	desktop-file-utils
+	gtk4.0-dev
+	libadwaita-dev
+	meson
+	"
+source="$pkgname-$pkgver.tar.gz::https://codeberg.org/lucaweiss/lpa-gtk/archive/$pkgver.tar.gz
+	sit-session.patch
+	check-session.py
+	"
+subpackages="$pkgname-pyc"
+builddir="$srcdir/$pkgname"
+
+build() {
+	abuild-meson . output
+	meson compile -C output
+}
+
+check() {
+	meson test --print-errorlogs -C output
+	python3 "$srcdir/check-session.py" "$builddir/src/sit_session.py"
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install -C output
+}
+
+sha512sums="
+c23b060c69670f2cb3fa42ed100f8476ce0a48523d007cbb8e14429e2c156663441f7847d599d8590293e14ecf22a9b65a9fc7ca390cc3812a62272708f88dda  lpa-gtk-0.4.tar.gz
+f19661c46a6cd124dabb5ea0f957dd2e6b3a57fdf84285559b4b38af7a5c1ecffb85b3fa6f12e5bd23297230fc0b44c4e39b7f2d0d82c87f41398a2961764cbf  sit-session.patch
+f1e3680f0d6108fcd50873203caf19148ebd8c6061552de365b681d7d11476543681aa350d0ed4b8fb2a12418c1da100eab286113ee9e2229bcbb19488f75792  check-session.py
+"
