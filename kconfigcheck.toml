@@ -373,7 +373,6 @@ ZRAM_BACKEND_ZSTD = "y"
 # netboot: https://postmarketos.org/netboot
 ["category:netboot".">=0.0.0"."all"]
 BLK_DEV_NBD = "m"
-["category:netboot".">=6.0"."all"]
 BLK_DEV_UBLK = "m"
 
 # wireguard: VPN software, also includes options for wg-quick
