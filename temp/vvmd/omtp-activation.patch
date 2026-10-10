@@ -1,0 +1,211 @@
+diff --git a/src/vvmutil.c b/src/vvmutil.c
+index 5f3e593..5cacf42 100644
+--- a/src/vvmutil.c
++++ b/src/vvmutil.c
+@@ -84,6 +84,74 @@ vvm_util_create_ios_status_sms (const char *carrier_prefix)
+   return g_strdup_printf ("STATE");
+ }
+ 
++/*
++ * The client type an OMTP request carries in "ct=".
++ *
++ * The spec only says the server uses it to identify the client, and that some
++ * servers require an agreed value. Android builds
++ * "<manufacturer>.<model>.<version>" with '=', ';', '.' and ' ' replaced by
++ * '_' inside each component and the whole thing kept under 30 characters, so
++ * follow that shape: a server that accepts an Android handset should accept
++ * this. Refer to Android's OmtpConstants.getClientType().
++ */
++static char *
++vvm_util_sanitize_component (const char *value,
++                             gsize       limit)
++{
++  g_autofree char *copy = NULL;
++  char *p;
++
++  if (value == NULL || *value == '\0')
++    return g_strdup ("unknown");
++
++  copy = g_strdup (value);
++  for (p = copy; *p != '\0'; p++) {
++    if (*p == '=' || *p == ';' || *p == '.' || *p == ' ' || g_ascii_iscntrl (*p))
++      *p = '_';
++  }
++  if (strlen (copy) > limit)
++    copy[limit] = '\0';
++
++  return g_steal_pointer (&copy);
++}
++
++static char *
++vvm_util_create_omtp_client_type (void)
++{
++  g_autofree char *model_raw = NULL;
++  g_autofree char *version_raw = NULL;
++  g_autofree char *manufacturer = NULL;
++  g_autofree char *version = NULL;
++  g_autofree char *model = NULL;
++  const char *rest;
++  gsize model_limit;
++
++  /* The device tree model reads like "Google Pixel 9 Pro XL": the first word
++   * is the manufacturer and the remainder is the model, which is how Android
++   * reports the same hardware. */
++  if (!g_file_get_contents ("/proc/device-tree/model", &model_raw, NULL, NULL))
++    model_raw = g_strdup (g_get_host_name ());
++
++  version_raw = g_get_os_info (G_OS_INFO_KEY_VERSION_ID);
++
++  rest = strchr (model_raw, ' ');
++  if (rest != NULL) {
++    manufacturer = vvm_util_sanitize_component (model_raw, rest - model_raw);
++    manufacturer[MIN (strlen (manufacturer), 12)] = '\0';
++    model_raw[rest - model_raw] = '\0';
++    rest++;
++  } else {
++    manufacturer = vvm_util_sanitize_component ("unknown", 12);
++    rest = model_raw;
++  }
++
++  version = vvm_util_sanitize_component (version_raw, 8);
++  model_limit = 28 - strlen (manufacturer) - strlen (version);
++  model = vvm_util_sanitize_component (rest, model_limit);
++
++  return g_strdup_printf ("%s.%s.%s", manufacturer, model, version);
++}
++
+ char *
+ vvm_util_create_deactivate_sms (const char *carrier_prefix,
+                                 const char *vvm_type)
+@@ -92,20 +160,24 @@ vvm_util_create_deactivate_sms (const char *carrier_prefix,
+     return g_strdup_printf ("%s%s", DEACTIVATE_SMS_PREFIX, CCVM_SUFFIX);
+   else if (g_strcmp0 (vvm_type, "otmp") == 0)
+     /*
+-     * Refer to "OMTP_VVM_Specification v1.3, Section 2.9.2.3
+-     * It should look similar to: "Deactivate:pv=<value>;ct=<value>;pt=<value>;<Clientprefix>:"
+-     * message = g_strdup("Deactivate:pv=<value>;ct=<value>;pt=<value>;<Clientprefix>:");
+-     * message = g_strdup("%s%s%s;%s<value>;%s<value>;<Clientprefix>:", DEACTIVATE_SMS_PREFIX, PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_3, CLIENT_TYPE_PREFIX, TERMINAL_DESTINATION_PORT_NUMBER_PREFIX);
+-     * pv should be "13", I do not know the values for "ct" and "pt"
+-     * I think if <Clientprefix> is default (//VVM), it can be "Deactivate:pv=<value>;ct=<value>;pt=<value>"
+-     * message = g_strdup("Deactivate:pv=<value>;ct=<value>;pt=<value>");
+-     * or with vvmutil.h
+-     * message = g_strdup("%s%s%s;%s<value>;%s<value>", DEACTIVATE_SMS_PREFIX, PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_3, CLIENT_TYPE_PREFIX, TERMINAL_DESTINATION_PORT_NUMBER_PREFIX);
+-     * In looking at Android: https://cs.android.com/android/platform/superproject/+/master:packages/apps/Dialer/java/com/android/voicemail/impl/sms/OmtpMessageSender.java
+-     * They did not implement how to activate nor deactivate OMTP.
+-     * Therefore, I doubt any carrier actually implements this.
++     * OMTP v1.3 section 2.9.2.3. Android implements this in
++     * OmtpStandardMessageSender.requestVvmDeactivation(): the protocol version
++     * and client type are always sent, and nothing else is -- the port and the
++     * client prefix belong to the activation and status requests only.
++     *
++     * The earlier note here said Android had not implemented activate or
++     * deactivate. That came from reading OmtpMessageSender, which is the base
++     * class whose methods are empty; the implementations are in its subclass
++     * OmtpStandardMessageSender, and OmtpProtocol drives it at v1.1.
+      */
+-    g_warning ("I do not know how to unsubscribe from an OMTP VVM service!");
++    {
++      g_autofree char *client_type = vvm_util_create_omtp_client_type ();
++
++      return g_strdup_printf ("%s%s%s;%s%s",
++                              DEACTIVATE_SMS_PREFIX,
++                              PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_1,
++                              CLIENT_TYPE_PREFIX, client_type);
++    }
+   else if (g_strcmp0 (vvm_type, "AT&TUSAProprietary") == 0)
+     g_critical ("I do not know how to unsubscribe from AT&T USA!");
+   else if (g_strcmp0 (vvm_type, "FreeMobileProprietary") == 0)
+@@ -126,21 +198,26 @@ vvm_util_create_activate_sms (const char *carrier_prefix,
+   if (g_strcmp0 (vvm_type, "cvvm") == 0)
+     return g_strdup_printf ("%s%s", ACTIVATE_SMS_PREFIX, CCVM_SUFFIX);
+   else if (g_strcmp0 (vvm_type, "otmp") == 0)
+-    /* Refer to "OMTP_VVM_Specification v1.3, Section 2.9.2.2
+-     * It should look similar to: "Activate:pv=<value>;ct=<value>;pt=<value>;<Clientprefix>:"
+-     * message = g_strdup("Activate:pv=<value>;ct=<value>;pt=<value>;<Clientprefix>:");
+-     * or with vvmutil.h
+-     * message = g_strdup("%s%s%s;%s<value>;%s<value>;<Clientprefix>:", ACTIVATE_SMS_PREFIX, PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_3, CLIENT_TYPE_PREFIX, TERMINAL_DESTINATION_PORT_NUMBER_PREFIX);
+-     * pv should be "13", I do not know the values for "ct" and "pt"
+-     * I think if <Clientprefix> is default (//VVM), it can be:"Activate:pv=<value>;ct=<value>;pt=<value>"
+-     * message = g_strdup("Activate:pv=<value>;ct=<value>;pt=<value>");
+-     * or with vvmutil.h
+-     * message = g_strdup("%s%s%s;%s<value>;%s<value>", ACTIVATE_SMS_PREFIX, PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_3, CLIENT_TYPE_PREFIX, TERMINAL_DESTINATION_PORT_NUMBER_PREFIX);
+-     * In looking at Android: https://cs.android.com/android/platform/superproject/+/master:packages/apps/Dialer/java/com/android/voicemail/impl/sms/OmtpMessageSender.java
+-     * They did not implement how to activate nor deactivate OMTP.
+-     * Therefore, I doubt any carrier actually implements this.
++    /*
++     * OMTP v1.3 section 2.9.2.2, as Android's
++     * OmtpStandardMessageSender.requestVvmActivation() builds it:
++     *
++     *   v1.1: Activate:pv=11;ct=<client type>
++     *   v1.2, v1.3: Activate:pv=<ver>;ct=<client type>;pt=<port>;<prefix>
++     *
++     * OmtpProtocol constructs the sender at v1.1 with no client prefix, so
++     * that is what a carrier configured for plain "omtp" expects, and it needs
++     * neither the port nor the prefix. Confirmed against TELUS (302220), which
++     * answers this with "//VVM:STATUS:st=..;rc=..".
+      */
+-    g_warning ("I do not know how to subscribe to an OMTP VVM service!");
++    {
++      g_autofree char *client_type = vvm_util_create_omtp_client_type ();
++
++      return g_strdup_printf ("%s%s%s;%s%s",
++                              ACTIVATE_SMS_PREFIX,
++                              PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_1,
++                              CLIENT_TYPE_PREFIX, client_type);
++    }
+   else if (g_strcmp0 (vvm_type, "AT&TUSAProprietary") == 0)
+     return vvm_util_create_att_usa_status_sms (carrier_prefix);
+   else if (g_strcmp0 (vvm_type, "FreeMobileProprietary") == 0)
+@@ -166,21 +243,13 @@ vvm_util_create_status_sms (const char *carrier_prefix,
+   if (g_strcmp0 (vvm_type, "cvvm") == 0)
+     return g_strdup_printf ("%s%s", STATUS_SMS_PREFIX, CCVM_SUFFIX);
+   else if (g_strcmp0 (vvm_type, "otmp") == 0)
+-    /* Refer to "OMTP_VVM_Specification v1.3, Section 2.9.2.1
+-     * The message should look similar to "STATUS:pv=<value>;ct=<value>;pt=<value>;<Clientprefix>:"
+-     * message = g_strdup("STATUS:pv=<value>;ct=<value>;pt=<value>;<Clientprefix>:");
+-     * or with vvmutil.h
+-     * message = g_strdup("%s%s%s;%s<value>;%s<value>;<Clientprefix>:", STATUS_SMS_PREFIX, PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_3, CLIENT_TYPE_PREFIX, TERMINAL_DESTINATION_PORT_NUMBER_PREFIX);
+-     * pv should be "13", I do not know the values for "ct" and "pt"
+-     * I think if <Clientprefix> is default (//VVM), it can be: "STATUS:pv=<value>;ct=<value>;pt=<value>"
+-     * message = g_strdup("STATUS:pv=<value>;ct=<value>;pt=<value>");
+-     * or with vvmutil.h
+-     * message = g_strdup("%s%s%s;%s<value>;%s<value>;", STATUS_SMS_PREFIX, PROTOCOL_VERSION_PREFIX, PROTOCOL_VERSION_1_3, CLIENT_TYPE_PREFIX, TERMINAL_DESTINATION_PORT_NUMBER_PREFIX);
+-     * In looking at Android: https://cs.android.com/android/platform/superproject/+/master:packages/apps/Dialer/java/com/android/voicemail/impl/sms/OmtpMessageSender.java
+-     * They did not implement how to check the status of OMTP.
+-     * Therefore, I doubt any carrier actually implements this.
++    /*
++     * OMTP v1.3 section 2.9.2.1. Android sends the bare request at v1.1 and
++     * v1.2 and only appends pv/ct/pt/prefix at v1.3 -- see
++     * OmtpStandardMessageSender.requestVvmStatus(). Since OmtpProtocol runs at
++     * v1.1, the status request is the single word.
+      */
+-    g_warning ("I do not know how check the status of an OMTP VVM service!");
++    return g_strdup (OMTP_STATUS_REQUEST);
+   else if (g_strcmp0 (vvm_type, "AT&TUSAProprietary") == 0)
+     return vvm_util_create_att_usa_status_sms (carrier_prefix);
+   else if (g_strcmp0 (vvm_type, "FreeMobileProprietary") == 0)
+diff --git a/src/vvmutil.h b/src/vvmutil.h
+index 142af24..7f7e3be 100644
+--- a/src/vvmutil.h
++++ b/src/vvmutil.h
+@@ -30,14 +30,18 @@
+ #define ACTIVATE_SMS_PREFIX                             "Activate:"
+ #define DEACTIVATE_SMS_PREFIX                           "Deactivate:"
+ #define STATUS_SMS_PREFIX                               "STATUS:"
++/* OMTP spells its requests this way, and the v1.1 status request carries no
++ * fields at all -- refer to Android's OmtpConstants.STATUS_REQUEST and
++ * OmtpStandardMessageSender.requestVvmStatus(). */
++#define OMTP_STATUS_REQUEST                             "Status"
+ #define PROTOCOL_VERSION_PREFIX                         "pv="
+ #define CLIENT_TYPE_PREFIX                              "ct="
+ #define TERMINAL_DESTINATION_PORT_NUMBER_PREFIX         "pt="
+ 
+ //Protocol version 1.1
+-#define PROTOCOL_VERSION_1_1 "13"
++#define PROTOCOL_VERSION_1_1 "11"
+ //Protocol version 1.2
+-#define PROTOCOL_VERSION_1_2 "13"
++#define PROTOCOL_VERSION_1_2 "12"
+ //Protocol version 1.3
+ #define PROTOCOL_VERSION_1_3 "13"
+ 
