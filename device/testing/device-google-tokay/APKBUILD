@@ -42,10 +42,11 @@ depends="$depends
 	lpa-gtk
 "
 makedepends="devicepkg-dev"
-subpackages="$pkgname-audio"
+subpackages="$pkgname-audio $pkgname-cutouts"
 source="
 	deviceinfo
 	kernel-cmdline.conf
+	gmobile-cutout.conf
 "
 
 build() {
@@ -79,7 +80,31 @@ audio() {
 	mkdir -p "$subpkgdir"
 }
 
+# The display's cutout, for gmobile. It compiles its panels into the library as
+# GResources and reads no directory at runtime, so a panel shipped as a file is
+# found only through GLib's resource overlay -- hence the environment drop-in
+# next to it. Without a panel the shell has no cutout to lay out around and
+# leaves the clock centered underneath it.
+#
+# Named after the SoC-prefixed compatible, as upstream's own Google panels are;
+# gmobile walks every compatible the device tree lists, so either name resolves.
+# That name carries a comma and abuild forbids one in a source file name, so the
+# file is carried under a plain name and renamed on the way in.
+cutouts() {
+	install_if="$pkgname=$pkgver-r$pkgrel gmobile"
+	pkgdesc="$pkgdesc (display cutout)"
+
+	install -Dm644 "$srcdir"/gmobile-cutout.conf \
+		"$subpkgdir"/usr/share/gmobile/display-panels/google,zumapro-tokay.json
+
+	mkdir -p "$subpkgdir"/etc/environment.d
+	printf '%s\n' \
+		'G_RESOURCE_OVERLAYS=/mobi/phosh/gmobile/devices/display-panels=/usr/share/gmobile/display-panels' \
+		> "$subpkgdir"/etc/environment.d/90-gmobile-cutouts.conf
+}
+
 sha512sums="
 9c5d6a29ebc2f26d13a914a3d0d8638643529358210b706076478ee6aa0bb9d10f5ac012862eeae1b6af71f0149ca66a6cbad7517fe1ea69cbc2c2b40f98b9b0  deviceinfo
 6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
+59b3d0410cc7dc7cb2b3b411dadc1f52d116768c83b8fb787a858b72ec6a5120d31448c843dc70910e1d7101b60387f5ddc7699e3a1ede60bcad19fc98944ad8  gmobile-cutout.conf
 "
