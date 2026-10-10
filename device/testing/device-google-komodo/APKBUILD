@@ -43,11 +43,12 @@ depends="$depends
 	lpa-gtk
 "
 makedepends="devicepkg-dev"
-subpackages="$pkgname-audio $pkgname-plasma-mobile:plasma_mobile"
+subpackages="$pkgname-audio $pkgname-cutouts $pkgname-plasma-mobile:plasma_mobile"
 source="
 	deviceinfo
 	kernel-cmdline.conf
 	plasma-mobile-preset.conf
+	gmobile-cutout.conf
 "
 
 build() {
@@ -81,6 +82,29 @@ audio() {
 	mkdir -p "$subpkgdir"
 }
 
+# The display's cutout, for gmobile. It compiles its panels into the library as
+# GResources and reads no directory at runtime, so a panel shipped as a file is
+# found only through GLib's resource overlay -- hence the environment drop-in
+# next to it. Without a panel the shell has no cutout to lay out around and
+# leaves the clock centered underneath it.
+#
+# Named after the SoC-prefixed compatible, as upstream's own Google panels are;
+# gmobile walks every compatible the device tree lists, so either name resolves.
+# That name carries a comma and abuild forbids one in a source file name, so the
+# file is carried under a plain name and renamed on the way in.
+cutouts() {
+	install_if="$pkgname=$pkgver-r$pkgrel gmobile"
+	pkgdesc="$pkgdesc (display cutout)"
+
+	install -Dm644 "$srcdir"/gmobile-cutout.conf \
+		"$subpkgdir"/usr/share/gmobile/display-panels/google,zumapro-komodo.json
+
+	mkdir -p "$subpkgdir"/etc/environment.d
+	printf '%s\n' \
+		'G_RESOURCE_OVERLAYS=/mobi/phosh/gmobile/devices/display-panels=/usr/share/gmobile/display-panels' \
+		> "$subpkgdir"/etc/environment.d/90-gmobile-cutouts.conf
+}
+
 plasma_mobile() {
 	install_if="$pkgname=$pkgver-r$pkgrel postmarketos-ui-plasma-mobile"
 
@@ -97,4 +121,5 @@ sha512sums="
 9b6da6cecf2210e818d56e723ea0f320a14d341053a9ca7ea92315ababd3e9970a0255de086c531a1d8182e6a00947c2b92c2ae38f4ad06201d4dae9a8926a0f  deviceinfo
 6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
 ff68c58b04ebbfeaa342d84c7b6d2b5df928561880f730eddc4cc90d944730005baa17da2bf90c82e1fc44333859ee20c6637945e03e1d1e7c8cd5fb52454fb2  plasma-mobile-preset.conf
+fb981df1eb1a296c03835e5afe0ddc22d44d92b8844135471d5d0d843c79b7a95e3c42a1967283a8365e095af5034213c99c9dfecb8b7a88bb56c26daaac797c  gmobile-cutout.conf
 "
