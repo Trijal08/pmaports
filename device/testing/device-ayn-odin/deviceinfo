@@ -13,7 +13,6 @@ deviceinfo_arch="aarch64"
 
 # Device related
 deviceinfo_chassis="tablet"
-deviceinfo_external_storage="true"
 deviceinfo_drm="true"
 
 # Bootloader related
