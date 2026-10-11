@@ -2,7 +2,7 @@ maintainer="Antoine Martin (ayakael) <dev@ayakael.net>"
 pkgname=linux-postmarketos-rockchip
 pkgver=7.3.1
 _kernver=${pkgver%.*}
-pkgrel=0
+pkgrel=1
 pkgdesc="Mainline kernel for rockchip devices"
 arch="aarch64"
 _carch="arm64"
@@ -25,6 +25,7 @@ makedepends="
 	elfutils-dev
 	findutils
 	flex
+	gzip
 	kmod
 	linux-headers
 	lld
@@ -42,8 +43,15 @@ makedepends="
 	zstd
 "
 # to allow A/B comparison testing
-replaces="linux-pine64-pinenote"
-provides="linux-pine64-pinenote=$pkgver-r$pkgrel"
+
+replaces="
+	linux-pine64-pinenote
+	linux-clockworkpi-uconsole-radxa-cm5
+	"
+provides="
+	linux-pine64-pinenote=$pkgver-r$pkgrel
+	linux-clockworkpi-uconsole-radxa-cm5=$pkgver-r$pkgrel
+	"
 
 # Source
 _config="config-$_flavor.$arch"
@@ -56,6 +64,7 @@ source="
 	https://cdn.kernel.org/pub/linux/kernel/v${pkgver%%.*}.x/linux-$_kernver.tar.xz
 	rk3566-pinenote-support.patch
 	rk3566-pinenote-ultra-suspend.patch
+	rk3588-uconsole-support.patch
 	$_config
 "
 builddir="$srcdir"/linux-$_kernver
@@ -106,5 +115,6 @@ sha512sums="
 14b99ea7cc2adc0798a183ac5f3e184587f2496c3b2d1d53b625574389891c69e8be375b5d03875fe859b09ac9314aa15da604087274ba815671135bd6a0e590  linux-7.3.tar.xz
 dcfd10710dff4d49d9b03eb9e64f3754f274b39dc216de5d814e1ad43ed120799f31ea892efe0862aeb75d18c36c404e46673c26e3a88c1635ae8c76faf7b22f  rk3566-pinenote-support.patch
 bcb43e41178eceb20713720644afca63715d6a17a5c3fbd2b6cec43be173d2327e004f569deb953a2bd5a0566e1773a79ad5ad7ce5f30f3942d1e0978693cee8  rk3566-pinenote-ultra-suspend.patch
-cfb47759aa6a472c86c290c7a21a2d642dd617c8d19fc4e784392fd09dc52e3091129f367ed769198afed84b9916f1d1dc218c8b6dc43e2e1f6ec5cc55e41a7c  config-postmarketos-rockchip.aarch64
+b1ad7471b5801fd315996dc406bf89ec841e3e6b13c8a067f900d9740ca107c5df76795edf8e4aae1597ee2703674ba469d53a804ba61be083c135e6af161fc7  rk3588-uconsole-support.patch
+a0df19e6e30aaeba025f48806addb75aafd003a9ac9309a63b474788558afce1925766aa4482432b9abc32f9376ba94fc80a9b866adb488841677c8696f45d81  config-postmarketos-rockchip.aarch64
 "
