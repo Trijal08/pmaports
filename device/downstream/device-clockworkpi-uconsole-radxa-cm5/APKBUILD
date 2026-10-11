@@ -1,18 +1,15 @@
-# Reference: <https://postmarketos.org/devicepkg>
+# Reference: <https://nura.eco/devicepkg>
 maintainer="Antoine Martin (ayakael) <dev@ayakael.net>"
 pkgname=device-clockworkpi-uconsole-radxa-cm5
 pkgdesc="Clockwork Tech ClockworkPi uConsole Radxa CM5"
-pkgver=7
-_commit=2e8040ec92f85e3d43caf3e44557cb0659db4531
-_dtso_commit=c2204834e1d7d0acfd64e1b7874d432bc142f1a4
+pkgver=8
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
 options="!check !archcheck"
-install="$pkgname-openrc.post-install $pkgname-openrc.post-upgrade"
 depends="
-	linux-clockworkpi-uconsole-radxa-cm5
+	linux-postmarketos-rockchip
 	postmarketos-base
 	u-boot-clockworkpi-uconsole-radxa-cm5
 "
@@ -20,7 +17,6 @@ makedepends="
 	devicepkg-dev
 	"
 subpackages="
-	$pkgname-openrc
 	$pkgname-x11
 "
 source="
@@ -31,6 +27,8 @@ source="
 	modprobe.conf
 	partition-table.txt
 	xorg.conf
+	cwu50-init.sh
+	gunzip-vmlinuz.sh
 "
 build() {
 	devicepkg_build $startdir $pkgname
@@ -44,20 +42,30 @@ x11() {
 
 package() {
 	devicepkg_package $startdir $pkgname
-}
 
-openrc() {
-	depends=openrc
-	install_if="$pkgname=$pkgver-r$pkgrel openrc"
-	mkdir -p "$subpkgdir"
+	# On the first pre-enable after cold probe, the DSI2 command interface
+	# comes up wedged. Every DCS write of the panel init sequence times out, so
+	# the panel is never initialised. The post_disable path performs a full
+	# controller/PHY reset, so a second enable works perfectly.
+	install -Dm755 "$srcdir"/cwu50-init.sh \
+		-t "$pkgdir"/usr/share/mkinitfs/hooks/
+
+	# Rockchip u-boot does not support compressed kernels. Boot-deploy hook
+	# makes sure it is gunzipped. Kernel is compressed because other devices it
+	# supports has smaller boot partitions. This is a workaround until we move
+	# to mainline u-boot that is a work in progress.
+	install -Dm755 "$srcdir"/gunzip-vmlinuz.sh \
+		-t "$pkgdir"/usr/share/boot-deploy/hooks/
 }
 
 sha512sums="
-1c39895682e8c28ad80a7fe7d62e23fc34510502efd09c85117812e882c6fe4094191852346162550fcbcfb10d4a5b07db85f5671d016ff62bbe16f90cfb85c2  deviceinfo
-fa6332b91b62572528b1f919370382d67f521b0a65c3c9f416df67545ebae7b01f31729340a42e656b5589cdbde676ec8fe0eb9537a34e02ec20f5309bf43b12  kernel-cmdline.conf
-85d573bfd51ac4aa502336452b0384af77b6ec095f5c4760e8f287b8452b3ccb4521051bc01c53fa0856440d52231f535f3f0258d62ad578161ad464344413e9  modules-initfs
+8755d95cfded8d92aecd6f489ac3b8bb4cce30eebf4438dbf9a4adf05922a6829945c1db22765150eeeb57cab6e0d344189017607e6e11f7c99b37d63d3039f4  deviceinfo
+ac9d5989fab9960946f6906132410a30335001912fd171d198754c70991f7ade58533d66fc816489e5c1fa18f888413ac50d83a14e895ec7fcade8182055015f  kernel-cmdline.conf
+fa605937ecc767f954e6801d97057c27740144d9f6b1ba2c15bfff98d33338fceaa5d07c3c56c3ac3a2899dee858deb3465b8af3d0fa3d2c0263c582729cd472  modules-initfs
 642cdb1b4ac02b8c3ab7b72f4eeef615ac4911b42bcd845b54305f0ff64c07b86f4a807a97d395cb6c0cd0a5f5eed15e68d9e4ccb69db8e38fb65c8be4acaeeb  modules-load.conf
 a5324ed5118168b846d359dc2c8e76ccdc624003d157a28e4c9728ddedd9b52c6deb95af9c3a9d94faf52413f2f830dc45ec6c0093458d27149ef17de5dceef5  modprobe.conf
 da2656ecb5f1a88c3b85a973adae0a11e48d4cb32ea7465076827a883e0f74fde4500c03edd4de66a6bf0af2da196f2210a02a1297f360d77bd70af4c21ae5dd  partition-table.txt
 939cb4ca50e0f54258dd92bdfbf91e6fa7b33b386022d058ba0d4b4e4f6d855cba9f5fffda0652f18c8b9b95d5dbbfc766e0931f0de53841f96d9d8975bf27e7  xorg.conf
+2c73f662b1c4a9f7ec07c60f54331a2534b261b66b5c99a018eaccb314c0e2437f7a6290e0bd07a3c2093cf7dbcb2a669c39ccafe3c2ff0b505d6af9af62f89b  cwu50-init.sh
+6ef912bcf4e09d248dc93b0be8d98e0c720b497892b50e8f0ab076032cccf317f650126cef4a9b48ebbe573255433f87a9a3f9799dca35e492af8933177a1c98  gunzip-vmlinuz.sh
 "

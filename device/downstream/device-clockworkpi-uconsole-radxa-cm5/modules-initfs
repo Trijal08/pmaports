@@ -1,2 +1,10 @@
 panel_cwu50
 ocp8178_bl
+axp20x_battery
+axp20x_ac_power
+axp20x_usb_power
+axp20x_adc
+axp20x-pek
+ti-adc081c
+pinctrl-rk805
+pinctrl-axp209
