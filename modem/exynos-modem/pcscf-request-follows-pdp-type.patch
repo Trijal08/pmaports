@@ -1,0 +1,181 @@
+Ask only for the P-CSCF families the PDN will have
+
+A `DNN=ims` context on an IPv6 PDN that asks for both P-CSCF families is
+refused by the CP with MATCH_ALL_RULE_NOT_ALLOWED (2253) -- the same answer it
+gives when no URSP rule matched at all, which is why this looked like a network
+policy problem for a month. It is not: the request is one the network cannot
+answer and the CP never forwards it.
+
+The whole IMS context was compared byte for byte against this modem's own
+Android, captured off /proc/sitdump mid-registration. Every other field already
+matched -- cid 2, rat 14, apn type 1, pdp 2, apn_types 0x40, version 2,
+sd/mapped_sd -1, match_all 1, td_mask DNN, dnn 'ims' -- and `@0xdb` was the one
+byte that differed: Android sends 2 where we sent 3.
+
+So derive it from the PDP type everywhere rather than hardcoding it, which is
+what the vendor does: v4 asks for 1, v6 for 2, v4v6 for 3. The attach request
+follows the same rule, and it matters there too now that the attach APN is the
+carrier's own entry rather than the IMS APN -- Fizz attaches IPv4 on 'mobile.bm'
+and was asking for v6 proxies it could not be given.
+
+--- a/crates/samsung-sit/src/builders.rs
++++ b/crates/samsung-sit/src/builders.rs
+--- a/crates/samsung-sit/src/builders.rs
++++ b/crates/samsung-sit/src/builders.rs
+@@ -81,17 +81,37 @@
+ /// The vendor sends 0 unless the APN is IMS or emergency capable, which is why
+ /// an ordinary internet context asks for none.
+ const PCSCF_REQUEST_NONE: u8 = 0;
++const PCSCF_REQUEST_V4: u8 = 1;
++const PCSCF_REQUEST_V6: u8 = 2;
+ const PCSCF_REQUEST_BOTH: u8 = 3;
+ 
++/// A P-CSCF request names the address families the PDN itself will have, never
++/// more. Asking for a family the PDN does not carry is a request the network
++/// cannot answer, and this CP does not let it reach the network: a `DNN=ims`
++/// context on an IPv6 PDN asking for both families is refused locally with
++/// MATCH_ALL_RULE_NOT_ALLOWED (2253) -- the same answer it gives when no URSP
++/// rule matched at all, which is what made this look like a policy problem for
++/// a month. Captured from this modem's own Android, the IMS context on Telus,
++/// whose carrier record makes `ims` IPv6, sends `@0xda = 2` with `@0xdb = 2`;
++/// that byte pair is the whole difference between a context the CP forwards
++/// and one it refuses.
++fn pcscf_for_pdp(pdp: PdpType) -> u8 {
++    match pdp {
++        PdpType::Ipv4 => PCSCF_REQUEST_V4,
++        PdpType::Ipv6 => PCSCF_REQUEST_V6,
++        PdpType::Ipv4v6 => PCSCF_REQUEST_BOTH,
++    }
++}
++
+ /// Both the CP's apn-type byte and the P-CSCF request follow from what the
+ /// context is *for*, so the RIL derives them from the same bitmask rather than
+ /// taking them separately (`GetProtocolApnType`, `GetPcscfReqType`). Emergency
+ /// wins over IMS where an APN claims both, matching the RIL's test order.
+-fn apn_purpose(apn_types: u32) -> (u8, u8) {
++fn apn_purpose(apn_types: u32, pdp: PdpType) -> (u8, u8) {
+     if apn_types & apn_type::EMERGENCY != 0 {
+-        (SIT_APN_TYPE_EMERGENCY, PCSCF_REQUEST_BOTH)
++        (SIT_APN_TYPE_EMERGENCY, pcscf_for_pdp(pdp))
+     } else if apn_types & apn_type::IMS != 0 {
+-        (SIT_APN_TYPE_IMS, PCSCF_REQUEST_BOTH)
++        (SIT_APN_TYPE_IMS, pcscf_for_pdp(pdp))
+     } else {
+         (SIT_APN_TYPE_NORMAL, PCSCF_REQUEST_NONE)
+     }
+@@ -341,6 +361,15 @@
+ ///
+ /// Asking costs nothing on an attach that is not IMS: the network returns no
+ /// proxies and the slots stay zero, exactly as they do today.
++///
++/// It no longer asks at all, which is what this modem's own Android does: its
++/// attach carries pcscf 0 on both stacks, captured off /proc/sitdump. Asking
++/// was right only while the attach APN was the IMS APN, because then the
++/// attach *was* the IMS PDN and its PCO was the only chance of being given
++/// proxies. The attach APN is the carrier's own entry now, the network hands
++/// out no proxies for it either way -- its granted context carries DNS and no
++/// P-CSCF -- and a non-IMS attach asking for IMS proxies is a request Android
++/// never makes.
+ pub fn build_set_initial_attach_apn(
+     token: u16,
+     apn: &str,
+@@ -371,10 +400,18 @@
+         password: check_credential(auth.password, "APN password")?,
+         auth: auth.auth as u8,
+         pdp_type: pdp as u8,
+-        pcscf_request: PCSCF_REQUEST_BOTH,
++        pcscf_request: PCSCF_REQUEST_NONE,
+         _unmapped: [0u8; 28],
+-        roaming_pdp_type: pdp as u8,
+-        roaming_pcscf_request: PCSCF_REQUEST_BOTH,
++        /*
++         * IPv4 while roaming, whatever the home protocol is, which is what
++         * Android sends on both of this modem's stacks: Telus attaches IPv4v6
++         * and Fizz IPv4, and both carry a roaming protocol of 1. The carrier
++         * record's own roaming column says 3 for Telus, so Android is not
++         * reading it either -- and mirroring the home type, as this did, left
++         * the attach the last request still differing from Android's.
++         */
++        roaming_pdp_type: PdpType::Ipv4 as u8,
++        roaming_pcscf_request: PCSCF_REQUEST_NONE,
+         _reserved: 0,
+     };
+     Ok(frame_header(
+@@ -466,7 +503,7 @@
+     auth: &ApnAuth,
+ ) -> Result<Vec<u8>, SitError> {
+     let apn = check_apn(apn)?;
+-    let (sit_apn_type, pcscf_request) = apn_purpose(apn_types);
++    let (sit_apn_type, pcscf_request) = apn_purpose(apn_types, pdp);
+     let request = SetupDataCallRequest {
+         cid,
+         rat: RAT_LTE,
+@@ -701,7 +738,8 @@
+         assert_eq!(second[12], 16);
+         assert_eq!(&first[13..], &second[13..]);
+         assert_eq!(second[218], 3);
+-        assert_eq!(second[248], 3);
++        // @0xf8 roaming protocol: IPv4 regardless of the home protocol.
++        assert_eq!(second[248], PdpType::Ipv4 as u8);
+         assert!(build_set_initial_attach_apn_for_stack(1, 2, "wbdata", PdpType::Ipv4v6, &auth).is_err());
+         assert_eq!(build_set_modem_config_count(1, 1).unwrap(), build_set_modem_config(1));
+         assert_eq!(build_set_modem_config_count(1, 2).unwrap()[12], 1);
+@@ -897,8 +935,6 @@
+     /// `internet` context's 2.
+     #[test]
+     fn an_ims_context_asks_for_proxies_and_its_own_cid() {
+-        // Downstream asks for both families even though this network grants a
+-        // v6-only IMS PDN, so the request says 3 and the response says 2.
+         let ims = build_setup_data_call(1, 3, "ims", PdpType::Ipv4v6, apn_type::IMS, &ApnAuth::default()).unwrap();
+         assert_eq!(ims[0x0c], 3); // cid, the caller's to pick
+         assert_eq!(ims[0xda], 3);
+@@ -917,6 +953,37 @@
+         assert_eq!(sos[0xdb], PCSCF_REQUEST_BOTH);
+     }
+ 
++    /// A P-CSCF request never names a family the PDN will not have. Pinned
++    /// against the captured `ims` context on a carrier whose record makes the
++    /// APN IPv6: `@0xda = 2` and `@0xdb = 2` together. Asking for both there is
++    /// refused by the CP with MATCH_ALL_RULE_NOT_ALLOWED.
++    #[test]
++    fn the_pcscf_request_follows_the_pdp_type() {
++        for (pdp, want) in [
++            (PdpType::Ipv6, PCSCF_REQUEST_V6),
++            (PdpType::Ipv4, PCSCF_REQUEST_V4),
++            (PdpType::Ipv4v6, PCSCF_REQUEST_BOTH),
++        ] {
++            let ims = build_setup_data_call(1, 2, "ims", pdp, apn_type::IMS, &ApnAuth::default()).unwrap();
++            assert_eq!(ims[0xda], pdp as u8);
++            assert_eq!(ims[0xdb], want);
++
++            // The attach asks for no proxies at all, whatever its families,
++            // which is what Android's attach carries on both stacks.
++            let attach = build_set_initial_attach_apn(1, "internet", pdp, &ApnAuth::default()).unwrap();
++            assert_eq!(attach[0xda], pdp as u8);
++            assert_eq!(attach[0xdb], PCSCF_REQUEST_NONE);
++            assert_eq!(attach[0xf8], PdpType::Ipv4 as u8, "roaming is IPv4");
++            assert_eq!(attach[0xf9], PCSCF_REQUEST_NONE);
++        }
++
++        // An ordinary context asks for no proxies whatever its families are.
++        for pdp in [PdpType::Ipv4, PdpType::Ipv6, PdpType::Ipv4v6] {
++            let internet = build_setup_data_call(1, 2, "internet", pdp, apn_type::DEFAULT, &ApnAuth::default()).unwrap();
++            assert_eq!(internet[0xdb], PCSCF_REQUEST_NONE);
++        }
++    }
++
+     /// The PDP type reaches all three data requests, at the offset each uses.
+     /// Values are the RIL's own: 1 = IP, 2 = IPV6, 3 = IPV4V6.
+     #[test]
+@@ -925,8 +992,10 @@
+             let profile = build_set_data_profile(1, "internet", pdp, apn_type::DEFAULT, &ApnAuth::default()).unwrap();
+             assert_eq!((profile[0x75], profile[0x76]), (want, want));
+ 
++            // The home protocol follows pdp; the roaming one is always IPv4,
++            // as Android sends on both stacks.
+             let attach = build_set_initial_attach_apn(2, "internet", pdp, &ApnAuth::default()).unwrap();
+-            assert_eq!((attach[0xda], attach[0xf8]), (want, want));
++            assert_eq!((attach[0xda], attach[0xf8]), (want, PdpType::Ipv4 as u8));
+ 
+             let setup = build_setup_data_call(3, 2, "internet", pdp, apn_type::DEFAULT, &ApnAuth::default()).unwrap();
+             assert_eq!(setup[0xda], want);

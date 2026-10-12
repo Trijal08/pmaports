@@ -1,0 +1,249 @@
+sit-proxy: keep what the CP says before a client is listening
+
+The CP talks as soon as the driver releases it, and it does not repeat itself.
+Its carrier-configuration handshake is the case that matters: it pushes
+CARRIER_CONFIG_SIM_INFO once, naming the SIM it wants a configuration for, and
+waits to be pointed at one with CARRIER_CONFIG_MANIFEST. Miss that indication
+and the CP applies no carrier policy at all -- it then keeps no URSP rules, and
+from that point refuses every PDN but the one it attached with, answering
+MATCH_ALL_RULE_NOT_ALLOWED (2253). The visible result is a modem that
+registers, carries data, and cannot place a VoLTE call, which is what made this
+look like an IMS problem for a month.
+
+This proxy was dropping those frames. It binds its socket and opens the device
+before any client exists, so for the first seconds of a boot there is a
+listener on the device with nobody behind it, and the indication arm had no
+case for that: with no peer to broadcast to, the frame fell off the end. On
+komodo the window is five seconds -- sit-proxy opens the ports at boot and
+ModemManager connects five seconds later -- and CARRIER_CONFIG_SIM_INFO has
+never once been seen by ModemManager as a result.
+
+So keep them and hand them to the first client that takes indications, in frame
+order. Bounded, because a boot where no client ever arrives must not grow
+without end, and naturally discarded when the device is reopened, since
+indications from a CP that has restarted describe a state that no longer
+exists.
+
+--- a/crates/sit-proxy/src/port.rs
++++ b/crates/sit-proxy/src/port.rs
+@@ -88,6 +88,55 @@
+     _authorization: Option<std::sync::Arc<crate::polkit::Grant>>,
+ }
+ 
++/// Indications the CP sent while nothing was listening, replayed to the first
++/// client that takes them.
++///
++/// The CP talks as soon as the driver releases it and does not repeat itself.
++/// Its carrier-configuration handshake is the case that matters: it pushes
++/// CARRIER_CONFIG_SIM_INFO once, naming the SIM it wants a configuration for,
++/// and waits to be pointed at one. Miss it and the CP applies no carrier
++/// policy, keeps no URSP rules, and from then on refuses every PDN but the one
++/// it attached with -- which is a modem that registers, carries data, and
++/// cannot place a VoLTE call.
++///
++/// That is a window this proxy cannot close by being quick: it binds its socket
++/// before any client exists, so for the first seconds of a boot there is a
++/// listener on the device and nobody behind it. Dropping those frames is what
++/// it used to do.
++///
++/// Bounded, because a boot with no client ever must not grow without end, and
++/// cleared when the device is reopened: indications from a CP that has since
++/// restarted describe a state that no longer exists.
++#[derive(Default)]
++struct Early {
++    frames: VecDeque<Vec<u8>>,
++    bytes: usize,
++    dropped: usize,
++}
++
++/// Enough for a boot's worth of unsolicited traffic, not enough to matter.
++const EARLY_MAX_FRAMES: usize = 64;
++const EARLY_MAX_BYTES: usize = 64 * 1024;
++
++impl Early {
++    fn push(&mut self, frame: &[u8]) {
++        if self.frames.len() >= EARLY_MAX_FRAMES
++            || self.bytes + frame.len() > EARLY_MAX_BYTES
++        {
++            self.dropped += 1;
++            return;
++        }
++        self.bytes += frame.len();
++        self.frames.push_back(frame.to_vec());
++    }
++
++    fn clear(&mut self) {
++        self.frames.clear();
++        self.bytes = 0;
++        self.dropped = 0;
++    }
++}
++
+ /// Serve this port forever, reopening the device across CP restarts.
+ pub fn run(cfg: Config) {
+     let dev_name = cfg
+@@ -206,6 +255,7 @@
+     let mut dev = OpenOptions::new().read(true).write(true).open(&cfg.dev)?;
+     let mut mux = Mux::new();
+     let mut peers: Vec<Peer> = Vec::new();
++    let mut early = Early::default();
+     let mut devbuf: Vec<u8> = Vec::with_capacity(DEV_READ_BUF);
+     let mut readbuf = vec![0u8; DEV_READ_BUF];
+     #[cfg(feature = "polkit")]
+@@ -262,11 +312,11 @@
+                 Err(e) if e.kind() == io::ErrorKind::Interrupted => (),
+                 Err(e) => return Err(e),
+             }
+-            drain_device(cfg, &mut devbuf, &mut mux, &mut peers, trace);
++            drain_device(cfg, &mut devbuf, &mut mux, &mut peers, &mut early, trace);
+         }
+ 
+         if fds[1].revents & libc::POLLIN != 0 {
+-            accept_all(cfg, listener, &mut mux, &mut peers, next_client);
++            accept_all(cfg, listener, &mut mux, &mut peers, &mut early, next_client);
+         }
+ 
+         for i in 0..polled {
+@@ -302,6 +352,7 @@
+                         authorized.sock,
+                         &mut mux,
+                         &mut peers,
++                        &mut early,
+                         next_client,
+                         authorized.indications,
+                         authorized.grant,
+@@ -349,6 +400,7 @@
+     listener: &UnixListener,
+     mux: &mut Mux,
+     peers: &mut Vec<Peer>,
++    early: &mut Early,
+     next_client: &mut ClientId,
+ ) {
+     loop {
+@@ -365,6 +417,7 @@
+                     sock,
+                     mux,
+                     peers,
++                    early,
+                     next_client,
+                     true,
+                     #[cfg(feature = "polkit")]
+@@ -386,6 +439,7 @@
+     sock: UnixStream,
+     mux: &mut Mux,
+     peers: &mut Vec<Peer>,
++    early: &mut Early,
+     next_client: &mut ClientId,
+     indications: bool,
+     #[cfg(feature = "polkit")] authorization: Option<std::sync::Arc<crate::polkit::Grant>>,
+@@ -412,6 +466,29 @@
+         #[cfg(feature = "polkit")]
+         _authorization: authorization,
+     });
++
++    // Hand over whatever the CP said while nothing was listening. In frame
++    // order, so a client that reasons about sequence still can.
++    if indications && !early.frames.is_empty() {
++        let n = early.frames.len();
++        let peer = peers.last_mut().expect("just pushed");
++        for frame in early.frames.iter() {
++            queue_to_peer(peer, frame);
++        }
++        eprintln!(
++            "sit-proxy: port {} client {}: replayed {} indication(s) the CP sent \
++             before anything was listening{}",
++            cfg.index,
++            id,
++            n,
++            if early.dropped > 0 {
++                format!(" ({} dropped, buffer full)", early.dropped)
++            } else {
++                String::new()
++            }
++        );
++        early.clear();
++    }
+ }
+ 
+ /// Name a client for the trace log from its credentials. No hello message and
+@@ -449,6 +526,7 @@
+     buf: &mut Vec<u8>,
+     mux: &mut Mux,
+     peers: &mut [Peer],
++    early: &mut Early,
+     trace: &mut Option<Trace>,
+ ) {
+     loop {
+@@ -474,8 +552,15 @@
+                 // No token, so nobody owns it: every client sees it and filters
+                 // by id. That is the property the IMS work needs -- ModemManager
+                 // can watch an AIMS indication with no coupling to the helper.
++                let mut taken = false;
+                 for p in peers.iter_mut().filter(|p| p.indications) {
+                     queue_to_peer(p, &frame);
++                    taken = true;
++                }
++                // Nobody is listening yet. Keep it for whoever arrives: the CP
++                // says some of these once and never again (see Early).
++                if !taken {
++                    early.push(&frame);
+                 }
+             }
+             Some(msg_type::RESPONSE) => match mux.on_response(&frame) {
+@@ -813,6 +898,56 @@
+         assert!(p.outbuf.len() <= MAX_CLIENT_BACKLOG + big.len());
+     }
+ 
++    /// What the CP says before anyone is listening is kept, in order, and
++    /// handed to the first client that takes indications. The carrier-config
++    /// handshake depends on it: the CP names its SIM once and waits.
++    #[test]
++    fn indications_sent_before_any_client_are_replayed() {
++        let mut early = Early::default();
++        let first = frame(msg_type::INDICATION, 0x4602, 0, 8);
++        let second = frame(msg_type::INDICATION, 0x0906, 0, 4);
++
++        early.push(&first);
++        early.push(&second);
++        assert_eq!(early.frames.len(), 2);
++
++        let (mut peer, mut client) = peer_pair();
++        for f in early.frames.iter() {
++            queue_to_peer(&mut peer, f);
++        }
++        early.clear();
++        assert!(early.frames.is_empty());
++        assert_eq!(early.bytes, 0);
++
++        let mut got = vec![0u8; first.len() + second.len()];
++        let mut n = 0;
++        while n < got.len() {
++            n += client.read(&mut got[n..]).unwrap();
++        }
++        assert_eq!(&got[..first.len()], &first[..], "first frame, in order");
++        assert_eq!(&got[first.len()..], &second[..], "second frame, in order");
++    }
++
++    /// A boot where no client ever arrives must not grow without end.
++    #[test]
++    fn the_replay_buffer_is_bounded() {
++        let mut early = Early::default();
++        let ind = frame(msg_type::INDICATION, 0x0906, 0, 64);
++
++        for _ in 0..EARLY_MAX_FRAMES * 2 {
++            early.push(&ind);
++        }
++        assert_eq!(early.frames.len(), EARLY_MAX_FRAMES);
++        assert_eq!(early.dropped, EARLY_MAX_FRAMES);
++        assert!(early.bytes <= EARLY_MAX_BYTES);
++
++        let mut big = Early::default();
++        let huge = frame(msg_type::INDICATION, 0x0906, 0, EARLY_MAX_BYTES + 1);
++        big.push(&huge);
++        assert!(big.frames.is_empty(), "a frame over the byte cap is refused");
++        assert_eq!(big.dropped, 1);
++    }
++
+     #[test]
+     fn a_length_below_the_header_is_an_error_not_a_hang() {
+         // Left unrejected this would be a zero-length drain and an infinite

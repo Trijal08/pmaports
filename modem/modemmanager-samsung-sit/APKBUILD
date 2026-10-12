@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=1
+pkgrel=8
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -67,6 +67,10 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	ims-hold-ims-across-dsds-gaps.patch
 	report-5g-from-endc-offer.patch
 	publish-carrier-id.patch
+	attach-apn-default-fallback.patch
+	boot-sequence-parity.patch
+	attach-apn-not-from-bearer.patch
+	ims-attach-fallback-with-pcscf.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -184,4 +188,8 @@ b7caf504fa0fa65bcd727ab8d1fc743b7c9b74392574508f528e553f0c18ff5ea82f313b1371160e
 091fbd616b89ac1ff9d8381383be2a3fbea62701518d2fb8ba62246a37c9dfdfcd628fd7b7b5ae7406bbb90724cc91bb58479627d5c40cd0476b3df6988c0776  ims-hold-ims-across-dsds-gaps.patch
 4c6105e762dab953e909d7fcb78102c1b2bf89bdc8c70ff800960bed33f0ef7e66fc0b3a3094d9afcc8cf28a6ca36375ac3a8873c62b5466ea3b3e7d597e333f  report-5g-from-endc-offer.patch
 ce8f21bb87774680bc5a1e5751796b8848c5abeb303ba107caea2edfd19819f5181a55de8908b509b4d12122afae11e458b4626815a823d10c36d06613a590cd  publish-carrier-id.patch
+ad3276daa8efb1ef9890e07d3f189526fd66dd1dbbf4c40a706a278bc6176e5df99bb45c4da7d3699146c7479694ffedf573c5e964da60998110e1500e2826fe  attach-apn-default-fallback.patch
+af195c12cc9d407c6ff64c3a299550f2a45f41acd82c7894bd7c6fd2ffb585b2977ec74743a89a0f871cc3600dc78d4bbcb061cb8e581322bc628559545ce5a0  boot-sequence-parity.patch
+3f253c33e40b1cc7d68ddb32cbe3c6380af7cc34e60c3f5e484ca31b69b2c047d95c3a1198303b3b1125e9b0f1026717549f5ab97924d69a791c777515adc671  attach-apn-not-from-bearer.patch
+f920c03e74d2045d504604354ee20c49046bf38ff6afc524ce334603a03ad3c1c4968f841338dd7fa43e3249cef93f24c36198589f4a070fee2ce835a91dbc0f  ims-attach-fallback-with-pcscf.patch
 "
