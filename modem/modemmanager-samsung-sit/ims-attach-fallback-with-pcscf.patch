@@ -1,72 +1,92 @@
-Self-heal the IMS PDN refusal, and ask for P-CSCF where it still counts
+Arbitrate the attach APN between IMS and data, and ask for P-CSCF
 
-This CP will not create a PDN for the IMS DNN on request. A SETUP_DATA_CALL
-naming 'ims' is refused with MATCH_ALL_RULE_NOT_ALLOWED (2253), proven by
-injecting this modem's own Android frame and changing one field at a time:
-verbatim it is refused, and the same frame with a different APN string (still
-IMS-typed) is granted an address. Both SIMs behave the same way.
+This CP grants the PDN its attach APN names and refuses to create a second
+one, answering MATCH_ALL_RULE_NOT_ALLOWED (2253). Measured both ways round:
+with the attach on 'ims' the IMS PDN comes up and data is refused 2253 for
+*both* carriers' data APNs; with the attach on the carrier APN that APN
+connects and 'ims' is the one refused. So the attach APN is a single slot with
+two claimants, and whichever one holds it is the one that works.
 
-Android does not need a workaround: it attaches on the carrier's IA entry and
-is granted the IMS PDN on request. Why its CP accepts the DNN and ours does not
-is unknown, and not for want of looking -- the attach, the IMS data profile and
-the IMS SETUP_DATA_CALL are byte-identical, as are the CP firmware, the NV, the
-carrier policy, ap2cp_united_status and the AP capability word.
+(An earlier version of this patch claimed the CP refuses the APN *string*
+'ims'. That was wrong. The injection test it rested on was run while the
+tested APN already was the attach APN, so it resolved to the existing attach
+context instead of creating one -- the very mechanism this patch relies on.
+Android does run IMS and data together on this CP, so a second PDN is not
+impossible; the field worth looking at next is SETUP_DATA_CALL v3's
+match_all_rule_allowed at @0x105, which is the one byte named after the
+refusal.)
 
-So parity stays the default and the workaround is an escalation. Every boot
-attaches the way Android does; only once the CP has actually refused the IMS
-PDN does the modem re-attach on the carrier's IMS APN, which makes the attach
-itself create the IMS context so the SETUP_DATA_CALL that follows only has to
-resolve to one that exists. A CP or firmware that accepts the DNN never reaches
-that path, and nothing has to be configured by hand -- no nmcli
-gsm.initial-eps-bearer-apn.
+Parity stays the default: every boot attaches the way Android does, on the
+carrier's IA entry, and a CP that grants the IMS PDN on request never does
+anything else. Only once the CP has actually refused does the modem re-attach
+on the carrier's IMS APN, which makes the attach itself create the IMS context
+so the SETUP_DATA_CALL that follows only has to resolve to one that exists.
+Nothing has to be configured by hand -- no nmcli gsm.initial-eps-bearer-apn.
 
-The P-CSCF request has to follow the same condition. Stock asks for nothing at
-@0xdb, because its CP grants the IMS PDN on request and the addresses arrive
-with that PDN in the SETUP_DATA_CALL response. Once the attach is what creates
-the context, a later SETUP_DATA_CALL for the same DNN returns the parameters
-the context was created with, so asking there is too late: the network grants
-no addresses and the CP has nowhere to register. Measured -- with the fallback
-active and the attach asking for nothing, IMS provisions and AIMS_REGISTRATION
-stays at length 36; asking in the attach takes it to 159 with a real SIP URI on
-both SIMs.
+Data outranks VoLTE in that choice, because taking the attach APN is what stops
+a data PDN being created at all:
 
-Also splits the carrier-config directory in two, which is not cosmetic. The CP
+  - the escalation never fires while a data connection is up or in flight.
+    CONNECTING counts, not just CONNECTED: on this modem the two land in the
+    same log second, and testing CONNECTED alone lost the race and pulled the
+    attach out from under a connect that was about to succeed.
+  - MMSitClient gained a "data-pdn-refused" signal, carrying the CP's cause
+    from both refusal paths. On 2253 while the IMS attach is in force the modem
+    puts it back: it restores the carrier's entry and cycles the radio to
+    produce an attach, because sending the APN alone changes nothing -- the CP
+    keeps serving the attach it already has. A flag then settles the choice in
+    data's favour for the rest of the power-up so the two cannot flip-flop.
+
+On a dual-SIM phone this reaches a usable split on its own: data on the SIM
+that carries it, VoLTE on the SIM that does not.
+
+The P-CSCF request follows the same condition. Stock asks for nothing at @0xdb
+because its CP grants the IMS PDN on request and the addresses arrive with it;
+once the attach is what creates the context, a later SETUP_DATA_CALL returns
+the parameters the context was created with, so asking there is too late and
+the network grants no addresses at all. Measured: fallback with pcscf 0 leaves
+AIMS_REGISTRATION at length 36 forever, and asking in the attach takes it to
+159 with a real SIP URI.
+
+Two cid-bookkeeping fixes come with it, both exposed by the above. A SETUP that
+is sent but never granted an address creates no context, so there is nothing to
+deactivate: the CP answers DEACTIVATE_DATA_CALL with status 2, the cleanup
+counts as failed and the cid is retained "until radio-off" while the per-stack
+table still maps it to the APN -- so cid_acquire() hands the same one back and
+mm_sit_cp_claim_data() refuses it, and every retry for the rest of the process
+fails with "context N is already connected or awaiting setup/cleanup". One
+refused data call wedged a SIM's data for a whole boot. Only tear down what
+actually came up, and give up the stale mapping when the cid is reserved
+elsewhere.
+
+Also splits the carrier-config directory in two, which is not cosmetic: the CP
 is told /vendor/firmware/carrierconfig, the string the vendor RIL sends, so the
-CARRIER_CONFIG_MANIFEST frame stays byte-identical; the plugin opens its own
-cfg.db at the real rootfs path. The RFS daemon re-roots the CP's opens.
+CARRIER_CONFIG_MANIFEST frame stays byte-identical, while the plugin opens its
+own cfg.db at the real rootfs path and exynos-modem's RFS server re-roots the
+CP's opens.
 
-Two cid-bookkeeping fixes come with it, because the fallback is what
-exposed them. A SETUP_DATA_CALL that is sent but never granted an address
-creates no context, so there is nothing for the CP to deactivate: it
-answers DEACTIVATE_DATA_CALL with status 2, the cleanup counts as failed
-and the cid is retained "until radio-off". The per-stack table still maps
-that cid to the APN, so cid_acquire() hands the same one back and
-mm_sit_cp_claim_data() refuses it -- every retry for the rest of the
-process fails with "context N is already connected or awaiting
-setup/cleanup". One refused data call wedged a SIM's data for a whole
-boot. So only tear down a context that actually came up, and when a claim
-is refused because the cid is reserved elsewhere, drop the stale APN
-mapping (cid_forget) so the next attempt picks a free cid instead of
-re-asking for a blocked one.
-
-Verified on a Pixel 9 Pro XL (komodo, zumapro) with two SIMs: VoLTE
-registers on both with real SIP URIs and no nmcli
-gsm.initial-eps-bearer-apn, across a cold boot and a ModemManager
-restart, with mobile data connected and passing traffic alongside it.
+Verified on a Pixel 9 Pro XL with two SIMs (TELUS, Fizz): across a cold boot
+and a ModemManager restart, VoLTE registers with a real SIP URI on the SIM
+without data while the other carries data with ping at 0% loss, and the
+arbitration runs with no churn -- it defers rather than escalating and walking
+it back.
 
 diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
 --- old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-10-11 22:01:13.683985815 -0400
-+++ new/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-10-11 21:57:35.950876376 -0400
-@@ -64,6 +64,8 @@
++++ new/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-10-11 22:47:56.494800035 -0400
+@@ -64,6 +64,11 @@
       * pre-radio-on path needs the carrier's APN list from it, and by then the
       * mapping property is no longer convenient to re-derive. */
      gchar       *ims_database;
++    /* Set once a data PDN has been refused while the IMS attach was in
++     * force, which settles the choice below in data's favour for good. */
++    gboolean  attach_data_wins;
 +    /* Set once the CP has refused the IMS PDN; see attach_apn_resolve(). */
 +    gboolean     attach_ims_fallback;
      /* The carrier's APN list while it is being registered with the CP, one
       * profile per round trip, before the radio goes on. */
      GPtrArray   *boot_apns;
-@@ -408,8 +410,25 @@
+@@ -408,8 +413,25 @@
  {
      MMModem3gppRegistrationState state = sit_registration_state (registration);
  
@@ -93,7 +113,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
      if (self->priv->ims)
          mm_sit_ims_update_registration (self->priv->ims, registration);
  
-@@ -832,6 +851,45 @@
+@@ -832,6 +854,45 @@
          return mm_bearer_properties_get_apn (properties) ?: "";
      }
  
@@ -139,7 +159,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
      entry = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IA);
      if (!entry)
          entry = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_DEFAULT);
-@@ -840,6 +898,79 @@
+@@ -840,6 +901,167 @@
      return entry ? entry->apn : "";
  }
  
@@ -196,6 +216,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
 +    MMSitPdpType  pdp;
 +    const gchar  *apn;
 +    MMSitClient  *client;
++    MMModemState  state = MM_MODEM_STATE_UNKNOWN;
 +
 +    if (cause != MM_SIT_REJECT_CAUSE_MATCH_ALL_RULE_NOT_ALLOWED)
 +        return;
@@ -203,6 +224,41 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
 +        return;
 +    if (!mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IMS))
 +        return;
++
++    /*
++     * Data outranks VoLTE here, because taking the attach APN for IMS is what
++     * stops a data PDN being created at all: with the attach on 'ims' the CP
++     * refused 2253 for both carriers' data APNs, and with the attach on the
++     * carrier APN that same APN connects. So never escalate over a connection
++     * that is already up, and never escalate again once a data call has been
++     * refused while the IMS attach was in force.
++     *
++     * The IMS sequence keeps retrying on its own timer, so this is a deferral
++     * rather than a refusal: on a stack with no data connection configured --
++     * the other SIM of a dual-SIM pair, typically -- the next retry escalates
++     * and VoLTE comes up there. That is the split this reaches on its own,
++     * with nothing configured by hand: data on the SIM that carries it, VoLTE
++     * on the one that does not.
++     */
++    if (self->priv->attach_data_wins) {
++        mm_obj_dbg (self, "not attaching on the IMS APN: a data call was already refused under it");
++        return;
++    }
++    /*
++     * CONNECTING counts, not just CONNECTED: the two happen within the same
++     * second on this modem, and testing for CONNECTED alone lost that race --
++     * the escalation and "connecting -> connected" were logged in the same
++     * second, so the attach was pulled out from under a connect that was about
++     * to succeed. An in-flight connect is a connection as far as this choice
++     * goes; data_pdn_refused() is the backstop if it fails for its own reasons.
++     */
++    g_object_get (self, MM_IFACE_MODEM_STATE, &state, NULL);
++    if (state >= MM_MODEM_STATE_CONNECTING) {
++        mm_obj_info (self, "the CP refused the IMS PDN (cause %u), but data is %s; "
++                     "leaving the attach APN alone", cause,
++                     state == MM_MODEM_STATE_CONNECTING ? "connecting" : "connected");
++        return;
++    }
 +
 +    self->priv->attach_ims_fallback = TRUE;
 +    client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
@@ -216,10 +272,62 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
 +                                          &auth, NULL, NULL, NULL);
 +}
 +
++/*
++ * The other direction: a data PDN the CP would not create while we were
++ * attached on the IMS APN. That is the cost of the escalation above showing
++ * up, so give it back -- restore the carrier's own attach entry, and do not
++ * escalate again for the rest of this power-up.
++ *
++ * Only 2253 counts. The ordinary transient refusals a network can hand out
++ * mid-attach say nothing about the attach APN, and reacting to them would
++ * drop VoLTE for no reason.
++ */
++static void search_watchdog_radio_off_ready (MMSitClient  *client,
++                                             GAsyncResult *res,
++                                             GTask        *task);
++
++static void
++data_pdn_refused (MMSitClient                *client,
++                  guint                       cause,
++                  MMBroadbandModemSamsungSit *self)
++{
++    MMSitApnAuth  auth;
++    MMSitPdpType  pdp;
++    const gchar  *apn;
++    GTask        *task;
++
++    if (cause != MM_SIT_REJECT_CAUSE_MATCH_ALL_RULE_NOT_ALLOWED)
++        return;
++    if (!self->priv->attach_ims_fallback)
++        return;
++
++    self->priv->attach_ims_fallback = FALSE;
++    self->priv->attach_data_wins = TRUE;
++
++    apn = attach_apn_resolve (self, &pdp, &auth);
++    mm_obj_info (self, "a data PDN was refused (cause %u) while attached on the IMS APN; "
++                 "going back to '%s' so data works, at the cost of VoLTE on this SIM",
++                 cause, apn);
++
++    /*
++     * Sending the attach APN is not enough on its own: the CP keeps serving
++     * the attach it already has, so a change only takes effect at the next
++     * attach. Cycle the radio to produce one -- power_up_chain_start() walks
++     * the same path as a power-up and applies the APN before radio-on, which
++     * is the ordering that works. Safe here for the same reason the search
++     * watchdog's cycle is: this is a long way past the startup window, where
++     * an OFF would wedge the CP.
++     */
++    task = g_task_new (self, NULL, NULL, NULL);
++    mm_sit_client_set_radio_state (client, MM_SIT_RADIO_STATE_OFF, NULL,
++                                   (GAsyncReadyCallback) search_watchdog_radio_off_ready,
++                                   task);
++}
++
  static void
  set_initial_attach_apn_ready (MMSitClient  *client,
                                GAsyncResult *res,
-@@ -899,6 +1030,7 @@
+@@ -899,6 +1121,7 @@
  
      mm_sit_client_set_initial_attach_apn (client, apn,
                                            mm_sit_pdp_type_from_ip_family (mm_bearer_properties_get_ip_type (properties)),
@@ -227,7 +335,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
                                            &auth,
                                            NULL,
                                            (GAsyncReadyCallback) set_initial_attach_apn_ready,
-@@ -1102,7 +1234,9 @@
+@@ -1102,7 +1325,9 @@
          apn = attach_apn_resolve (self, &pdp, &auth);
          if (client) {
              mm_obj_dbg (self, "re-applying attach APN '%s' after the last attach retry", apn);
@@ -238,7 +346,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
          }
      }
  
-@@ -1660,7 +1794,9 @@
+@@ -1660,7 +1885,9 @@
      self->priv->carrier_config_imsi = g_strdup (imsi);
      /* Before the announce: the CP asks for this within a second of it. */
      publish_carrier_id (self, config->carrier_id);
@@ -249,16 +357,18 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
      ctx = g_new0 (CarrierManifestContext, 1);
      ctx->config = config;
      ctx->imsi = g_strdup (imsi);
-@@ -1925,6 +2061,8 @@
+@@ -1925,6 +2152,10 @@
              ims_database = g_build_filename (directory, "ims.db", NULL);
          }
          self->priv->ims = mm_sit_ims_new (self->priv->client, mm_sit_client_get_stack (self->priv->client), ims_database);
 +        g_signal_connect (self->priv->ims, MM_SIT_IMS_SIGNAL_PDN_REFUSED,
 +                          G_CALLBACK (ims_pdn_refused), self);
++        g_signal_connect (self->priv->client, MM_SIT_CLIENT_SIGNAL_DATA_PDN_REFUSED,
++                          G_CALLBACK (data_pdn_refused), self);
          self->priv->ims_database = g_strdup (ims_database);
      }
      g_signal_connect_swapped (self->priv->ims, MM_SIT_IMS_SIGNAL_CALLS_CHANGED,
-@@ -3502,7 +3640,7 @@
+@@ -3502,7 +3733,7 @@
  
      apn = g_ptr_array_index (self->priv->boot_apns, self->priv->boot_apn_index);
      mm_sit_client_set_data_profile (client, apn->apn, (MMSitPdpType) apn->protocol,
@@ -267,7 +377,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
                                      (GAsyncReadyCallback) apn_profile_ready, task);
  }
  
-@@ -3522,6 +3660,8 @@
+@@ -3522,6 +3753,8 @@
      g_clear_pointer (&self->priv->boot_apns, g_ptr_array_unref);
      self->priv->boot_apns = resolve_carrier_apns (self);
      self->priv->boot_apn_index = 0;
@@ -276,7 +386,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
  
      /* The IMS stack takes its PDN's APN from the same list, so it is resolved
       * once here rather than twice. */
-@@ -3530,7 +3670,10 @@
+@@ -3530,7 +3763,10 @@
                                                          MM_SIT_APN_TYPE_IMS);
  
          if (ims)
@@ -288,7 +398,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c new/src/p
      }
  
      register_next_apn_profile (task);
-@@ -3582,7 +3725,7 @@
+@@ -3582,7 +3818,7 @@
      apn = attach_apn_resolve (self, &pdp, &auth);
      mm_obj_dbg (self, "applying attach APN '%s' (pdp %u) before radio-on",
                  apn, (guint) pdp);
@@ -324,8 +434,16 @@ diff -ruN old/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h new/src/p
  #define MM_BROADBAND_MODEM_SAMSUNG_SIT(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_MODEM_SAMSUNG_SIT, MMBroadbandModemSamsungSit))
 diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-sit/mm-sit-client.c
 --- old/src/plugins/samsung-sit/mm-sit-client.c	2026-10-11 22:01:13.683784443 -0400
-+++ new/src/plugins/samsung-sit/mm-sit-client.c	2026-10-11 22:15:43.194168247 -0400
-@@ -2514,31 +2514,33 @@
++++ new/src/plugins/samsung-sit/mm-sit-client.c	2026-10-11 22:43:42.710789784 -0400
+@@ -10,6 +10,7 @@
+ 
+ enum {
+     SIGNAL_INDICATION,
++    SIGNAL_DATA_PDN_REFUSED,
+     SIGNAL_LAST,
+ };
+ 
+@@ -2514,31 +2515,33 @@
  }
  
  /*
@@ -377,7 +495,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      CONNECT_STEP_CONFIG_0900,
      CONNECT_STEP_CONFIG_0106,
      CONNECT_STEP_CONFIG_0107,
-@@ -2630,6 +2632,21 @@
+@@ -2630,6 +2633,21 @@
      return 0;
  }
  
@@ -399,7 +517,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
  static void
  cid_release (MMSitClient *self,
               guint8       cid)
-@@ -2686,6 +2703,7 @@
+@@ -2686,6 +2704,7 @@
      gchar         *auth_user;
      gchar         *auth_password;
      guint32        apn_types;
@@ -407,7 +525,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      guint          registration_attempts;
      guint          setup_attempts;
      guint          retry_id;
-@@ -2713,12 +2731,23 @@
+@@ -2713,12 +2732,23 @@
      /* Every failure path lands here -- cancelled, refused, timed out, retries
       * exhausted -- so releasing the reservation here is the one place that
       * cannot be forgotten. A context that did come up keeps its cid until the
@@ -433,7 +551,19 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
              mm_sit_client_disconnect_data (ctx->client, ctx->cid, NULL,
                                             (GAsyncReadyCallback) connect_cleanup_ready,
                                             g_object_ref (ctx->cp));
-@@ -2911,7 +2940,9 @@
+@@ -2889,6 +2919,11 @@
+ 
+     ctx->setup_attempts++;
+     if (ctx->setup_attempts >= 6) {
++        /* Tell the modem before failing: the attach APN it chose is what
++         * decides whether this PDN could have been created. */
++        if (ctx->call.cause)
++            g_signal_emit (self, signals[SIGNAL_DATA_PDN_REFUSED], 0,
++                           (guint) ctx->call.cause);
+         g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                  "SIT data call returned no address after 6 attempts (cause %u)",
+                                  ctx->call.cause);
+@@ -2911,7 +2946,9 @@
      case CONNECT_STEP_PREFERRED_MODEM:
          return mm_sit_request_new_set_preferred_modem (mm_sit_client_next_token (control_client (self)), self->priv->stack);
      case CONNECT_STEP_DATA_PROFILE:
@@ -444,7 +574,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      case CONNECT_STEP_CONFIG_0900:
          return mm_sit_request_new (0x0900, mm_sit_client_next_token (self), reserved, sizeof (reserved), error);
      case CONNECT_STEP_CONFIG_0106:
-@@ -2963,6 +2994,11 @@
+@@ -2963,6 +3000,11 @@
          return;
      }
  
@@ -456,7 +586,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      if (ctx->step == CONNECT_STEP_REGISTRATION) {
          mm_sit_client_get_registration (self,
                                          cancellable,
-@@ -3024,6 +3060,8 @@
+@@ -3024,6 +3066,8 @@
      if (self->priv->cp && !mm_sit_cp_claim_data (self->priv->cp, self->priv->stack, cid, &error)) {
          if (!mm_sit_cp_data_reserved (self->priv->cp, cid))
              cid_release (self, cid);
@@ -465,7 +595,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
          g_task_return_error (task, error);
          g_object_unref (task);
          return;
-@@ -3134,6 +3172,7 @@
+@@ -3134,6 +3178,7 @@
      gchar        *apn;
      MMSitPdpType  pdp;
      guint32       apn_types;
@@ -473,7 +603,16 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      MMSitDataCall call;
  } SetupContext;
  
-@@ -3245,6 +3284,7 @@
+@@ -3228,6 +3273,8 @@
+ 
+     if (ctx->call.cause) {
+         cid_release (self, ctx->cid);
++        g_signal_emit (self, signals[SIGNAL_DATA_PDN_REFUSED], 0,
++                       (guint) ctx->call.cause);
+         g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                  "data call refused: cause %u", ctx->call.cause);
+         g_object_unref (task);
+@@ -3245,6 +3292,7 @@
                                 const gchar        *apn,
                                 MMSitPdpType        pdp,
                                 guint32             apn_types,
@@ -481,7 +620,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
                                 GCancellable       *cancellable,
                                 GAsyncReadyCallback callback,
                                 gpointer            user_data)
-@@ -3270,11 +3310,12 @@
+@@ -3270,11 +3318,12 @@
      ctx->apn = g_strdup (apn);
      ctx->pdp = pdp;
      ctx->apn_types = apn_types;
@@ -495,7 +634,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      if (!request) {
          cid_release (self, cid);
          g_task_return_error (task, error);
-@@ -3560,6 +3601,7 @@
+@@ -3560,6 +3609,7 @@
  mm_sit_client_set_initial_attach_apn (MMSitClient        *self,
                                        const gchar        *apn,
                                        MMSitPdpType        pdp,
@@ -503,7 +642,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
                                        const MMSitApnAuth *auth,
                                        GCancellable       *cancellable,
                                        GAsyncReadyCallback callback,
-@@ -3569,7 +3611,7 @@
+@@ -3569,7 +3619,7 @@
      g_autoptr(GError)     error = NULL;
  
      request = mm_sit_request_new_set_initial_attach_apn_for_stack (
@@ -512,7 +651,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      if (!request) {
          GTask *task = g_task_new (self, cancellable, callback, user_data);
  
-@@ -3594,6 +3636,7 @@
+@@ -3594,6 +3644,7 @@
                                  const gchar        *apn,
                                  MMSitPdpType        pdp,
                                  guint32             apn_types,
@@ -520,7 +659,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
                                  const MMSitApnAuth *auth,
                                  GCancellable       *cancellable,
                                  GAsyncReadyCallback callback,
-@@ -3603,7 +3646,7 @@
+@@ -3603,7 +3654,7 @@
      g_autoptr(GError)     error = NULL;
  
      request = mm_sit_request_new_set_data_profile (mm_sit_client_next_token (self),
@@ -529,10 +668,44 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.c new/src/plugins/samsung-si
      if (!request) {
          GTask *task = g_task_new (self, cancellable, callback, user_data);
  
+@@ -4091,4 +4142,19 @@
+                       G_TYPE_NONE,
+                       1,
+                       G_TYPE_POINTER);
++
++    /*
++     * A data PDN the CP would not create, with the cause it gave. Whoever owns
++     * the attach APN needs to know, because on this CP the choice of attach
++     * APN is what decides whether a data call can be created at all.
++     */
++    signals[SIGNAL_DATA_PDN_REFUSED] =
++        g_signal_new (MM_SIT_CLIENT_SIGNAL_DATA_PDN_REFUSED,
++                      G_OBJECT_CLASS_TYPE (object_class),
++                      G_SIGNAL_RUN_LAST,
++                      0,
++                      NULL, NULL, NULL,
++                      G_TYPE_NONE,
++                      1,
++                      G_TYPE_UINT);
+ }
 diff -ruN old/src/plugins/samsung-sit/mm-sit-client.h new/src/plugins/samsung-sit/mm-sit-client.h
 --- old/src/plugins/samsung-sit/mm-sit-client.h	2026-10-11 22:01:13.679839790 -0400
-+++ new/src/plugins/samsung-sit/mm-sit-client.h	2026-10-11 21:58:42.107329849 -0400
-@@ -472,6 +472,7 @@
++++ new/src/plugins/samsung-sit/mm-sit-client.h	2026-10-11 22:43:56.340913667 -0400
+@@ -6,6 +6,13 @@
+ 
+ #include "mm-port-serial-sit.h"
+ 
++/*
++ * A data PDN the CP would not create, carrying the cause it gave. On this CP
++ * the attach APN decides whether a data call can be created at all, so
++ * whoever owns that choice has to hear about a refusal.
++ */
++#define MM_SIT_CLIENT_SIGNAL_DATA_PDN_REFUSED "data-pdn-refused"
++
+ #define MM_TYPE_SIT_CLIENT            (mm_sit_client_get_type ())
+ #define MM_SIT_CLIENT(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_SIT_CLIENT, MMSitClient))
+ #define MM_SIT_CLIENT_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass), MM_TYPE_SIT_CLIENT, MMSitClientClass))
+@@ -472,6 +479,7 @@
  void     mm_sit_client_set_initial_attach_apn        (MMSitClient        *self,
                                                        const gchar        *apn,
                                                        MMSitPdpType        pdp,
@@ -540,7 +713,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.h new/src/plugins/samsung-si
                                                        const MMSitApnAuth *auth,
                                                        GCancellable       *cancellable,
                                                        GAsyncReadyCallback callback,
-@@ -497,6 +498,7 @@
+@@ -497,6 +505,7 @@
                                                  const gchar        *apn,
                                                  MMSitPdpType        pdp,
                                                  guint32             apn_types,
@@ -548,7 +721,7 @@ diff -ruN old/src/plugins/samsung-sit/mm-sit-client.h new/src/plugins/samsung-si
                                                  const MMSitApnAuth *auth,
                                                  GCancellable       *cancellable,
                                                  GAsyncReadyCallback callback,
-@@ -533,6 +535,7 @@
+@@ -533,6 +542,7 @@
                                                 const gchar        *apn,
                                                 MMSitPdpType        pdp,
                                                 guint32             apn_types,
