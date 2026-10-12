@@ -1,0 +1,80 @@
+Fall back to the carrier's DEFAULT APN when it marks no IA entry
+
+The CP will not ask the network for an attach APN itself, so an empty one
+leaves it attached on the HSS's subscribed default with no context of its own.
+The IMS PDN that follows is then refused -- MATCH_ALL_RULE_NOT_ALLOWED (2253)
+where the network's policy forbids the catch-all URSP rule, cause 133 where the
+ESM piggyback failed -- and there is no VoLTE until the user sets
+gsm.initial-eps-bearer-apn on a NetworkManager profile by hand.
+
+Only 77 of the 588 carriers in the database mark an IA entry at all. Telus is
+one of them, which is why it alone worked; Fizz and AT&T mark none, fell through
+to the empty APN and needed the override. Android falls back to the DEFAULT
+entry for those carriers, confirmed against this CP on the wire: both stacks
+were captured mid-attach sending the entry they carry data on -- Telus its IA
+'sp.telus.com' (types 0x117, pdp 3), Fizz its DEFAULT 'mobile.bm' (types 0x7,
+pdp 1).
+
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -3360,23 +3360,49 @@
+ 
+     /*
+      * The CP needs *an* attach APN or it never attaches, and it will not ask the
+-     * network for one itself. Empty is a real answer rather than a placeholder:
+-     * an ATTACH REQUEST naming no APN asks for the subscribed default from the
+-     * HSS. SetInitialEpsBearerSettings replaces this, so it is a floor and not a
+-     * policy.
++     * network for one itself. SetInitialEpsBearerSettings replaces this, so it
++     * is a floor and not a policy.
++     *
++     * The floor is the carrier's own attach entry rather than empty. An ATTACH
++     * REQUEST naming no APN does ask the HSS for the subscribed default, which
++     * is enough to carry data -- but the CP then has no context of its own to
++     * hang a second PDN off, and the IMS PDN that follows is refused with
++     * MATCH_ALL_RULE_NOT_ALLOWED (2253) on a network whose policy forbids the
++     * catch-all URSP rule, or with cause 133 where the ESM piggyback failed.
++     * Either way there is no VoLTE, which previously had to be worked around by
++     * setting gsm.initial-eps-bearer-apn on a NetworkManager profile -- i.e.
++     * the user had to add an APN from a terminal before the phone could call.
++     *
++     * This must happen here, before radio-on, and not from the IMS sequence:
++     * changing the attach APN once the CP has already attached forces a
++     * re-attach, and the IMS PDN request then lands mid-flight and is refused
++     * with cause 133 -- the same failure this function's next comment
++     * describes.
+      */
+     if (!self->priv->initial_eps_bearer_settings) {
+-        const MMSitApn *ia = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IA);
++        const MMSitApn *ia;
+         MMSitApnAuth    auth0 = { 0 };
+ 
++        /*
++         * The entry the carrier's CarrierSettings marks IA, and failing that the
++         * one it marks DEFAULT. Most carriers mark no IA at all -- only 77 of the
++         * 588 in the database do -- and Android falls through to DEFAULT for
++         * them rather than attaching with no APN; 503 are reached that way and
++         * just 8 mark neither. Both stacks of this modem's own
++         * Android were captured mid-attach: Telus sends its IA entry
++         * 'sp.telus.com' (types 0x117, pdp 3) and Fizz, which has no IA entry,
++         * sends its DEFAULT entry 'mobile.bm' (types 0x7, pdp 1) -- the same
++         * APN either stack carries data on. AT&T likewise marks no IA, so it
++         * attaches on 'enhancedphone' (types 0x27). An empty APN is the last
++         * resort only, and the carriers that need the fallback are exactly the
++         * ones that used to need gsm.initial-eps-bearer-apn set by hand.
++         */
++        ia = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IA);
++        if (!ia)
++            ia = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_DEFAULT);
++
+         client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+         if (client) {
+-            /* The carrier's own initial-attach APN, the entry its CarrierSettings
+-             * marks IA -- 'sp.telus.com' on Telus, which is also its data APN.
+-             * A carrier that marks none gets an empty APN, which asks the network
+-             * for the subscribed default: that is the right answer for a SIM like
+-             * Fizz, whose list has no IA entry at all, and forcing one on it is
+-             * what previously cost it its data connection (cause 2253). */
+             mm_obj_dbg (self, "no initial attach APN configured; using the carrier's %s",
+                         ia ? ia->apn : "subscribed default");
+             mm_sit_client_set_initial_attach_apn (client, ia ? ia->apn : "",

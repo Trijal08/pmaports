@@ -1,0 +1,315 @@
+From: postmarketOS
+Subject: samsung-sit: stop bearer connects from rewriting the attach APN
+
+SET_INITIAL_ATTACH_APN names the APN the CP puts in its ATTACH REQUEST and the
+CP keeps whatever it was last told, so it is modem-wide state rather than a
+property of any one context. The connect sequence sent it anyway, with the APN
+of the bearer being brought up: 'ims' for the IMS PDN and "" for a bearer that
+names none.
+
+Measured against this modem's own Android, on the same two SIMs. Android sends
+SET_INITIAL_ATTACH_APN four times per boot -- twice per stack, and only ever
+the carrier's attach entry, 'sp.telus.com' for Telus and 'mobile.bm' for Fizz;
+across a 41342-record capture that includes calls it sends it six times, and
+never with 'ims' or "". One of our boots sent it 21 times: 'sp.telus.com' x15,
+'ims' x4, "" x2.
+
+An attach APN the HSS does not know draws ESM cause 27 (missing or unknown
+APN); the CP retries, gives up with EMM cause 10 (implicitly detached) and from
+there refuses every PDN with MATCH_ALL_RULE_NOT_ALLOWED (2253), the IMS one
+included, so there is no VoLTE. Neither indication appears anywhere in the
+Android capture.
+
+Drop the step. The attach APN now has exactly two owners: the power-up path,
+which seeds it from the carrier's IA (or DEFAULT) entry before the radio goes
+on, and SetInitialEpsBearerSettings. Both go through one resolver, so the
+cause-10 recovery also falls back to the carrier entry instead of doing nothing
+when no profile has been configured -- which is the case this is meant to fix,
+since needing a configured profile was the gsm.initial-eps-bearer-apn
+workaround.
+
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -2513,10 +2513,32 @@
+     return g_task_propagate_boolean (G_TASK (res), error);
+ }
+ 
++/*
++ * Connecting a bearer does not touch the attach APN.
++ *
++ * SET_INITIAL_ATTACH_APN names the APN the CP puts in its ATTACH REQUEST, and
++ * the CP keeps whatever it was last told. It is therefore modem-wide state and
++ * not a property of the context being brought up, so a bearer connect must not
++ * spend it: doing so overwrites the attach entry chosen at power-up with
++ * whichever APN this bearer happens to carry -- 'ims' for the IMS PDN, and ""
++ * for a bearer that names none. Android never sends it from its data-call path
++ * either.
++ *
++ * The damage is not limited to the attach that follows. An attach APN the HSS
++ * does not know draws ESM cause 27 (missing or unknown APN), the CP retries,
++ * gives up and reports EMM cause 10 (implicitly detached), and from there it
++ * refuses every PDN with MATCH_ALL_RULE_NOT_ALLOWED (2253) -- including the IMS
++ * one, so there is no VoLTE. Both indications were observed on a boot where
++ * this step had rewritten the attach APN 19 times; neither appears in the
++ * capture of this modem's own Android.
++ *
++ * The owners of the attach APN are therefore the power-up path, which seeds it
++ * from the carrier's IA (or DEFAULT) entry before the radio goes on, and
++ * SetInitialEpsBearerSettings, which is the user's explicit policy.
++ */
+ typedef enum {
+     CONNECT_STEP_PREFERRED_MODEM,
+     CONNECT_STEP_DATA_PROFILE,
+-    CONNECT_STEP_ATTACH_APN,
+     CONNECT_STEP_CONFIG_0900,
+     CONNECT_STEP_CONFIG_0106,
+     CONNECT_STEP_CONFIG_0107,
+@@ -2890,8 +2912,6 @@
+         return mm_sit_request_new_set_preferred_modem (mm_sit_client_next_token (control_client (self)), self->priv->stack);
+     case CONNECT_STEP_DATA_PROFILE:
+         return mm_sit_request_new_set_data_profile (mm_sit_client_next_token (self), ctx->apn, ctx->pdp, ctx->apn_types, &ctx->auth, error);
+-    case CONNECT_STEP_ATTACH_APN:
+-        return mm_sit_request_new_set_initial_attach_apn (mm_sit_client_next_token (self), ctx->apn, ctx->pdp, &ctx->auth, error);
+     case CONNECT_STEP_CONFIG_0900:
+         return mm_sit_request_new (0x0900, mm_sit_client_next_token (self), reserved, sizeof (reserved), error);
+     case CONNECT_STEP_CONFIG_0106:
+@@ -2943,9 +2963,6 @@
+         return;
+     }
+ 
+-    if (ctx->cp && ctx->step == CONNECT_STEP_ATTACH_APN)
+-        ctx->step++;
+-
+     if (ctx->step == CONNECT_STEP_REGISTRATION) {
+         mm_sit_client_get_registration (self,
+                                         cancellable,
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -796,6 +796,50 @@
+     return g_task_propagate_boolean (G_TASK (res), error);
+ }
+ 
++/*
++ * The attach APN the CP should be carrying, and the only place that decision is
++ * made. SetInitialEpsBearerSettings wins where the user set one; otherwise it
++ * is the carrier's own IA entry, or its DEFAULT entry for the majority of
++ * carriers that mark no IA (511 of the 588 in the database). "" is the last
++ * resort and asks the HSS for the subscribed default.
++ *
++ * @auth is filled from the configured properties when there are any, and zeroed
++ * otherwise -- the carrier database carries no credentials for the attach
++ * entry, and none of the three carriers tested needs them.
++ *
++ * Returns the APN, never NULL. A bearer's own APN is never a candidate: see the
++ * comment above ConnectStep in mm-sit-client.c.
++ */
++static const gchar *
++attach_apn_resolve (MMBroadbandModemSamsungSit *self,
++                    MMSitPdpType               *out_pdp,
++                    MMSitApnAuth               *out_auth)
++{
++    const MMSitApn *entry;
++
++    memset (out_auth, 0, sizeof (*out_auth));
++
++    if (self->priv->initial_eps_bearer_settings) {
++        MMBearerProperties *properties = self->priv->initial_eps_bearer_settings;
++        g_autoptr(GError)   error = NULL;
++
++        if (!mm_sit_apn_auth_from_properties (properties, out_auth, &error)) {
++            mm_obj_warn (self, "couldn't read the configured attach APN credentials: %s",
++                         error->message);
++            memset (out_auth, 0, sizeof (*out_auth));
++        }
++        *out_pdp = mm_sit_pdp_type_from_ip_family (mm_bearer_properties_get_ip_type (properties));
++        return mm_bearer_properties_get_apn (properties) ?: "";
++    }
++
++    entry = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IA);
++    if (!entry)
++        entry = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_DEFAULT);
++
++    *out_pdp = entry ? (MMSitPdpType) entry->protocol : MM_SIT_PDP_TYPE_IPV4V6;
++    return entry ? entry->apn : "";
++}
++
+ static void
+ set_initial_attach_apn_ready (MMSitClient  *client,
+                               GAsyncResult *res,
+@@ -1047,24 +1091,19 @@
+      * when the radio comes back up so the parked state still carries one.
+      */
+     if (failure.cause == MM_SIT_REJECT_CAUSE_IMPLICITLY_DETACHED &&
+-        self->priv->reject_retries == REJECT_RETRY_MAX - 1 &&
+-        self->priv->initial_eps_bearer_settings) {
+-        MMBearerProperties *properties = g_object_ref (self->priv->initial_eps_bearer_settings);
+-        MMSitApnAuth        auth;
+-        g_autoptr(GError)   auth_error = NULL;
+-        MMSitClient        *client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+-
+-        if (client && mm_sit_apn_auth_from_properties (properties, &auth, &auth_error)) {
+-            mm_obj_dbg (self, "re-applying the initial attach APN after the last attach retry");
+-            mm_sit_client_set_initial_attach_apn (
+-                client, mm_bearer_properties_get_apn (properties) ?: "",
+-                mm_sit_pdp_type_from_ip_family (mm_bearer_properties_get_ip_type (properties)),
+-                &auth,
+-                NULL,
+-                NULL,
+-                NULL);
++        self->priv->reject_retries == REJECT_RETRY_MAX - 1) {
++        MMSitClient  *client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
++        MMSitApnAuth  auth;
++        MMSitPdpType  pdp;
++        const gchar  *apn;
++
++        /* Without a configured profile this still has the carrier's own entry
++         * to fall back on, which is the whole point of not needing one. */
++        apn = attach_apn_resolve (self, &pdp, &auth);
++        if (client) {
++            mm_obj_dbg (self, "re-applying attach APN '%s' after the last attach retry", apn);
++            mm_sit_client_set_initial_attach_apn (client, apn, pdp, &auth, NULL, NULL, NULL);
+         }
+-        g_object_unref (properties);
+     }
+ 
+     delay = reject_retry_delays_secs[self->priv->reject_retries];
+@@ -3500,16 +3539,16 @@
+ static void
+ apply_attach_apn (GTask *task)
+ {
+-    MMBroadbandModemSamsungSit   *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
+-    g_autoptr(MMBearerProperties) properties = NULL;
+-    MMSitApnAuth                  auth;
+-    g_autoptr(GError)             error = NULL;
+-    MMSitClient                  *client;
++    MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (g_task_get_source_object (task));
++    MMSitClient                *client;
++    MMSitApnAuth                auth;
++    MMSitPdpType                pdp;
++    const gchar                *apn;
+ 
+     /*
+      * The CP needs *an* attach APN or it never attaches, and it will not ask the
+      * network for one itself. SetInitialEpsBearerSettings replaces this, so it
+-     * is a floor and not a policy.
++     * is a floor and not a policy -- attach_apn_resolve() applies that order.
+      *
+      * The floor is the carrier's own attach entry rather than empty. An ATTACH
+      * REQUEST naming no APN does ask the HSS for the subscribed default, which
+@@ -3521,78 +3560,31 @@
+      * setting gsm.initial-eps-bearer-apn on a NetworkManager profile -- i.e.
+      * the user had to add an APN from a terminal before the phone could call.
+      *
++     * Both stacks of this modem's own Android were captured mid-attach: Telus
++     * sends its IA entry 'sp.telus.com' (types 0x117, pdp 3) and Fizz, which
++     * has no IA entry, sends its DEFAULT entry 'mobile.bm' (types 0x7, pdp 1)
++     * -- the same APN either stack carries data on. AT&T likewise marks no IA,
++     * so it attaches on 'enhancedphone' (types 0x27).
++     *
+      * This must happen here, before radio-on, and not from the IMS sequence:
+      * changing the attach APN once the CP has already attached forces a
+      * re-attach, and the IMS PDN request then lands mid-flight and is refused
+-     * with cause 133 -- the same failure this function's next comment
+-     * describes.
+-     */
+-    if (!self->priv->initial_eps_bearer_settings) {
+-        const MMSitApn *ia;
+-        MMSitApnAuth    auth0 = { 0 };
+-
+-        /*
+-         * The entry the carrier's CarrierSettings marks IA, and failing that the
+-         * one it marks DEFAULT. Most carriers mark no IA at all -- only 77 of the
+-         * 588 in the database do -- and Android falls through to DEFAULT for
+-         * them rather than attaching with no APN; 503 are reached that way and
+-         * just 8 mark neither. Both stacks of this modem's own
+-         * Android were captured mid-attach: Telus sends its IA entry
+-         * 'sp.telus.com' (types 0x117, pdp 3) and Fizz, which has no IA entry,
+-         * sends its DEFAULT entry 'mobile.bm' (types 0x7, pdp 1) -- the same
+-         * APN either stack carries data on. AT&T likewise marks no IA, so it
+-         * attaches on 'enhancedphone' (types 0x27). An empty APN is the last
+-         * resort only, and the carriers that need the fallback are exactly the
+-         * ones that used to need gsm.initial-eps-bearer-apn set by hand.
+-         */
+-        ia = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_IA);
+-        if (!ia)
+-            ia = mm_sit_carrier_apns_find (self->priv->boot_apns, MM_SIT_APN_TYPE_DEFAULT);
+-
+-        client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+-        if (client) {
+-            mm_obj_dbg (self, "no initial attach APN configured; using the carrier's %s",
+-                        ia ? ia->apn : "subscribed default");
+-            mm_sit_client_set_initial_attach_apn (client, ia ? ia->apn : "",
+-                                                  ia ? (MMSitPdpType) ia->protocol
+-                                                     : MM_SIT_PDP_TYPE_IPV4V6,
+-                                                  &auth0, NULL,
+-                                                  (GAsyncReadyCallback) default_attach_apn_ready,
+-                                                  task);
+-            return;
+-        }
+-    }
+-
+-    /*
+-     * A configured attach APN is only meaningful if it is still in force when
+-     * the radio goes on. The CP keeps it until told otherwise, but it is lost
+-     * with every CP re-init, and the modem can be re-enabled with the radio
+-     * already on -- the power_up path above never runs again for it. Re-send
+-     * it before the radio starts searching, so the first attach carries the
+-     * APN. Without this the CP attaches with none and the ESM piggyback fails
+-     * (3GPP cause 19), leaving no default bearer for SETUP_DATA_CALL to reuse
+-     * (cause 133).
++     * with cause 133. It also has to run on every power-up rather than only the
++     * first: the CP keeps the APN until told otherwise but loses it with every
++     * re-init, and the modem can be re-enabled with the radio already on.
+      */
+-    properties = g_object_ref (self->priv->initial_eps_bearer_settings);
+-    if (!mm_sit_apn_auth_from_properties (properties, &auth, &error)) {
+-        mm_obj_warn (self, "couldn't re-apply the initial attach APN: %s", error->message);
+-        power_up_radio (task);
+-        return;
+-    }
+     client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
+     if (!client) {
+         power_up_radio (task);
+         return;
+     }
+-    mm_obj_dbg (self, "re-applying initial attach APN '%s' before radio-on",
+-                mm_bearer_properties_get_apn (properties) ?: "");
+-    mm_sit_client_set_initial_attach_apn (
+-        client, mm_bearer_properties_get_apn (properties) ?: "",
+-        mm_sit_pdp_type_from_ip_family (mm_bearer_properties_get_ip_type (properties)),
+-        &auth,
+-        NULL,
+-        (GAsyncReadyCallback) default_attach_apn_ready,
+-        task);
++
++    apn = attach_apn_resolve (self, &pdp, &auth);
++    mm_obj_dbg (self, "applying attach APN '%s' (pdp %u) before radio-on",
++                apn, (guint) pdp);
++    mm_sit_client_set_initial_attach_apn (client, apn, pdp, &auth, NULL,
++                                          (GAsyncReadyCallback) default_attach_apn_ready,
++                                          task);
+ }
+ 
+ static void
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -1796,7 +1796,9 @@
+     static const guint16 expected_ids[] = {
+         MM_SIT_MESSAGE_SET_PREFERRED_DATA_MODEM,
+         MM_SIT_MESSAGE_SET_DATA_PROFILE,
+-        MM_SIT_MESSAGE_SET_INITIAL_ATTACH_APN,
++        /* No SET_INITIAL_ATTACH_APN: connecting a bearer must not rewrite the
++         * attach APN with this bearer's own. See ConnectStep in
++         * mm-sit-client.c. */
+         0x0900,
+         0x0106,
+         0x0107,
+@@ -1817,8 +1819,6 @@
+         gint fd = ctx->dsds && expected_ids[i] == MM_SIT_MESSAGE_SET_PREFERRED_DATA_MODEM
+             ? ctx->control_fd : ctx->peer_fd;
+ 
+-        if (ctx->dsds && expected_ids[i] == MM_SIT_MESSAGE_SET_INITIAL_ATTACH_APN)
+-            continue;
+         g_assert_true (read_all (fd, header, sizeof (header)));
+         request_len = header[4] | (((guint16) header[5]) << 8);
+         g_assert_cmpuint (header[2] | (((guint16) header[3]) << 8), ==, expected_ids[i]);

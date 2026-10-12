@@ -14,7 +14,12 @@ Type=simple
 ExecStart=/usr/sbin/exynos-modem --boot-dev none \
 	--oem-gems-dev /dev/wwan0oem1 \
 	--oem-radioext-dev /dev/wwan0oem0 \
-	--oem-gipc-dev /dev/wwan0oem2 \
+	# ch 0x83, downstream's modem_ml_svc_sit.
+	--oem-ml-dev /dev/wwan0oem2 \
+	# GIPC is channel 0x84.  The driver publishes the CP's char channels in
+	# channel order, so oem_ipc0..7 are 0x81..0x88 and 0x84 is the fourth node.
+	# It used to be the third, when the driver skipped 0x83.
+	--oem-gipc-dev /dev/wwan0oem3 \
 	--rfs-dev /dev/wwan0rfs0 \
 	--uecap-dir /lib/firmware/google/s5400/uecapconfig \
 	--state-dir /var/lib/exynos-modem \
