@@ -12,6 +12,13 @@ ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*", TAG+="systemd"
 # first SIT probe in an unordered list and stops there, so with two ports a
 # rule naming only one is a coin flip -- and losing it means no carrier config,
 # no ims.db, and every bearer failing instantly.
+# ID_MM_SIT_CARRIER_CONFIG_DIRECTORY is where the plugin opens cfg.db and
+# ims.db itself, so it has to be a path that exists here. It is NOT the string
+# the CP is told: the plugin advertises downstream's /vendor/firmware/
+# carrierconfig in CARRIER_CONFIG_MANIFEST so the frame matches the vendor
+# RIL's, and exynos-modem's RFS server re-roots whatever the CP then opens onto
+# this directory. Dropping this line leaves the plugin unable to find either
+# database -- no carrier APN list, no IMS config, and every bearer failing.
 ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
   ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", \
   ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/lib/firmware/google/s5400/carrierconfig"
