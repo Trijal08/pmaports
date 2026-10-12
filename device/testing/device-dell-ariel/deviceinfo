@@ -12,7 +12,6 @@ deviceinfo_arch="armv7"
 
 # Device related
 deviceinfo_chassis="embedded"
-deviceinfo_external_storage="true"
 deviceinfo_drm="true"
 
 # Bootloader related
