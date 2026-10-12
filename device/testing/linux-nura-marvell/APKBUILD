@@ -2,8 +2,8 @@
 # Kernel config based on: ~2021 mainline kernel of the linux-armv7 package (5.x mainline) from archlinux arm
 # Co-Maintainer: exkc <exkc@exkc.moe>
 maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
-pkgname=linux-postmarketos-marvell
-pkgver=6.18.51
+pkgname=linux-nura-marvell
+pkgver=6.18.56
 pkgrel=0
 pkgdesc="mainline (stable) for Marvell SoC"
 arch="armv7"
@@ -30,6 +30,7 @@ makedepends="
 	xz
 	zstd
 "
+provides="linux-postmarketos-marvell"
 replaces="linux-postmarketos-marvell-dove"
 
 # Source
@@ -80,6 +81,6 @@ ac8471bae424aa0e5835f8c6ed04834918ca665941910fe132353bc35735f1e848e3c34b11e3cd50
 107416ff25b85f1ae28cb44bbe859f854f075927437c0e6b1f6fe687baff68410ed7deac7b1d44bfca4f4868964105941800ee3887da8d12efd9d893c43d755d  0003-dts-marvell-mmp-dell-ariel-add-framebuffer.patch
 5ba185f8e3665189da7f06891e3ea99b68a215a6c568901106568f42d5f0decd156981632dc19553cb2c0862bb2f5c82836d6b02a85e246e3bb555a493396683  0004-arm-boot-dts-marvell-mmp3.dtsi-fix-dma-interrupts.patch
 6b5298ffabacbdfa454187114a2854b5e5873e718b3282115eda68fd151d37c064e574ac1d082cbbde96a6675f5a32ce8de9ed3f8daa9f8dac3038e288bd97bb  wd-glacier.patch
-482c68c483c8317db0266fcdce54bc7028ba2a2e0d410af5995258efa21d4f8246dcbded43c09da7cc0b272148ee34c422d840d66dbf7ebb9d57c295dc770bea  linux-postmarketos-marvell-6.18.51.tar.xz
-7fa14ca0fe579073d458d0c2c695fda0b5d13f05ea74f14412a96439a81861fb31ee262865654fc8a494f805e5e386e01922dd688cbbcf433e5957984f658abe  config-postmarketos-marvell.armv7
+0d6ddc25db99ce0be26337a9e8dfbb95d44911841df8a6ff13dc9104be51acbc3ddbb1c84593ec7c80ba4a0782ab392b78bd52f3ccd80171a7fcf4ab17b28702  linux-nura-marvell-6.18.56.tar.xz
+55fd4c0d27a5a3e5643cf35acb32b657a720b9f3dbf710794bcc0258083cc730da3c4ee54f2ca0d54f709be113d4c6eda4e526b04e21347df7c7450963c2e83d  config-nura-marvell.armv7
 "
