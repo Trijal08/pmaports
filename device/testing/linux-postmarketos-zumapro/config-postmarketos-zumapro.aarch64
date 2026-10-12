@@ -2845,7 +2845,7 @@ CONFIG_WWAN_DEBUGFS=y
 # CONFIG_WWAN_HWSIM is not set
 # CONFIG_IOSM is not set
 # CONFIG_MTK_T7XX is not set
-CONFIG_S5300_MODEM=m
+CONFIG_S5XXX_MODEM=m
 # end of Wireless WAN
 
 # CONFIG_VMXNET3 is not set
