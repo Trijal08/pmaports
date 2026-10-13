@@ -1,11 +1,12 @@
 maintainer="Luca Weiss <luca@lucaweiss.eu>"
 pkgname=firmware-fairphone-fp6
 pkgver=20250606
-pkgrel=4
+pkgrel=5
 pkgdesc="Firmware for The Fairphone (Gen. 6)"
 subpackages="
 	$pkgname-adreno
 	$pkgname-adsp
+	$pkgname-audio
 	$pkgname-bluetooth
 	$pkgname-cdsp
 	$pkgname-ipa
@@ -18,7 +19,7 @@ arch="aarch64"
 license="proprietary"
 makedepends="pil-squasher"
 options="!check !strip !archcheck !tracedeps pmb:cross-native"
-_commit="cb1e77ced667a95ee637964124ff83bb0373838b"
+_commit="e58a5be8fa0fb6bc5a5f2e29cc01c036ccf75710"
 source="https://github.com/FairBlobs/FP6-firmware/archive/$_commit/FP6-firmware-$_commit.tar.gz"
 builddir="$srcdir/FP6-firmware-$_commit"
 
@@ -54,6 +55,13 @@ adsp() {
 		"$subpkgdir/usr/lib/firmware/qcom/milos/fairphone/fp6/"
 	install -Dm644 "$builddir"/battmgr.jsn -t \
 		"$subpkgdir/usr/lib/firmware/qcom/milos/fairphone/fp6/"
+}
+
+audio() {
+	pkgdesc="The Fairphone (Gen. 6) audio amplifier firmware"
+
+	install -Dm644 "$builddir"/aw882xx_acf.bin \
+		"$subpkgdir/usr/lib/firmware/qcom/milos/fairphone/fp6/aw88261_acf.bin"
 }
 
 bluetooth() {
@@ -110,5 +118,5 @@ wpss() {
 }
 
 sha512sums="
-c657a720e64d33bfa6aca93aae2528d506ef1fa5e900745ef1c187c57cab829a2440182831ab13454524decde77a081e730811969a8b9528394e924a8148393a  FP6-firmware-cb1e77ced667a95ee637964124ff83bb0373838b.tar.gz
+c25c38e7f36c82e122d18d1927b85aed600354654280722c832d6d481d9f1acccbd8bf472e8847fc996f1ee6f9882e9db957eeb813f3beae9997bc7ac561fc65  FP6-firmware-e58a5be8fa0fb6bc5a5f2e29cc01c036ccf75710.tar.gz
 "
