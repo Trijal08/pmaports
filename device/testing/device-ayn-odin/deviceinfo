@@ -17,6 +17,8 @@ deviceinfo_external_storage="true"
 deviceinfo_drm="true"
 
 # Bootloader related
+deviceinfo_flash_method="fastboot"
+deviceinfo_flash_sparse="true"
 deviceinfo_boot_filesystem="fat32"
 
 # Required for devices using UFS as storage (instead of e.g. eMMC)
