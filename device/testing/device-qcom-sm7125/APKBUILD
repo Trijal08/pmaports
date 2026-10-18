@@ -2,7 +2,7 @@
 # Co-Maintainer: Erikas Bitovtas <xerikasxx@gmail.com>
 maintainer="Stefan Hansson <newbyte@postmarketos.org>"
 pkgname=device-qcom-sm7125
-pkgver=2
+pkgver=3
 pkgrel=0
 pkgdesc="Generic device package for Qualcomm SM7125 devices"
 url="https://postmarketos.org"
@@ -25,7 +25,13 @@ depends="
 	unl0kr-fbforcerefresh
 "
 makedepends="devicepkg-dev"
-source="deviceinfo modules-initfs"
+subpackages="$pkgname-udev"
+source="
+	50-fastrpc.hwdb
+	81-libssc.rules
+	deviceinfo
+	modules-initfs
+"
 options="!archcheck !check"
 
 build() {
@@ -34,9 +40,14 @@ build() {
 
 package() {
 	devicepkg_package $startdir $pkgname
+
+	install -Dm644 50-fastrpc.hwdb -t "$pkgdir"/usr/lib/udev/hwdb.d/
+	install -Dm644 81-libssc.rules -t "$pkgdir"/usr/lib/udev/rules.d/
 }
 
 sha512sums="
+a8f02da0ea551d67be753daf5429a5d151bf04095fb6fe4bebeb8c642d89825ffdc82a26150073729f8dea7f648ba8dbb6aa2d3b1a3f3517a6ceb2dc10a4f48c  50-fastrpc.hwdb
+f96e22f692547986f3ca14dbd8bfd1dfebca8463a8372e09de860e1281e9cf80ed997c29f70eb8962b4014093aac44f5773ae65a7efc04e459b24ee66c022351  81-libssc.rules
 f88a8a8c66cb1284f3efad49db362ba205292dbe13196e29a8d3b1e4a47bc3c5fbc0672f044608c7dd7dd60b77e3ddd67dd5ac8366a3f1deadbec7ae56c6c901  deviceinfo
 c056217e34e0411ae7a780fb5e0a3a7721afdd6c0bf2c926768dd07695690f47fb145ac076d8ca0db4647d82494ddd0668af730eeb57e9846ab5e53bee8f1123  modules-initfs
 "

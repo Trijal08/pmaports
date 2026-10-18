@@ -1,0 +1,5 @@
+fastrpc:dt:samsung,a52q
+ ACCEL_MOUNT_MATRIX=-1, 0, 0; 0, -1, 0; 0, 0, -1
+
+fastrpc:dt:samsung,a72q
+ ACCEL_MOUNT_MATRIX=-1, 0, 0; 0, -1, 0; 0, 0, -1
