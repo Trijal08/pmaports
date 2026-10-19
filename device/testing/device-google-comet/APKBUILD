@@ -2,7 +2,7 @@ maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=device-google-comet
 pkgdesc="Google Pixel 9 Pro Fold"
 pkgver=1
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -41,6 +41,14 @@ depends="$depends
 	exynos-modem-polkit
 	lpa-gtk
 "
+# GNSS. The receiver firmware ships in firmware-google-comet-modem; this is
+# the daemon that drives it -- kepler-gnssd, its unit, the geoclue drop-in,
+# and gpsd behind it for consumers that want a serial device. Pinned here
+# because it is device plumbing rather than a user preference.
+depends="$depends
+	exynos-modem-gnss
+"
+
 makedepends="devicepkg-dev"
 subpackages="$pkgname-audio"
 source="
