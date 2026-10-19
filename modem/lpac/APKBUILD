@@ -16,6 +16,11 @@ makedepends="
 	samurai
 	python3
 	"
+# crossdirect hands the link step to the foreign-arch compiler under qemu
+# ("linker is involved"), and that driver then cannot find liblto_plugin.so, so
+# CMake's compiler test fails before anything of lpac is built. Build it
+# natively under qemu instead; it is a handful of C files.
+options="!pmb:crossdirect"
 subpackages="$pkgname-dbg"
 source="https://github.com/estkme-group/lpac/archive/v$pkgver/lpac-$pkgver.tar.gz
 	fix-stdio-apdu.patch
