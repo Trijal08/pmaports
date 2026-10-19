@@ -74,6 +74,13 @@ int main(int argc, char **argv)
 	// linker is involved: just use qemu binary (to avoid broken cross-ld, pmaports#227)
 	if (!argv_has_arg(argc, argv, "-c")) {
 		snprintf(newExecutable, sizeof(newExecutable), "/usr/bin/%s", executableName);
+		// gcc works out where cc1, liblto_plugin.so and friends are from
+		// argv[0].  Handing it the path it was called by leaves it pointing
+		// into this directory, so the foreign driver looks for them under
+		// /usr/lib/crossdirect/libexec, finds nothing, and falls back to
+		// spawning a bare "cc1" through PATH -- which fails.  Tell it where
+		// it actually is.
+		argv[0] = newExecutable;
 		if (execv(newExecutable, argv) == -1) {
 			fprintf(stderr, "ERROR: crossdirect: failed to execute %s: %s\n", newExecutable, strerror(errno));
 			fprintf(stderr, "NOTE: this is a foreign arch binary that would run with qemu (linker is involved).\n");
