@@ -29,12 +29,16 @@ StartLimitIntervalSec=0
 # the platform path this used to name never existed and the recovery never
 # once fired. Both are tried so a downstream platform binding still works.
 ExecStartPre=-/bin/sh -c 'for n in /sys/bus/pci/drivers/s5xxx-modem/*/gnss_codeload /sys/bus/platform/drivers/s5xxx-modem/*/gnss_codeload; do [ -e "$n" ] || continue; echo 1 > "$n" && sleep 1 && exit 0; done; exit 0'
+# --mems: the staged configuration tells the receiver a MEMS source is
+# present, so its navigation engine waits on accelerometer and gyroscope
+# samples. Without them it produces clock records and never a fix.
 ExecStart=/usr/sbin/kepler-gnssd \
 	--device /dev/gnss0 \
 	--dump-device /dev/wwan0gnss1 \
 	--socket /run/gnss-share.sock \
 	--socket-group geoclue \
-	--pty /dev/gnss-nmea
+	--pty /dev/gnss-nmea \
+	--mems
 Restart=always
 RestartSec=10s
 
