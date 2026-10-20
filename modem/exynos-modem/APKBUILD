@@ -1,12 +1,12 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=12
+pkgrel=13
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
 license="GPL-2.0-or-later"
-makedepends="cargo cargo-auditable"
+makedepends="cargo"
 depends="
 	android-tools
 	e2fsprogs
@@ -68,7 +68,14 @@ build() {
 	# sit-proxy/polkit adds the authorization transport sit-lpa asks for when
 	# /run/sit-proxy/0.auth exists; without it the bridge falls back to raw
 	# filesystem-controlled sockets.
-	RUSTC_WRAPPER= cargo auditable build --release --frozen --features sit-proxy/polkit
+	# Plain "cargo build", not "cargo auditable build": crossdirect's cargo
+	# wrapper only accelerates build/test/run, and for anything else it drops
+	# itself from PATH and hands the whole job -- cargo and every rustc
+	# invocation -- to qemu. With this, cargo adds --target itself and rustc
+	# resolves to the native compiler, which is the difference between minutes
+	# and most of an hour. The cost is the dependency list auditable embeds,
+	# which nothing here reads.
+	RUSTC_WRAPPER= cargo build --release --frozen --features sit-proxy/polkit
 }
 
 package() {
