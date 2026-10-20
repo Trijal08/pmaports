@@ -1,12 +1,13 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-tegu
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9a"
 subpackages="
 	$pkgname-brcm_a3
 	$pkgname-modem
 	$pkgname-aoc
+	$pkgname-haptics
 	$pkgname-mfc
 	"
 arch="aarch64"
@@ -91,6 +92,18 @@ aoc() {
 	# AoC Sensor USF Registry
 	install -d "$subpkgdir/usr/lib/firmware/google/usf/tegu/"
 	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/etc/sensors/registry/ "$subpkgdir/usr/lib/firmware/google/usf/tegu/"
+}
+
+haptics() {
+	pkgdesc="Google Pixel 9a Haptics CS40L26 DSP/Protection firmware"
+
+	# Haptics Protection Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/cs40l26.wmfw \
+		"$subpkgdir/usr/lib/firmware/cs40l26.wmfw"
+
+	# Haptics Tuning Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/cs40l26.bin \
+		"$subpkgdir/usr/lib/firmware/cs40l26.bin"
 }
 
 mfc() {
