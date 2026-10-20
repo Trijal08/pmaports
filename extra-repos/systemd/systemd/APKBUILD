@@ -262,7 +262,7 @@ build() {
 		-Dmount-path=/bin/mount \
 		-Dumount-path=/bin/umount \
 		-Dloadkeys-path=/usr/bin/loadkeys \
-		-Dsetfont-path=/usr/bin/setfont \
+		-Dsetfont-path=/usr/sbin/setfont \
 		-Dnologin-path=/sbin/nologin \
 		\
 		-Dldconfig=false \
