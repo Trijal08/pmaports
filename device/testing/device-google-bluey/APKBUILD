@@ -1,0 +1,52 @@
+maintainer="Anton Bambura <jenneron@protonmail.com>"
+pkgname=device-google-bluey
+pkgdesc="Google Bluey Chromebooks"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	alsa-ucm-conf
+	depthcharge-tools
+	firmware-google-bluey
+	linux-firmware-ath12k
+	linux-firmware-qca
+	linux-firmware-qcom
+	linux-google-bluey
+	postmarketos-base
+	soc-qcom
+"
+makedepends="devicepkg-dev"
+source="
+	bluey.conf
+	deviceinfo
+	firmware.files
+	kernel-cmdline.conf
+	modules-initfs
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+
+	# ADSP is required for booting from USB
+	install -Dm644 "$srcdir"/firmware.files \
+		-t "$pkgdir"/usr/share/mkinitfs/files
+
+	# Temporary config until there is a new depthcharge-tools tag with bluey support
+	install -Dm644 "$srcdir"/bluey.conf \
+		-t "$pkgdir"/etc/depthcharge-tools/config.d
+}
+
+sha512sums="
+e4e9452ab67cf9ea51da4009ab82a2617578defe53b54bd98239cda3b64a9829f892fe953c30c53e69518fd2b890cb4dad1d00b5ebbd5fd2725a0217fdc3f9c4  bluey.conf
+ab7eae76860eac373da63ba456183098b73713b707a72bdc3763600ede23893bb26452fda1e5270d1bfcfbe5a7522bd19b8f23723a285ae549a38c48aebf8d0b  deviceinfo
+bad5b53cb9e3989875ed4ce3f8547d455efabed9af110b7e3a70a27dd7b1b287401a397fae81bcbea0d09b34bd2a18499de701009433ac4db42c67fbb7361d4f  firmware.files
+f2c4dd92d730e4d8fb6c3ed4d33165b5f7aa8a14291c2864ee04ee17ddd35e68bcbf54a5b11f3bbd13d33740fed54642b29a0b28bfd748c1ea909535abd0573e  kernel-cmdline.conf
+bd3f367844afe8b0452bdfce23781bd15b54c2a281c21a9f33d47143334b7c38c85a6d45719d3a67d4dc92355e163b2961b24b2990e5f4aa5c68c4bca8e0ccb8  modules-initfs
+"

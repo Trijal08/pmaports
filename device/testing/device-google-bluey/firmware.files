@@ -1,0 +1,6 @@
+# ADSP is required for USB, CDSP is included too because this setup
+# makes both remote processors load on initramfs stage
+/usr/lib/firmware/qcom/x1e80100/Google/mica/adsp.mbn
+/usr/lib/firmware/qcom/x1e80100/Google/mica/adsp_dtb.mbn
+/usr/lib/firmware/qcom/x1e80100/Google/mica/cdsp.mbn
+/usr/lib/firmware/qcom/x1e80100/Google/mica/cdsp_dtb.mbn

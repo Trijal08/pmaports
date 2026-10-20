@@ -1,0 +1,20 @@
+maintainer="Anton Bambura <jenneron@protonmail.com>"
+pkgname=firmware-google-bluey
+pkgver=1
+_commit="d3219eae99c860c83d4d2a31f3bac18e99ab1f23"
+pkgrel=0
+pkgdesc="Firmware for Google Bluey Googlebooks"
+url="https://gitlab.com/jenneron/firmware-google-bluey"
+arch="aarch64"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps textrels pmb:cross-native"
+source="$pkgname-$_commit.tar.gz::https://gitlab.com/jenneron/firmware-google-bluey/-/archive/$_commit/firmware-google-bluey-$_commit.tar.gz"
+builddir="$srcdir/firmware-google-bluey-$_commit"
+
+package() {
+	make DESTDIR="$pkgdir" install
+}
+
+sha512sums="
+f89b4e761408f7e77574f603264fdd8d40c5ea17745789108b5cae708243f757b8b47c40a39bf6258e4ad7159d6ccf2f238fb292259d648e794f6e405bdd2e02  firmware-google-bluey-d3219eae99c860c83d4d2a31f3bac18e99ab1f23.tar.gz
+"

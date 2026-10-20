@@ -1,0 +1,84 @@
+maintainer="Anton Bambura <jenneron@protonmail.com>"
+pkgname=linux-google-bluey
+pkgver=7.3_rc7
+pkgrel=0
+_commit="957434b1c00258cede263e834929b1d13e9e2b2b"
+pkgdesc="Mainline Kernel for Google Bluey"
+arch="aarch64"
+_carch="arm64"
+url="https://gitlab.com/jenneron/linux"
+license="GPL-2.0-only"
+options="!check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+"
+makedepends="
+	bison
+	clang
+	elfutils-dev
+	findutils
+	flex
+	linux-headers
+	lld
+	llvm
+	openssl-dev
+	pahole
+	perl
+	postmarketos-installkernel
+	python3
+	zstd
+"
+source="linux-$_commit.tar.gz::https://gitlab.com/jenneron/linux/-/archive/$_commit/linux-$_commit.tar.gz
+	config-${pkgname#linux-}.$arch
+"
+builddir="$srcdir/linux-$_commit"
+
+# Used internally by pmbootstrap. Don't touch.
+# TODO: Remove once minimum default pmbootstrap version supports
+# kernel packages without '_flavor' and '_config'.
+_config="config-${pkgname#linux-}.$arch"
+_flavor="${pkgname#linux-}"
+
+prepare() {
+	default_prepare
+	cp "$srcdir"/config-"${pkgname#linux-}"."$arch" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-${pkgname#linux-}"
+}
+
+package() {
+	if [ -e "$builddir"/arch/"$_carch"/boot/vmlinuz.efi ]; then
+		# ZBOOT EFI decompressor for EFI booting
+		install -Dm644 "$builddir"/arch/"$_carch"/boot/vmlinuz.efi \
+			"$pkgdir"/boot/linux.efi
+
+		# Old GZIP'd kernel image for boot.img compatibility
+		install -Dm644 "$builddir"/arch/"$_carch"/boot/vmlinuz \
+			"$pkgdir"/boot/vmlinuz
+	else
+		echo "WARNING: CONFIG_ZBOOT not enabled!"
+		install -Dm644 "$builddir"/arch/"$_carch"/boot/Image.gz \
+			"$pkgdir"/boot/vmlinuz
+	fi
+
+	make LLVM=1 modules_install dtbs_install \
+		ARCH="$_carch" \
+		INSTALL_PATH="$pkgdir"/boot/ \
+		INSTALL_MOD_PATH="$pkgdir"/usr \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
+
+	rm -f "$pkgdir"/usr/lib/modules/*/build "$pkgdir"/usr/lib/modules/*/source
+
+	install -Dm644 "$builddir"/include/config/kernel.release \
+		"$pkgdir"/usr/share/kernel/"${pkgname#linux-}"/kernel.release
+}
+
+sha512sums="
+7739e147def76f073841a670440705e7bb1543c31dbcb6fbb8dcbcc26a9c7aca66b5d7879021c187fe6d8c4248e27591404f64dd8cb6ccaeb5e9d19cc7183b50  linux-957434b1c00258cede263e834929b1d13e9e2b2b.tar.gz
+326afc38d95b2837d6122aca299b6e6f4a172892d8ed22f9dc2a3290b6beb0da847b82380359fe6f8af7c8dace91c9d9f2a81ba98d9f4626b43f69ce1475a1d1  config-google-bluey.aarch64
+"
