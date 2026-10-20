@@ -20,18 +20,12 @@ After=dev-wwan0gnss1.device
 StartLimitIntervalSec=0
 
 [Service]
-# Recover a receiver that stopped asserting its SPI ready line: every CHPP
-# write then fails with -ETIMEDOUT until the image is staged and started again,
-# and only the modem driver can do that. Leading "-" so a kernel without the
-# trigger, or a CP that is not online yet, does not block the start -- the
-# restart loop covers both.
-# The driver binds as a PCI device, so the attribute lives under the PCI bus;
-# the platform path this used to name never existed and the recovery never
-# once fired. Both are tried so a downstream platform binding still works.
-ExecStartPre=-/bin/sh -c 'for n in /sys/bus/pci/drivers/s5xxx-modem/*/gnss_codeload /sys/bus/platform/drivers/s5xxx-modem/*/gnss_codeload; do [ -e "$n" ] || continue; echo 1 > "$n" && sleep 1 && exit 0; done; exit 0'
-# --mems: the staged configuration tells the receiver a MEMS source is
-# present, so its navigation engine waits on accelerometer and gyroscope
-# samples. Without them it produces clock records and never a fix.
+# No ExecStartPre codeload here.  The modem driver stages the receiver itself
+# as the CP comes up, microseconds before it creates the node this unit waits
+# on, so anything fired from here is a *second* codeload against a receiver
+# that has just been reset -- which wedges it and takes the CP down with it.
+# A receiver that stops answering needs a CP reboot anyway, and the driver
+# codeloads again on the way back up.
 ExecStart=/usr/sbin/kepler-gnssd \
 	--device /dev/gnss0 \
 	--dump-device /dev/wwan0gnss1 \
