@@ -2,7 +2,7 @@ maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=device-google-komodo
 pkgdesc="Google Pixel 9 Pro XL"
 pkgver=1
-pkgrel=1
+pkgrel=2
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -16,6 +16,7 @@ depends="
 	firmware-google-komodo-modem
 	firmware-google-komodo-aoc
 	firmware-google-komodo-audio
+	firmware-google-komodo-haptics
 	firmware-google-komodo-mfc
 	linux-firmware-arm
 	linux-firmware-cirrus
@@ -51,12 +52,14 @@ depends="$depends
 "
 
 makedepends="devicepkg-dev"
-subpackages="$pkgname-audio $pkgname-cutouts $pkgname-plasma-mobile:plasma_mobile"
+subpackages="$pkgname-audio $pkgname-cutouts $pkgname-haptics $pkgname-plasma-mobile:plasma_mobile"
 source="
 	deviceinfo
 	kernel-cmdline.conf
 	plasma-mobile-preset.conf
 	gmobile-cutout.conf
+	feedbackd-cirrus.rules
+	feedbackd-theme.json
 "
 
 build() {
@@ -65,6 +68,13 @@ build() {
 
 package() {
 	devicepkg_package $startdir $pkgname
+
+	# Identify the haptic driver to feedbackd and hand the seat's user access
+	# to it. Unconditional because it names the hardware and sets its
+	# permissions, which anything driving force feedback needs, not only the
+	# shell; the tuning that depends on a shell is in the subpackage below.
+	install -Dm644 "$srcdir"/feedbackd-cirrus.rules \
+		"$pkgdir"/usr/lib/udev/rules.d/72-feedbackd-cirrus.rules
 }
 
 # Audio, the way the PinePhone's device package carries it: only pulled in once
@@ -113,6 +123,24 @@ cutouts() {
 		> "$subpkgdir"/etc/environment.d/90-gmobile-cutouts.conf
 }
 
+# How hard the LRA is driven for UI feedback. feedbackd's stock theme asks for
+# a fifth of full scale for seven milliseconds, which on this actuator is barely
+# perceptible; a fifth of a second at full scale is what matches the stock
+# phone's keyboard. The override goes in the "quiet" profile because that is
+# where the stock theme puts its vibra feedbacks and the "full" profile inherits
+# them -- overriding "full" instead changes nothing.
+#
+# Named after the first device tree compatible, which is how feedbackd looks a
+# device theme up. That name carries a comma and abuild forbids one in a source
+# file name, so the file is carried under a plain name and renamed on the way in.
+haptics() {
+	install_if="$pkgname=$pkgver-r$pkgrel feedbackd"
+	pkgdesc="$pkgdesc (haptic feedback tuning)"
+
+	install -Dm644 "$srcdir"/feedbackd-theme.json \
+		"$subpkgdir"/usr/share/feedbackd/themes/google,komodo.json
+}
+
 plasma_mobile() {
 	install_if="$pkgname=$pkgver-r$pkgrel postmarketos-ui-plasma-mobile"
 
@@ -130,4 +158,6 @@ sha512sums="
 6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
 ff68c58b04ebbfeaa342d84c7b6d2b5df928561880f730eddc4cc90d944730005baa17da2bf90c82e1fc44333859ee20c6637945e03e1d1e7c8cd5fb52454fb2  plasma-mobile-preset.conf
 fb981df1eb1a296c03835e5afe0ddc22d44d92b8844135471d5d0d843c79b7a95e3c42a1967283a8365e095af5034213c99c9dfecb8b7a88bb56c26daaac797c  gmobile-cutout.conf
+0da8b49e2ea613a926ad372125df22d9658386abe8e5e5f3190567d7747b7e6ed87accfa1e58b8934ad04b823550445ba4bf7445c9e348c5590639eef390d412  feedbackd-cirrus.rules
+84f0ed5cecb357271d5777e7ff92c8777c6df91996d2d78751dc68ac780ff0b0653452e7cfdad6069b935238ff497e44bbb221f5f8317a040c9f5044c750aa6a  feedbackd-theme.json
 "
