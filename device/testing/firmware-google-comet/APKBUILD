@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-comet
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9 Pro Fold"
 subpackages="
 	$pkgname-brcm_a0
@@ -9,6 +9,8 @@ subpackages="
 	$pkgname-brcm_b1
 	$pkgname-modem
 	$pkgname-aoc
+	$pkgname-audio
+	$pkgname-haptics
 	$pkgname-mfc
 	"
 arch="aarch64"
@@ -165,7 +167,7 @@ aoc() {
 }
 
 audio() {
-	pkgdesc="Google Pixel 9 Pro Fold Audio DSP/Protection firmware"
+	pkgdesc="Google Pixel 9 Pro Fold Audio CS35L41 DSP/Protection firmware"
 
 	# Speaker Protection Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/cs35l41-dsp1-spk-prot.wmfw \
@@ -178,6 +180,18 @@ audio() {
 	# Right Speaker Tuning Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/R-cs35l41-dsp1-spk-prot.bin \
 		"$subpkgdir/usr/lib/firmware/cirrus/cs35l41-dsp1-spk-prot-comet-r.bin"
+}
+
+haptics() {
+	pkgdesc="Google Pixel 9 Pro Fold Haptics CS40L26 DSP/Protection firmware"
+
+	# Haptics Protection Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/cs40l26.wmfw \
+		"$subpkgdir/usr/lib/firmware/cs40l26.wmfw"
+
+	# Haptics Tuning Firmware Blob
+	install -Dm644 "$builddir"/proprietary/vendor/firmware/cs40l26.bin \
+		"$subpkgdir/usr/lib/firmware/cs40l26.bin"
 }
 
 mfc() {
