@@ -1,0 +1,80 @@
+# Reference: <https://nura.eco/vendorkernel>
+# Kernel config based on: arch/riscv/configs/defconfig
+maintainer="Kanak Shilledar <kanakshilledar@proton.me>"
+pkgname=linux-sipeed-licheepi-4a
+pkgver=7.1.8
+pkgrel=0
+_commit=f0ad751496f2fe679dcd9a11970625a7149d94c9
+pkgdesc="Sipeed LicheePi 4A kernel fork"
+arch="riscv64"
+url="https://kernel.org"
+license="GPL-2.0-only"
+makedepends="
+	bc
+	bison
+	clang
+	devicepkg-dev
+	elfutils-dev
+	findutils
+	flex
+	installkernel
+	linux-headers
+	lld
+	llvm
+	openssl-dev
+	pahole
+	perl
+	python3
+	"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/revyos/linux/archive/$_commit.tar.gz
+	config-${pkgname#linux-}.$arch
+	"
+builddir="$srcdir/linux-$_commit"
+options="
+	!check
+	!strip
+	!tracedeps
+	pmb:cross-native
+	"
+
+_carch="riscv"
+
+# Used internally by pmbootstrap. Don't touch.
+# TODO: Remove once minimum default pmbootstrap version supports
+# kernel packages without '_flavor' and '_config'.
+_config="config-${pkgname#linux-}.$arch"
+_flavor="${pkgname#linux-}"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/config-$_flavor.$arch" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" -j$(nproc) LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))"-postmarketOS
+}
+
+package() {
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot/ \
+		INSTALL_MOD_PATH="$pkgdir"/usr \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
+
+	install -Dm644 "$builddir/arch/$_carch/boot/Image.gz" \
+		"$pkgdir/boot/vmlinuz"
+
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+	install -D "$builddir"/include/config/kernel.release \
+		"$pkgdir"/usr/share/kernel/$_flavor/kernel.release
+}
+
+sha512sums="
+7eac3a1e27e31a1b62410540d8d5f9ea253e8a5916b6ba086636dd4fe11373683c75c88ca4970c6d7233544ec67c1332f9d0cc50ca17b12d9d27b444a91713da  linux-sipeed-licheepi-4a-f0ad751496f2fe679dcd9a11970625a7149d94c9.tar.gz
+4826ace05938110be090be1cff7d80acd65b72e4290c9f019f8ff4bee9f02f04338b59e28055e2747e61d654bc726ddd52a28cbed89bf6f4c0ec774e75c7256e  config-sipeed-licheepi-4a.riscv64
+"

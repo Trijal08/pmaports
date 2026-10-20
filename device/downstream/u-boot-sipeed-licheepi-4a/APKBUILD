@@ -1,0 +1,29 @@
+maintainer="Kanak Shilledar <kanakshilledar@proton.me>"
+pkgname=u-boot-sipeed-licheepi-4a
+pkgver=2020.01
+pkgrel=0
+pkgdesc="u-boot bootloader for sipeed licheepi 4a"
+url="https://github.com/revyos/th1520-vendor-uboot"
+arch="riscv64"
+license="GPL-2.0-or-later OFL-1.1 BSD-2-Clause BSD-3-Clause eCos-2.0 IBM-pibs
+	ISC LGPL-2.0-only LGPL-2.1-only X11"
+makedepends="$depends_dev py3-setuptools bc dtc python3-dev swig bison flex openssl-dev opensbi"
+options="!check"
+_commit="a13e24ed9ed773d4a07f079576a2fd654af6bfbb"
+source="u-boot-$_commit.tar.gz::https://github.com/revyos/th1520-vendor-uboot/archive/$_commit.tar.gz"
+builddir="$srcdir"/th1520-vendor-uboot-$_commit
+
+build() {
+	export OPENSBI="/usr/share/opensbi/generic/firmware/fw_dynamic.bin"
+	make HOSTCC=gcc ARCH=riscv light_lpi4a_defconfig
+	make HOSTCC=gcc ARCH=riscv
+}
+
+package() {
+	install -D -m644 u-boot-with-spl.bin \
+		"$pkgdir"/usr/share/u-boot/sipeed-licheepi-4a/u-boot-with-spl.bin
+}
+
+sha512sums="
+405d41759adf2f8e896a7f07bb53069cd002aa060a337bbf425df1adb3a1ef5dcb25ad1b8973057d1c6da1ece363657933739e49dc06967a28f7dbae26bfaebc  u-boot-a13e24ed9ed773d4a07f079576a2fd654af6bfbb.tar.gz
+"

@@ -1,0 +1,36 @@
+# Reference: <https://nura.eco/devicepkg>
+maintainer="Kanak Shilledar <kanakshilledar@proton.me>"
+pkgname=device-sipeed-licheepi-4a
+pkgver=1
+pkgrel=0
+pkgdesc="Sipeed LicheePi 4A"
+url="https://nura.eco"
+arch="riscv64"
+license="MIT"
+depends="
+	android-tools-mkbootimg
+	firmware-sipeed-licheepi-4a
+	linux-sipeed-licheepi-4a
+	postmarketos-base
+	postmarketos-base-downstream
+	u-boot-sipeed-licheepi-4a
+	"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+	"
+options="!archcheck !check"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+ea80b232bfc8a7371ba13edf9164ec028f9c516967e800b828d4f5b51de78e4e6dbb4fffb0188ce5ca24e979842aced451b0baf4e8082adeaed13a3c9df4f8e6  deviceinfo
+a915a2512a828b81c9f2f1a6bb17be6ca8f08a9c557b1f39a00775fd065693bf6ee339e826bfe6a979837cb9cf47b30de1e73ee1019d5a27c59755d5069aedf6  kernel-cmdline.conf
+"

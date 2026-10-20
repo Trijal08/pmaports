@@ -1,0 +1,26 @@
+maintainer="Kanak Shilledar <kanakshilledar@proton.me>"
+pkgname=firmware-sipeed-licheepi-4a
+pkgver=0_git20261010
+pkgrel=0
+_commit="725756411ecc20f2c2dbc5ea6b8e5aacc6f83aad"
+pkgdesc="TH1520 boot firmware (AON/E902, audio/C906) for LicheePi 4A, from RevyOS"
+url="https://github.com/revyos/th1520-boot-firmware"
+arch="riscv64"
+license="proprietary"
+makedepends="opensbi"
+options="!check !strip !archcheck !tracedeps"
+source="th1520-boot-firmware-$_commit.tar.gz::https://github.com/revyos/th1520-boot-firmware/archive/$_commit.tar.gz"
+builddir="$srcdir/th1520-boot-firmware-$_commit"
+
+package() {
+	cd "$builddir/addons/boot"
+	mkdir -p "$pkgdir/boot"
+	cp light_aon_fpga.bin "$pkgdir/boot/"
+	cp light_c906_audio.bin "$pkgdir/boot/"
+	cp str.bin "$pkgdir/boot/"
+	install -Dm644 /usr/share/opensbi/generic/firmware/fw_dynamic.bin "$pkgdir"/boot/fw_dynamic.bin
+}
+
+sha512sums="
+aebac6abe68298605d5b7db0ec703a77d99cf4b861e1fa4246e5e238e414be1290c688d807cded03f2676e0367c9f6968e243ca37dc6320b456877d7d42f0b8f  th1520-boot-firmware-725756411ecc20f2c2dbc5ea6b8e5aacc6f83aad.tar.gz
+"
