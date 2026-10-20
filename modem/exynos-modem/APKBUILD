@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=14
+pkgrel=15
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -38,6 +38,7 @@ source="
 	gnss-prologue-per-board.patch
 	kepler-gnssd-session-cache.patch
 	kepler-gnssd-record-census.patch
+	kepler-gnssd-dcxo-cache.patch
 	oem-property-store.patch
 	pcscf-request-follows-pdp-type.patch
 	rfs-standby-and-reroot.patch
@@ -204,6 +205,7 @@ b53e64d83c4e1432c25d5dca4bb5c8af3caa3587b1a60691af1464b2386ef8cddd53bd96aecddbd5
 4d71af3b59338dc85802a40772264624a38b780971e1b9abee91d68aeadd42bb0a9f9408b8de5f0fa9ae048bcaba6ded82fab8d03680a5bb7d769fd0dc23e948  gnss-prologue-per-board.patch
 d527b97d00c5d47bb8fa4de06ed7276729f26b97c1bbea0e48071bc139cf09c6f71097e8e3f1d48c608190718b2c38bdc56e3a36b8464c953a631a9cff0c8072  kepler-gnssd-session-cache.patch
 1f0a4a2c0ae59efbaac949c13cd696f09f2d32ee55364f21c9ec9a93628a18e1dcd70317887ef024595ccad5156ed5bb180c7d77bdc84a26c376d7f84edcc1b1  kepler-gnssd-record-census.patch
+72796fae8f4fb8d7f7f4888a6a11e7c2deaf80e9d82d83a721b70151eec87932d4fa959d42d2cf904172cbe8e861fbb163de1f8663c6b1a3c0ecbd177b7f242e  kepler-gnssd-dcxo-cache.patch
 58a7c613dc68cc932e186cf93875573cba24219d0a3097adbfea16453b23f359b1039f99438a1a827892b02d1779119bebf3fb525d89b6819828edddfaca63a9  oem-property-store.patch
 18d47955bcffc9410c164cf380245e1d00c7006712b94c3e20ce1247499aa257d25343e26b4242b1df4cb0a01d622a70c07595615eef31c3ec4ae69a44b3896b  pcscf-request-follows-pdp-type.patch
 8a46f9b948465a1e5a24719bf9e1356358ac1590e86132dfbd4a9c3ccae5405ef6259ff928d7f5919d0313e1c1dfe34745b16537e65a2f3ea09f0a1f67625a20  rfs-standby-and-reroot.patch
