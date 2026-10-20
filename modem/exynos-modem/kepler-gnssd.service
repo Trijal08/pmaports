@@ -37,7 +37,8 @@ ExecStart=/usr/sbin/kepler-gnssd \
 	--socket /run/gnss-share.sock \
 	--socket-group geoclue \
 	--pty /dev/gnss-nmea \
-	--mems
+	--mems \
+	--log-records
 Restart=always
 RestartSec=10s
 
