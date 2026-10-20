@@ -14,10 +14,10 @@
 
 maintainer="Clayton Craft <craftyguy@postmarketos.org>"
 pkgname=systemd
-pkgver=262
+pkgver=262.1
 _pkgver="${pkgver/_/-}"
 # pkgrel must match systemd-stage0!
-pkgrel=7
+pkgrel=0
 pkgdesc="System and service manager"
 url="https://github.com/systemd/systemd"
 # armhf: no linux-stable
@@ -218,10 +218,6 @@ fi
 source="
 	$pkgname-$pkgver.tar.gz::https://github.com/systemd/systemd/archive/refs/tags/v$_pkgver.tar.gz
 	wired.network
-	0001-nsresourced-don-t-treat-BPF-LSM-attach-failures-as-f.patch
-	44048.patch
-	44153.patch
-	43997.patch
 	"
 builddir=${_upstream_srcdir:-"$srcdir/$pkgname-$_pkgver"}
 _meson_builddir=${_meson_builddir:-build}
@@ -634,10 +630,6 @@ _resolve_packages() {
 
 
 sha512sums="
-4765e29d37c716dbe629d88bf1ed07b857d373333e64966832039c0031aa46ed7e76efd7b112eb199508adffc8afbf185b3360c9a66d100da052c407bd3f02d5  systemd-262.tar.gz
+a4d696dc03d096b815b6780f910fab4e79e01b8414b26529a8585b437b27a50b10c1082e534f1cdcb8bbec330a2af0f98fdcacf189e75f64a157c8bbc4774976  systemd-262.1.tar.gz
 81c897fed8a3fbfb67ec591b2398a5d65e4af1b3ef379376c157c98d71f085b707f8ebc896d5571a94f99f8fc84fd6b43e3b879ca9b0d57fc6c4596034c7a777  wired.network
-8d5b72fddd69bb70d55756e4b9f9048b743bb4ccc6a48316d8c52c60934dbbac1ae98418f64b7177485ffd34fbb461d5a402d509d3d44ddf51d75305ff7f2750  0001-nsresourced-don-t-treat-BPF-LSM-attach-failures-as-f.patch
-91edebec15c555f6abb74e7099cbc128a5583a86b5249466f279bab9af3b92a895474c1489dd0b81b9977c23f8d26bafcf36881653e912780279e6f122685f10  44048.patch
-106d44efc73de771c14ef534e7198b0c0400f9088d9c7aa21ae07da5f92f80e47f09a0d297fc3beab275a5e6844d4f8d0c539abdc738eceecaed6c36a35304fa  44153.patch
-667d3476540030b2b36d3a6ed5a2b5d64aa5569bb84a230f319ead1f2f4f153a370f44bcea66ba8a6f8e2daa2ee23109c76bf3e6475087eac07f0338fa8b4839  43997.patch
 "
