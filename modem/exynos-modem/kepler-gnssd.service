@@ -26,6 +26,11 @@ StartLimitIntervalSec=0
 # that has just been reset -- which wedges it and takes the CP down with it.
 # A receiver that stops answering needs a CP reboot anyway, and the driver
 # codeloads again on the way back up.
+# /var/lib/kepler-gnssd, where the daemon keeps the session-open batch that
+# last produced a fix.  There is no shipped profile: a fresh install opens with
+# the batch compiled in, and the first session that fixes records what worked
+# for the next boot to use.
+StateDirectory=kepler-gnssd
 ExecStart=/usr/sbin/kepler-gnssd \
 	--device /dev/gnss0 \
 	--dump-device /dev/wwan0gnss1 \
