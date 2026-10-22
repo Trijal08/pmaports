@@ -1,23 +1,25 @@
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=firmware-ayn-odin-3
-pkgver=1
-_commit="8fc6eb20341c265e44b8a86bf4a6684776b981e3"
+pkgver=2
+_commit="8834a0c80f5b24fee5ed9e18c1560dc48a6f1bd9"
 pkgrel=0
 pkgdesc="Firmware for AYN Odin 3"
-url="https://gitlab.com/jenneron/firmware-ayn-odin-3"
+url="https://github.com/ROCKNIX/extra-firmware"
 arch="aarch64"
 license="proprietary"
 options="!check !strip !archcheck !tracedeps textrels pmb:cross-native"
-
-_repo="firmware-ayn-odin-3"
-source="$pkgname-$_commit.tar.gz::$url/-/archive/$_commit/$_repo-$_commit.tar.gz"
-
+_repo="extra-firmware"
+source="$_repo-$_commit.tar.gz::https://github.com/ROCKNIX/$_repo/archive/$_commit.tar.gz"
 builddir="$srcdir/$_repo-$_commit"
 
 package() {
-	make DESTDIR="$pkgdir" install
+	local _files="amss.bin aux_ucode.bin m3.bin regdb.bin board-2.bin qdss.cfg"
+	for f in $_files; do
+		install -Dm644 "$builddir/SM8750/ath12k/WCN7860/hw2.0/$f" \
+			-t "$pkgdir/usr/lib/firmware/ath12k/WCN7860/hw2.0"
+	done
 }
 
 sha512sums="
-7caad44838a36c22c6daaef34d126f6bb41dc8bde938913238fb3f56650cfe0588266c5dbfedbb6c0bd5a17522f4f8dbae33d8af32eee96ec9379d1ee2b71be2  firmware-ayn-odin-3-8fc6eb20341c265e44b8a86bf4a6684776b981e3.tar.gz
+20670308d8d79a0e43dce0e73996403d2e7d9071be11e448e196c9721912296eae0a2ee87379943055a193431d0eedd04c14c7636995b7b6e4eb89341e4ff1f9  extra-firmware-8834a0c80f5b24fee5ed9e18c1560dc48a6f1bd9.tar.gz
 "
