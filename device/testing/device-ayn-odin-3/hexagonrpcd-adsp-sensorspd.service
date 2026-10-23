@@ -1,10 +1,11 @@
 [Unit]
+# dont wait for /dev/fastrpc-sdsp
 ConditionPathExists=
-ConditionPathExists=!/dev/fastrpc-sdsp
-ConditionPathExists=/dev/fastrpc-adsp-secure
 Requires=msm-firmware-loader.service
 After=msm-firmware-loader.service
 
 [Service]
+# it takes time for /dev/fastrpc-adsp-secure to appear
+ExecStartPre=/usr/bin/udevadm wait --timeout=30 /dev/fastrpc-adsp-secure
 ExecStart=
-ExecStart=/usr/bin/hexagonrpcd -f /dev/fastrpc-adsp-secure -d adsp -s -R /usr/share/qcom/sm8750/ayn/odin-3
+ExecStart=/usr/bin/hexagonrpcd -f /dev/fastrpc-adsp-secure -d adsp -s -R /run/msm-firmware-loader/hexagonrpc
