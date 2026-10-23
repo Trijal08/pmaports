@@ -2,7 +2,7 @@
 maintainer="Luca Weiss <luca@lucaweiss.eu>"
 pkgname=device-fairphone-fp6
 pkgdesc="The Fairphone (Gen. 6)"
-pkgver=9
+pkgver=10
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
@@ -50,6 +50,6 @@ package() {
 sha512sums="
 1a5d94e9c1ec0df4f674566c887b15e1cd62db299f34e4ccf2d949f58e4a10694c80c430254c2c8af74ba659d046aafff3a5999c3d95681518f3770fb6f48a96  deviceinfo
 a230e30a05453491d41ba4a6a4c504e3dbe7b630402ac2b837aa5d977c2d38c73c93fb198e8aff892a12005de8d2355593fe2fae8e3e9412418efb1d32250022  kernel-cmdline.conf
-178bb66a35b50aee147e3ce995b0aaf052715057025261e28a3d48e7a6449b981ceff1280799a8806529abb5c1882cea867991320594f9a291cc405d15b3e204  modules-initfs
+8b8aa3f422f5f8fcbc4f223aff849bea435b20af25ba029cc0d721ac5993460a40691d4a01f7d0ce5852e65a7a1f2f189d03d4c47a5e9a91b16ebfa6d3f0f2d2  modules-initfs
 5b94d596fb02a71f78f888996df102055c8ef50e719d39d7f61151407759c8f7345924918dd227af79a8220bcf44dd1b3bdfbc2d4c206322d0dd57ebb4520207  sim-wait-time.conf
 "
