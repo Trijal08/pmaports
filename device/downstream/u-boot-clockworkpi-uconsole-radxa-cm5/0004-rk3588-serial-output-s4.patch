@@ -1,0 +1,39 @@
+diff --git a/./configs/radxa-cm5-rpi-cm4-io-rk3588s_defconfig.orig b/./configs/radxa-cm5-rpi-cm4-io-rk3588s_defconfig
+index bfdc341..3acab31 100644
+--- a/./configs/radxa-cm5-rpi-cm4-io-rk3588s_defconfig.orig
++++ b/./configs/radxa-cm5-rpi-cm4-io-rk3588s_defconfig
+@@ -169,7 +169,9 @@ CONFIG_DM_RESET=y
+ CONFIG_SPL_DM_RESET=y
+ CONFIG_SPL_RESET_ROCKCHIP=y
+ CONFIG_BAUDRATE=1500000
+-CONFIG_DEBUG_UART_BASE=0xFEB50000
++CONFIG_ROCKCHIP_UART_MUX_SEL_M=2
++# CONFIG_ROCKCHIP_PRELOADER_SERIAL is not set
++CONFIG_DEBUG_UART_BASE=0xFEB70000
+ CONFIG_DEBUG_UART_CLOCK=24000000
+ CONFIG_DEBUG_UART_SHIFT=2
+ CONFIG_ROCKCHIP_SPI=y
+diff --git a/arch/arm/dts/rk3588s-radxa-cm5-rpi-cm4-io-u-boot.dtsi.orig b/arch/arm/dts/rk3588s-radxa-cm5-rpi-cm4-io-u-boot.dtsi
+index 6c90e05..73b6fd8 100644
+--- a/arch/arm/dts/rk3588s-radxa-cm5-rpi-cm4-io-u-boot.dtsi.orig
++++ b/arch/arm/dts/rk3588s-radxa-cm5-rpi-cm4-io-u-boot.dtsi
+@@ -7,6 +7,19 @@
+ 
+ #include "rk3588s-radxa-cm5-u-boot.dtsi"
+ 
++/ {
++	chosen {
++		stdout-path = "serial4:1500000n8";
++	};
++};
++
++/* UART4 m2: RX=GPIO1_B2 (PIN_19), TX=GPIO1_B3 (PIN_23) */
++&uart4 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart4m2_xfer>;
++	status = "okay";
++};
++
+ &vcc12v_dcin {
+ 	u-boot,dm-pre-reloc;
+ };

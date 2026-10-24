@@ -1,7 +1,7 @@
 maintainer="Antoine Martin (ayakael) <dev@ayakael.net>"
 pkgname=u-boot-clockworkpi-uconsole-radxa-cm5
 pkgver=2017.09
-pkgrel=1
+pkgrel=2
 _ddr_ver=1.19
 pkgdesc="U-Boot fork for the Radxa CM5 for uConsole"
 arch="aarch64"
@@ -36,6 +36,7 @@ source="
 	0001-menu-fix-timeout-duration.patch
 	0002-rockchip-move-crypto-functions-to-rk3588s.patch
 	0003-rk3588-support-compressed-kernel.patch
+	0004-rk3588-serial-output-s4.patch
 
 	disable-spl-spi-load.patch
 	use-python3.patch
@@ -76,6 +77,7 @@ ec2bcf5d5574759ba4bfa71a1880aa76a6647b73a104cac01c17666beab44bf864cc25407435bd2b
 36baf3b8618928e8927229353157ccecb5477e6ed868b9425a04acc2b297026084bd5ed96785292ab2ccb74b9f6328fe032b55505749b103cd68e25777dc3334  0001-menu-fix-timeout-duration.patch
 364a8701898e34f6235d2de486316413b5beec95578ee450e504e9a6f5c9feec773642a8129a91eef264e9466206c082950d0793a6a3e97f638edac42e4a70bf  0002-rockchip-move-crypto-functions-to-rk3588s.patch
 d80fbde984311b97b0dbd3d1bf7e740350f7c85f3bc8c22fdac93f9200c5b7c722c956dbcc3ec0f4422a72fe5c46b14c0770433efa0f6faf01520ad2ac5f9eca  0003-rk3588-support-compressed-kernel.patch
+2608c212e9cfb0714e2f9bfe0b5edd3e310d3ff0b7f3d9bf8a13464b01dd736551899b5d882d530a21f36ad4aa1b123d87ec002127b38f3706a86e51db1ee68b  0004-rk3588-serial-output-s4.patch
 11a1e30ad0002148f32314dc60c95120d45ffe462755e0bbc7d52ee4001e3283ffb87ba6f58d41feb0c40d456ef42c03857f98f8921c9a7bb810bbf404abedb3  disable-spl-spi-load.patch
 1164247343518c9820ce2bf1302f18079b9af81f6ef164e5b9d2c5cbad00ac20e1943bb44d48862c0d4a2f0b7448f9fa35d02d2f66e90c34033d999b3a968443  use-python3.patch
 c38b421d48f399ab30707cb244460d9dfc9050592dbafd13f09be11aeda2a19d325f2599cf2650e6855034999a1daf54324e9a65979f9a5d5dc55fe012421384  update-u-boot
