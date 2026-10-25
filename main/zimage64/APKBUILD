@@ -9,7 +9,6 @@ pkgdesc="A kernel shim for unpacking aarch64 kernel when not supported by bootlo
 url="https://gitlab.com/sleirsgoevy/zimage64"
 arch="aarch64"
 license="GPL-2.0-only"
-depends=""
 makedepends="zlib-dev"
 source="
 	$url/-/archive/$_commit.tar.gz
