@@ -1,6 +1,6 @@
 maintainer="Clayton Craft <clayton@craftyguy.net>"
 pkgname=postmarketos-duranium
-pkgver=24
+pkgver=25
 pkgrel=0
 pkgdesc="Configuration for building and booting immutable postmarketOS images"
 url="https://wiki.postmarketos.org/wiki/Duranium_(Immutable_postmarketOS)"
@@ -13,7 +13,6 @@ depends="
 	e2fsprogs
 	erofs-utils
 	f0rmz
-	fwupd
 	postmarketos-base
 	!postmarketos-base-apk
 	postmarketos-base-systemd
