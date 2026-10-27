@@ -2,6 +2,7 @@
 #
 # This kernel package can be replaced with linux-postmarketos-qcom-sdm845 once
 # https://gitlab.com/sdm845-mainline/linux/-/merge_requests/91 is merged
+# Co-Maintainer: Anton Bambura <jenneron@protonmail.com>
 maintainer="Stefan Hansson <newbyte@postmarketos.org>"
 _flavor="ayn-odin"
 pkgname=linux-$_flavor
