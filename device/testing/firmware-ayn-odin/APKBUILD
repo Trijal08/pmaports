@@ -1,3 +1,4 @@
+# Co-Maintainer: Anton Bambura <jenneron@protonmail.com>
 maintainer="Stefan Hansson <newbyte@postmarketos.org>"
 pkgname=firmware-ayn-odin
 pkgver=6
