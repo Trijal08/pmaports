@@ -1,42 +1,19 @@
-From b8e1eea25c0987b88091660152f79887f4e289d6 Mon Sep 17 00:00:00 2001
+From b8e1eea25c0987b88091660152f79887f4e289d6 Mon Aug 31 10:29:48 2026
 From: Ali Nasrullayev <nesrullayev.ali@gmail.com>
 Date: Mon, 31 Aug 2026 10:29:48 +0400
-Subject: [PATCH] arm64: dts: qcom: sm8150-xiaomi-vayu: Remove try-power-role
- to fix USB OTG
+Subject: [PATCH] arm64: dts: qcom: sm8150-xiaomi-vayu: Remove try-power-role to fix USB OTG
 
 ---
- arch/arm64/boot/dts/qcom/sm8150-xiaomi-vayu-common.dtsi | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ arch/arm64/boot/dts/qcom/sm8150-xiaomi-vayu-common.dtsi | 1 file changed, 1 deletion(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm8150-xiaomi-vayu-common.dtsi b/arch/arm64/boot/dts/qcom/sm8150-xiaomi-vayu-common.dtsi
 index a2472c2e96c1..d39db0ec5ed5 100644
 --- a/arch/arm64/boot/dts/qcom/sm8150-xiaomi-vayu-common.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm8150-xiaomi-vayu-common.dtsi
-@@ -74,7 +74,7 @@ battery: battery {
- 		 * 75 mV downstream is paired with thermal management
- 		 * that mainline does not yet have.
- 		 */
--		voltage-max-design-microvolt = <4400000>;
-+		voltage-max-design-microvolt = <3799168>;
- 	};
- 
- 	chosen {
 @@ -587,7 +587,6 @@ connector {
  		compatible = "usb-c-connector";
- 
+
  		power-role = "dual";
 -		try-power-role = "sink";
  		data-role = "dual";
  		self-powered;
- 
-@@ -596,6 +595,7 @@ connector {
- 
- 		sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_DUAL_ROLE |
- 			     PDO_FIXED_USB_COMM | PDO_FIXED_DATA_SWAP)>;
-+
- 		op-sink-microwatt = <10000000>;
- 
- 		ports {
--- 
-GitLab
-
