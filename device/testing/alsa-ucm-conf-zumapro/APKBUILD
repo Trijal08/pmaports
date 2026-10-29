@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=alsa-ucm-conf-zumapro
 pkgver=1
-pkgrel=0
+pkgrel=1
 pkgdesc="ALSA UCM configuration for Google Zuma(Pro) devices"
 url="https://github.com/Trijal08/alsa-ucm-conf"
 arch="aarch64"
@@ -16,6 +16,7 @@ _repository="alsa-ucm-conf"
 _commit="afa4df2cca907976cbf798af37b77129d89d33c0"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+	51-aoc-no-mmap.conf
 "
 options="!check"
 builddir="$srcdir/$_repository-$_commit"
@@ -25,8 +26,13 @@ package() {
 	mkdir -p "$pkgdir"/usr/share/alsa
 	cp -r "$builddir"/ucm2 \
 		"$pkgdir"/usr/share/alsa/
+
+	# PipeWire cannot use mmap on the AoC; see the comment in the file.
+	install -Dm644 "$srcdir"/51-aoc-no-mmap.conf \
+		-t "$pkgdir"/usr/share/wireplumber/wireplumber.conf.d/
 }
 
 sha512sums="
 d588fd7870d46b3758f588b04716639aa40987d12d80ed8d24c1ea97472fd4aeb224f5e9b39006d6476bf329f6a2cd37dc0ba4700a6590eb7b9c0fc411d39641  alsa-ucm-conf-zumapro-afa4df2cca907976cbf798af37b77129d89d33c0.tar.gz
+5f4a82f814b66504ca4577bf9beb016a507b3c673087686821da153dc62078eef9d479d2a4ff8ebfe347bafc3c6a9662a263905a42c0de8c4f855247c9128125  51-aoc-no-mmap.conf
 "
