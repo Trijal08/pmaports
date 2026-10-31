@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=linux-postmarketos-zumapro
 pkgver=7.3.0
-pkgrel=6
+pkgrel=7
 pkgdesc="Google zumapro (Pixel 9 Series) close-to-mainline kernel"
 arch="aarch64"
 _carch="arm64"
@@ -36,7 +36,7 @@ makedepends="
 # Source
 _owner="Trijal08"
 _repository="kernel-mainline"
-_commit="c4add89d176b628693e44c680849d2490de184a4"
+_commit="b8bae0f50fc550f9560e6f0e33b5909c64775917"
 _config="config-$_flavor.$arch"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
@@ -76,6 +76,6 @@ package() {
 }
 
 sha512sums="
-a5c6c98799ae396e298b308a7cb8cf14dd3c9a39fb653890b9c9fa8ca815ddeccdc9460679f8a443b57737dada004a349e07bc9f29b398dde388c5d8d36a6159  linux-postmarketos-zumapro-c4add89d176b628693e44c680849d2490de184a4.tar.gz
+c5979437c57d2e3581a9e1086c5821efbbf49d50e29dc7514c2fec3b0f1f3c330e7805088245c6d641d896e2650fafd10785823996e5299bff150dd73f8af358  linux-postmarketos-zumapro-b8bae0f50fc550f9560e6f0e33b5909c64775917.tar.gz
 58f43f3e429390054cbf42ca33a661848f2026c251ee11585c0495f55108c0c32779ac702f28c427ffecc5cc457d64afc2c514591db4ed9172c08e04366ce213  config-postmarketos-zumapro.aarch64
 "
