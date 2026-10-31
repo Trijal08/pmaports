@@ -3,7 +3,7 @@
 # Co-Maintainer: exkc <exxxxkc@getgoogleoff.me>
 maintainer="Ferass El Hafidi <funderscore@postmarketos.org>"
 pkgname=linux-postmarketos-amlogic
-pkgver=7.2.10
+pkgver=7.2.14
 pkgrel=0
 pkgdesc="Mainline kernel for Amlogic devices"
 arch="aarch64"
@@ -92,7 +92,7 @@ package() {
 }
 
 sha512sums="
-8f7e4f99dbe04d6d6af7bd093d49ddaa04dc4e59ca78f3f72c4c6102a74032f902466eaf0fd541713a200c8ce9d9153e514cf6ac1e23d571f0a81b0736653bbc  linux-postmarketos-amlogic-7.2.10.tar.xz
+8022410ec064a1640e934fba5f15f1db1c3882ecdd8fc6a816d304d2963050d2ba06d360e45334f58a62785001b1af16d237c54e56cfb97f064c5f5488f34216  linux-postmarketos-amlogic-7.2.14.tar.xz
 a769b668c90c3e69cbd977593ea081cf29413a73436daa81edd9b67c234e4048215c8ab8021dd4c71e2ed048c7fd3237732cac171cf5ed75edc705649621454d  config-postmarketos-amlogic.aarch64
 3eda7524a4c2cf8bd5fd2105c1971f729a3423a0c5ca2e041c9707b5e12fb0e2fc421ac99a3adf19a2555bacb12354851811eb6817a8c1ef1ae735f8043ec234  amlogic.config
 b980119b33e3b9b8ddc3ef88ee6bd49f00a6bb5ba2caa4de0f35b7c040ac2bc20478a01d927fd9a97b40713182a6084431d2af22899b26f08c7adbfc97ccf7c3  misc.config
