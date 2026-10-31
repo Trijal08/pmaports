@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=10
+pkgrel=11
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -72,6 +72,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	attach-apn-not-from-bearer.patch
 	ims-attach-fallback-with-pcscf.patch
 	sit-control-plane-timeouts.patch
+	sit-test-timeout.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -194,4 +195,5 @@ af195c12cc9d407c6ff64c3a299550f2a45f41acd82c7894bd7c6fd2ffb585b2977ec74743a89a0f
 3f253c33e40b1cc7d68ddb32cbe3c6380af7cc34e60c3f5e484ca31b69b2c047d95c3a1198303b3b1125e9b0f1026717549f5ab97924d69a791c777515adc671  attach-apn-not-from-bearer.patch
 b280d8f8cd1abee27bb2f941498684217fb6a6be06b0d5e8884599476b915f85f3b98e188afc5bd77a037d402301b01550415e06b369e5b3a28a25a27b16f497  ims-attach-fallback-with-pcscf.patch
 bd69c6bc74315fdede401c12a3caf4f84d895769dedb15819d3ec09940d51d356d96d7114e4645ca05be392755548e5ce313b10f9385fecf747122acab1b0e5b  sit-control-plane-timeouts.patch
+5e67d83b63d1a901ed695fdef63e1a26de2b284497a9c906920fa70dff29ba8e50045e0d0d9f0b906a1ae3113af4269a15674ccc18482f81f6f01ec697c7ade0  sit-test-timeout.patch
 "
