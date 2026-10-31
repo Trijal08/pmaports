@@ -1,6 +1,6 @@
 maintainer="Clayton Craft <clayton@craftyguy.net>"
 pkgname=linux-postmarketos-asahi
-pkgver=7.2.12_p2
+pkgver=7.2.14_p1
 pkgrel=0
 _rel=${pkgver#*_p}
 _kver=${pkgver%_p*}
@@ -90,7 +90,7 @@ package() {
 }
 
 sha512sums="
-67195ab51297d8882520d0579855e5ebc78c35593b1cf35b29e2d2d8558ff3a411136440d96abaf13f261c4e8af7fbcfe10c9b465df1ae17dc14dcbf9fa5a58b  linux-postmarketos-asahi-7.2.12-2.tar.gz
-d22d55e6b64d696568a28894ea8ed3672ed4b9a8346631d53140ac80d8e95c2f72c5f18b7451aae7da9ba70a1389a0e16847069fe2e556455bf07b5f6fa51352  config-postmarketos-asahi.aarch64
+1e00030f28856f59b3c77981992a04388d6393ce658c01049cbaa0dbc6bb527dc4f6219beaee867e705b13f7fa8f0ab6fa54a0276c69919a6d0d522059320bef  linux-postmarketos-asahi-7.2.14-1.tar.gz
+e8452355911724b7d671a36c0a9cb5526b2f022bc57c59dc1584e3807b1fe1ddd13140214e73bf27258503099ce102c32d793474a1c1dab9f06e9f0148812c0d  config-postmarketos-asahi.aarch64
 e8b595f3e076896dc38f249c8908d58e2e6a858eaa77fe1e680f27db0e76d3d74c0b5dfebb7a4c57d546fee0b0f6eb81a38b20dfd72f985c9d02f28d79a5eceb  enable-dynamic-ftrace.patch
 "
