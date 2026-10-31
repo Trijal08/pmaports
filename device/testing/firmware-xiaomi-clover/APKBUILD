@@ -1,7 +1,7 @@
 maintainer="Nickolay Goppen <setotau@mainlining.org>"
 pkgname=firmware-xiaomi-clover
-pkgver=2
-pkgrel=1
+pkgver=3
+pkgrel=0
 pkgdesc="Firmware files for Xiaomi Mi Pad 4 / 4 Plus"
 url="https://github.com/setotau/$pkgname"
 arch="aarch64"
@@ -17,7 +17,7 @@ source="
 "
 
 builddir="src"
-_fwdir="/lib/firmware"
+_fwdir="/usr/lib/firmware"
 
 package() {
 	ath10k-fwencoder --create \
