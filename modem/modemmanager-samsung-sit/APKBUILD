@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=18
+pkgrel=19
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -78,6 +78,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	sit-enable-cs-registration.patch
 	sit-preferred-data-stack.patch
 	sit-repush-profiles-before-pdn.patch
+	ims-provisioning-cooldown.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -206,4 +207,5 @@ f08bc4b29eb96382b0cbf3a00f500ae98cff72d8a38c179ad853931446370464c2ef0171dc49afb6
 b1c290462766e4eb5c79a625b12ac7ba68c9a9afae3d7b1a78f0bc1cf55a3cabdd793717b2683f96b5c164e4832c94d12377c9cab804216db62aaf513eaac9b0  sit-enable-cs-registration.patch
 9f0d21b51a2e6f12d4be3e627461d75ed59a8263e31cace8747be25623a11a3dfac567be54ce36ba184aa0bceb7a06fbce28d732224cfc3b9eaec39e5790a141  sit-preferred-data-stack.patch
 5d073d7cccd8a9c28da363e05e1a1e98425078c3585f31e9df72cf4aab48780d1e277678744b8e15c235bc6af97e90cbca2b841f460b57d1bbd381936276c44f  sit-repush-profiles-before-pdn.patch
+37f5b7ce6a0ce863ad32844e341563a4a93b34ea2e6d49db7b7f86c81c1a38e9ac0891a1c32988c67321d78f0dd1c7e5766c183d043ee83370a60fd1fd85ba13  ims-provisioning-cooldown.patch
 "
