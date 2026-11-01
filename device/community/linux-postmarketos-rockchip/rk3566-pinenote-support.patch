@@ -5868,7 +5868,7 @@ new file mode 100644
 index 000000000000..8ed386002399
 --- /dev/null
 +++ b/drivers/gpu/drm/rockchip/rockchip_ebc.c
-@@ -0,0 +1,2527 @@
+@@ -0,0 +1,2528 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Copyright (C) 2021-2022 Samuel Holland <samuel@sholland.org>
@@ -8396,6 +8396,7 @@ index 000000000000..8ed386002399
 +MODULE_AUTHOR("Samuel Holland <samuel@sholland.org>, Maximilian Weigand, hrdl <git@hrdl.eu>");
 +MODULE_DESCRIPTION("Rockchip EBC driver");
 +MODULE_LICENSE("GPL v2");
++MODULE_IMPORT_NS("IIO_CONSUMER");
 diff --git a/drivers/gpu/drm/rockchip/rockchip_ebc.h b/drivers/gpu/drm/rockchip/rockchip_ebc.h
 new file mode 100644
 index 000000000000..9d3ba1363197
