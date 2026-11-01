@@ -17,7 +17,7 @@ diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-si
      self->data_cids = g_hash_table_new (g_direct_hash, g_direct_equal);
  }
  
-@@ -101,6 +103,41 @@
+@@ -101,6 +103,48 @@
      return self->clients[stack];
  }
  
@@ -33,6 +33,13 @@ diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-si
 + * on a byte-identical request, so the context was created without the CP
 + * having been told which stack the data subscription belongs to.
 + *
++ * Called from two places: whenever a stack claims internet data, which is the
++ * plugin's own record of who owns it, and before a PDN is asked for, so that
++ * the CP is never asked to create a context without knowing. The second is
++ * what the stock stack does -- it re-asserts the preference three seconds
++ * before its own IMS context -- and is why this is not done once at
++ * coordinator-ready time: there is no live port to send on yet.
++ *
 + * Sent on stack 0's client because that is where the capture shows it, and
 + * the payload names the stack rather than the port it arrives on. Only on a
 + * change: the CP is told once and then left alone.
@@ -40,8 +47,8 @@ diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-si
 + * Fire and forget. If the CP refuses there is nothing useful to do about it
 + * here, and the caller is in the middle of something else.
 + */
-+static void
-+prefer_data_stack (MMSitCp *self, guint stack)
++void
++mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack)
 +{
 +    g_autoptr(GByteArray) request = NULL;
 +
@@ -59,23 +66,7 @@ diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-si
  static void
  prepare_complete (MMSitCp *self, const GError *error)
  {
-@@ -108,6 +145,15 @@
-     guint i;
- 
-     self->ready = !error;
-+    /*
-+     * Give the CP a data owner as soon as the stacks are up, rather than
-+     * waiting for a bearer to tell it. Stack 0 is the default because it is
-+     * the control stack and is always present; a real connect moves the
-+     * preference to whichever stack claims internet data, so this only has to
-+     * be defensible until the user connects something.
-+     */
-+    if (self->ready)
-+        prefer_data_stack (self, 0);
-     for (i = 0; i < waiters->len; i++) {
-         GTask *task = g_ptr_array_index (waiters, i);
- 
-@@ -318,6 +364,12 @@
+@@ -318,6 +362,12 @@
          return FALSE;
      }
      g_hash_table_insert (self->data_cids, GUINT_TO_POINTER ((guint) cid), GUINT_TO_POINTER (1));
@@ -84,7 +75,44 @@ diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-si
 +     * IMS setup deliberately does not claim -- so it is also the answer to
 +     * which stack the CP should prefer.
 +     */
-+    prefer_data_stack (self, stack);
++    mm_sit_cp_prefer_data_stack (self, stack);
      return TRUE;
  }
  
+diff --git a/src/plugins/samsung-sit/mm-sit-cp.h b/src/plugins/samsung-sit/mm-sit-cp.h
+--- a/src/plugins/samsung-sit/mm-sit-cp.h
++++ b/src/plugins/samsung-sit/mm-sit-cp.h
+@@ -19,6 +19,8 @@
+ /* Reservations cover pending connects as well as connected internet contexts.
+  * Internal IMS setup does not claim the internet-data preference. */
+ gboolean mm_sit_cp_claim_data (MMSitCp *self, guint stack, guint8 cid, GError **error);
++/* Name the stack that owns mobile data to the CP; a no-op if unchanged. */
++void mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack);
+ gboolean mm_sit_cp_data_reserved (MMSitCp *self, guint8 cid);
+ void mm_sit_cp_commit_data (MMSitCp *self, guint8 cid);
+ void mm_sit_cp_release_data (MMSitCp *self, guint8 cid);
+diff --git a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -3359,6 +3359,21 @@
+         return;
+     }
+ 
++    /*
++     * The CP has to know which stack owns the data subscription before it is
++     * asked to create a context. Captured on hardware: with the preference
++     * still unsent, this call was answered cause=0 and empty -- no assigned
++     * address, no P-CSCF -- where the stock stack's answer to a byte-identical
++     * request carries both. The stock stack re-asserts the preference seconds
++     * before its own IMS context, which is what this mirrors.
++     *
++     * A no-op when the CP already knows. This path does not claim internet
++     * data -- IMS deliberately does not -- so it names whoever holds the claim
++     * today, falling back to this stack when nobody does.
++     */
++    if (self->priv->cp)
++        mm_sit_cp_prefer_data_stack (self->priv->cp, self->priv->stack);
++
+     ctx = g_new0 (SetupContext, 1);
+     ctx->cid = cid;
+     ctx->apn = g_strdup (apn);
