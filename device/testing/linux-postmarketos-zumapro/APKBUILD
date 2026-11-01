@@ -36,7 +36,7 @@ makedepends="
 # Source
 _owner="Trijal08"
 _repository="kernel-mainline"
-_commit="9c9841e04486bd37e365dfccaed7076c5ac5b301"
+_commit="978a5fc3393aa106a64bfaec8b90d3e09e219018"
 _config="config-$_flavor.$arch"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
@@ -76,6 +76,6 @@ package() {
 }
 
 sha512sums="
-24988ba77b32a4ad0887bfaf874fae1f5f46e2af216ec2279d88ed3f77f854a7229af1041b2e4f7db0d9638b33011701f8ba86dc2b17ddf62d3d2ace83dffccc  linux-postmarketos-zumapro-9c9841e04486bd37e365dfccaed7076c5ac5b301.tar.gz
+1389f661ad52bd54c8b52f7d3fe5749a4a08a7cca5ca02f5df80a3f5ad05f965c728467cc452afb43f9e0d732cd944cf0c9da51517baa82f6a74fc5cd83a3fa6  linux-postmarketos-zumapro-978a5fc3393aa106a64bfaec8b90d3e09e219018.tar.gz
 58f43f3e429390054cbf42ca33a661848f2026c251ee11585c0495f55108c0c32779ac702f28c427ffecc5cc457d64afc2c514591db4ed9172c08e04366ce213  config-postmarketos-zumapro.aarch64
 "
