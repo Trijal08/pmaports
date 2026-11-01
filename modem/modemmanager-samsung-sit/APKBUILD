@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=14
+pkgrel=15
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -76,6 +76,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	sit-unanswered-release-and-sms.patch
 	sit-hold-reg-rat-across-blips.patch
 	sit-enable-cs-registration.patch
+	sit-preferred-data-stack.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -202,4 +203,5 @@ bd69c6bc74315fdede401c12a3caf4f84d895769dedb15819d3ec09940d51d356d96d7114e4645ca
 7fe62240b4d0badc41ef776e4302f2fa9b2cb71beb3e19b6a36b546c8e9e1824299c87a3ad6fb34eb51a3b1b8daa669c948967930c423cea23c18f275b8b09bb  sit-unanswered-release-and-sms.patch
 f08bc4b29eb96382b0cbf3a00f500ae98cff72d8a38c179ad853931446370464c2ef0171dc49afb6ccb3a7dd9271a43acd727aaf759f65dee74b7c37fec94eb5  sit-hold-reg-rat-across-blips.patch
 b1c290462766e4eb5c79a625b12ac7ba68c9a9afae3d7b1a78f0bc1cf55a3cabdd793717b2683f96b5c164e4832c94d12377c9cab804216db62aaf513eaac9b0  sit-enable-cs-registration.patch
+0e0f09dfb2c10b8de5475268546934b1252fc56c20d7ddc3de2a6468e43cb6606573df84f8f1a2a69f6bfc48253456197270d8821900b1c52dd2d20c7260719c  sit-preferred-data-stack.patch
 "

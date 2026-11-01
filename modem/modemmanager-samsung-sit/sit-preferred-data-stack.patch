@@ -1,0 +1,90 @@
+diff --git a/src/plugins/samsung-sit/mm-sit-cp.c b/src/plugins/samsung-sit/mm-sit-cp.c
+--- a/src/plugins/samsung-sit/mm-sit-cp.c
++++ b/src/plugins/samsung-sit/mm-sit-cp.c
+@@ -9,6 +9,7 @@
+     GHashTable *data_cids; /* CID -> 1 pending, 2 connected */
+     gboolean ready;
+     gboolean mapping_sent;
++    gint data_pref;        /* stack last named to the CP, -1 if never */
+     gboolean secondary_off;
+     guint attempts;
+     MMSitLogicalSlotMapping mapping[2];
+@@ -41,6 +42,7 @@
+ static void
+ mm_sit_cp_init (MMSitCp *self)
+ {
++    self->data_pref = -1;
+     self->data_cids = g_hash_table_new (g_direct_hash, g_direct_equal);
+ }
+ 
+@@ -101,6 +103,41 @@
+     return self->clients[stack];
+ }
+ 
++/*
++ * Name the stack that owns mobile data to the CP (SET_PREFERRED_DATA_MODEM).
++ *
++ * This has to be in place *before* anything asks for a PDN. The stock stack
++ * sends it twice during boot and re-asserts it seconds before it sets up its
++ * IMS context; we only ever sent it as the first step of a data bearer
++ * connect, which on a captured boot landed twelve seconds *after* the IMS
++ * SETUP_DATA_CALL had already been answered. That answer came back cause=0
++ * and empty -- no address, no P-CSCF -- where the stock stack's carries both
++ * on a byte-identical request, so the context was created without the CP
++ * having been told which stack the data subscription belongs to.
++ *
++ * Sent on stack 0's client because that is where the capture shows it, and
++ * the payload names the stack rather than the port it arrives on. Only on a
++ * change: the CP is told once and then left alone.
++ *
++ * Fire and forget. If the CP refuses there is nothing useful to do about it
++ * here, and the caller is in the middle of something else.
++ */
++static void
++prefer_data_stack (MMSitCp *self, guint stack)
++{
++    g_autoptr(GByteArray) request = NULL;
++
++    if (stack >= 2 || !self->clients[0] || self->data_pref == (gint) stack)
++        return;
++
++    request = mm_sit_request_new_set_preferred_modem (
++        mm_sit_client_next_token (self->clients[0]), stack);
++    if (!request)
++        return;
++    self->data_pref = (gint) stack;
++    mm_sit_client_command (self->clients[0], request, 10, NULL, NULL, NULL);
++}
++
+ static void
+ prepare_complete (MMSitCp *self, const GError *error)
+ {
+@@ -108,6 +145,15 @@
+     guint i;
+ 
+     self->ready = !error;
++    /*
++     * Give the CP a data owner as soon as the stacks are up, rather than
++     * waiting for a bearer to tell it. Stack 0 is the default because it is
++     * the control stack and is always present; a real connect moves the
++     * preference to whichever stack claims internet data, so this only has to
++     * be defensible until the user connects something.
++     */
++    if (self->ready)
++        prefer_data_stack (self, 0);
+     for (i = 0; i < waiters->len; i++) {
+         GTask *task = g_ptr_array_index (waiters, i);
+ 
+@@ -318,6 +364,12 @@
+         return FALSE;
+     }
+     g_hash_table_insert (self->data_cids, GUINT_TO_POINTER ((guint) cid), GUINT_TO_POINTER (1));
++    /*
++     * A claim is the plugin's own record of which stack owns internet data --
++     * IMS setup deliberately does not claim -- so it is also the answer to
++     * which stack the CP should prefer.
++     */
++    prefer_data_stack (self, stack);
+     return TRUE;
+ }
+ 
