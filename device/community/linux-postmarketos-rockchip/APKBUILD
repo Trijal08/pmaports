@@ -1,8 +1,8 @@
 maintainer="Antoine Martin (ayakael) <dev@ayakael.net>"
 pkgname=linux-postmarketos-rockchip
-pkgver=7.2.9
+pkgver=7.2.14
 _kernver=${pkgver%.*}
-pkgrel=1
+pkgrel=0
 pkgdesc="Mainline kernel for rockchip devices"
 arch="aarch64"
 _carch="arm64"
@@ -102,7 +102,7 @@ package() {
 }
 
 sha512sums="
-7f53f7fb4d7208dabaf257a1f031d188de262897c5a136d332b8fb53903122ad2a599531a679ee365bedac7bbc06f341fa3a4410da9245e8d529ce70fb827d85  linux-postmarketos-rockchip-7.2.9.patch.xz
+836c114ce317c964f225e977b8a728a6bba6656c1a4563096ec55c3098678efbf9c3b8019ec2014db12fe0955d510df5329bcf97bc81b45f9ed25107081677d4  linux-postmarketos-rockchip-7.2.14.patch.xz
 47e63679363261a864d271277340a6f2d45f544e1a056be4159df081f4f6537d0efa865c4af26611ab33a3079ee65db88ec2f6bc0e5fff43e0c043cde0cd91e1  linux-7.2.tar.xz
 2f72573bdcb9ab664845487463605a2b503e9640d38878bd663c829c66cfd13c6bf73c0bd200c5530e5e87e4887e47af93a413dd8cc2eb643613bed028aeef07  rk3566-pinenote-support.patch
 bcb43e41178eceb20713720644afca63715d6a17a5c3fbd2b6cec43be173d2327e004f569deb953a2bd5a0566e1773a79ad5ad7ce5f30f3942d1e0978693cee8  rk3566-pinenote-ultra-suspend.patch
