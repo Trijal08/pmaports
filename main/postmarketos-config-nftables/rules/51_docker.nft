@@ -6,6 +6,7 @@ table inet filter {
 
 	chain forward {
 		iifname "docker*" accept comment "Allow outgoing network traffic from Docker"
+		iifname "br-*" accept comment "Allow outgoing network traffic from Docker bridge networks"
 		ct state {established, related} counter accept comment "accept established connections"
 	}
 }
