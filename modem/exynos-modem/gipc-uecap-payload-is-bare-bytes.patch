@@ -1,0 +1,108 @@
+--- a/crates/exynos-modem/src/gipc.rs
++++ b/crates/exynos-modem/src/gipc.rs
+@@ -20,10 +20,7 @@
+ 
+ use crate::chan::{self, Handler};
+ use crate::pb::gipc::{GipcMessage, ModemTemperatureSetRequest};
+-use crate::pb::{
+-    uecap_file_message, UecapFileMessage, UecapFileMessageResult, UecapFileReadRequest,
+-    UecapFileReadResponse,
+-};
++use crate::pb::UecapFileReadRequest;
+ 
+ /// `service` of gems.gtemperature, whose payload we decode for the log line.
+ const SVC_GTEMPERATURE: u32 = 0x4b10_e343;
+@@ -68,6 +65,36 @@
+ const TYPE_REQUEST: u32 = 0;
+ const TYPE_RESPONSE: u32 = 1;
+ 
++/// The payload of a uecap file-read response: the block's bytes in field 1,
++/// and nothing else.
++///
++/// Recovered from stock on 2026-11-01, which settles a shape that had been
++/// inferred. For a 4000-byte block stock's envelope field 5 is **4003** bytes
++/// long and begins `0a a0 1f`, i.e. field 1, length-delimited, 4000 bytes --
++/// 3 bytes of header plus the data exactly, leaving room for nothing more. The
++/// small `ap_plmn_mapping.binarypb` is the same shape: field 5 is 2973 and
++/// begins `0a 9a 17`, one field-1 block of 2970.
++///
++/// So there is no offset, no result and no last_block on the wire, and no
++/// UecapFileMessage wrapper: the CP reassembles the blocks in the order they
++/// arrive, which the GIPC sequence already carries. Sending the modelled
++/// `UecapFileMessage{UecapFileReadResponse{offset, data, result, last_block}}`
++/// instead -- which is what this did -- made the CP re-read the same files
++/// without end: 78 requests for `ap_plmn_mapping.binarypb` in 81 seconds and
++/// 5.7 MB on a channel stock uses 128 KB of.
++fn uecap_read_payload(block: &[u8]) -> Vec<u8> {
++    let mut out = Vec::with_capacity(block.len() + 8);
++    out.push(0x0a); // field 1, wire type 2
++    let mut n = block.len();
++    while n >= 0x80 {
++        out.push((n as u8 & 0x7f) | 0x80);
++        n >>= 7;
++    }
++    out.push(n as u8);
++    out.extend_from_slice(block);
++    out
++}
++
+ /// Serve the GIPC channel forever (see [`chan::run`]).
+ pub fn run(dev: &Path, uecap_dir: PathBuf, verbose: bool) {
+     let g = Gipc::new(uecap_dir, verbose);
+@@ -163,28 +190,13 @@
+             let remaining = n - offset;
+             let len = remaining.min(block);
+             let last = len == remaining;
+-            let resp = UecapFileReadResponse {
+-                offset: offset as u32,
+-                data: data[offset..offset + len].to_vec(),
+-                result: Some(UecapFileMessageResult::UfmSuccess as i32),
+-                last_block: last,
+-            };
+-            // The GEMS path wraps the response in UecapFileMessage (oem.rs
+-            // uecap_chunk); the stock GIPC capture only has temperature
+-            // traffic, so the wrapper here is inferred -- keep it for
+-            // consistency with the one path we know the CP accepts.
+-            let wrapped = UecapFileMessage {
+-                uecap_file_operation: Some(uecap_file_message::UecapFileOperation::UecapFileReadResponse(
+-                    resp,
+-                )),
+-            };
+             frames.push(
+                 GipcMessage {
+                     r#type: Some(TYPE_RESPONSE),
+                     endpoint: req.endpoint,
+                     service: req.service,
+                     method: req.method,
+-                    payload: Some(wrapped.encode_to_vec()),
++                    payload: Some(uecap_read_payload(&data[offset..offset + len])),
+                     sequence: Some(base.wrapping_add(i)),
+                 }
+                 .encode_to_vec(),
+@@ -385,6 +397,26 @@
+             .is_empty());
+     }
+ 
++    /// The two block sizes stock was captured serving, byte for byte: a
++    /// 4000-byte block's payload is 4003 bytes beginning `0a a0 1f`, and
++    /// ap_plmn_mapping's 2970-byte one is 2973 beginning `0a 9a 17`. Nothing
++    /// follows the data -- no offset, no result, no last_block -- which is the
++    /// whole point: the modelled wrapper made the CP re-read for ever.
++    #[test]
++    fn uecap_payload_is_one_field_of_bytes_like_stock() {
++        let p = uecap_read_payload(&[0u8; 4000]);
++        assert_eq!(p.len(), 4003);
++        assert_eq!(&p[..3], &[0x0a, 0xa0, 0x1f]);
++
++        let p = uecap_read_payload(&[0u8; 2970]);
++        assert_eq!(p.len(), 2973);
++        assert_eq!(&p[..3], &[0x0a, 0x9a, 0x17]);
++
++        /* A short block still has a single-byte length. */
++        let p = uecap_read_payload(&[1, 2, 3]);
++        assert_eq!(p, vec![0x0a, 0x03, 1, 2, 3]);
++    }
++
+     #[test]
+     fn garbage_is_dropped_not_answered() {
+         assert!(Gipc::new(PathBuf::from("/nonexistent"), false)
