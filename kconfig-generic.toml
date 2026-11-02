@@ -315,7 +315,6 @@ RT61PCI = "m"
 RT73USB = "m"
 RTL8180 = "m"
 RTL8187 = "m"
-RTL8723BS = "m"
 RTL8XXXU = "m"
 RTW88 = "m"
 RTW88_8723DE = "m"
@@ -342,6 +341,10 @@ RTW89_8922AE = "m"
 ["category:network".">=6.19.0"."all"]
 RTW89_8852AU = "m"
 RTW89_8852CU = "m"
+["category:network"."<7.4_rc1"."all"]
+RTL8723BS = "m"
+["category:network".">=7.4_rc1"."all"]
+RTW88_8723BS = "m"
 
 # NFC controllers
 ["category:nfc".">=0.0.0"."all"]
