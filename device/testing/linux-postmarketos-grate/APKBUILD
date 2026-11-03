@@ -1,11 +1,13 @@
 # Co-Maintainer: Svyatoslav Ryhel <clamor95@gmail.com>
 maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
 pkgname=linux-postmarketos-grate
-pkgver=7.0.1
-pkgrel=4
+pkgver=7.3.1
+pkgrel=0
 pkgdesc="Linux kernel with experimental patches for Tegra"
 arch="armv7"
-url="https://codeberg.org/libre-tegra/linux"
+# todo: change URL back once 7.3.1 got pushed to it
+# url="https://codeberg.org/libre-tegra/linux"
+url="https://codeberg.org/clamor-s/linux"
 license="GPL-2.0-only"
 options="!strip !check !tracedeps pmb:cross-native pmb:kconfigcheck-community pmb:kconfigcheck-uefi"
 makedepends="
@@ -29,7 +31,7 @@ makedepends="
 # Source
 _flavor="${pkgname#linux-}"
 _tag="stable"
-_commit="bfffc6d6656e87f3de3aa4c09d852849081ef088"
+_commit="eab1ff1e1eefc77e0adb3384f45dc3aadd9f5714"
 _carch="arm"
 _config="config-$_flavor.$arch"
 source="$pkgname-$_tag.tar.gz::$url/archive/$_commit.tar.gz
@@ -64,6 +66,6 @@ package() {
 }
 
 sha512sums="
-fa6a723db93d0c4c799ca8fb69a37ce13cc98a80ff688bc45dea7bd6d36df05b8f0deaa15a416e271a4ea0c5bb2097e63fc2d0a02903f11e6c404fbec82718a2  linux-postmarketos-grate-stable.tar.gz
-f10be227d398f578aa079890010ffab0e8b8ac9bf789cee1120084350d557faee085a19de9f90b8ea61e46f349a867a0795798cb9e28a5030579894dd0d6e07c  config-postmarketos-grate.armv7
+dc186ac92e0c0285fda36cf0e508d09c9683c57238ded3668b355129a1c72ddc59bd72ee93c7fbdac0d472516b1d4903357c04ed2fa43f7b6695d70274deb579  linux-postmarketos-grate-stable.tar.gz
+9dc7eb8f12974ebf9a432212bc90bf87949650f9f3043d5ff3070b8317d7f393b02faa2399a6c8b84bf3fd030f4467f199ab9688c136108f371e293013e2a8bb  config-postmarketos-grate.armv7
 "
