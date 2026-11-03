@@ -1,0 +1,24 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -6517,6 +6517,21 @@
+                          MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
+                          MM_BASE_MODEM_DATA_TTY_SUPPORTED, FALSE,
+                          /*
++                          * The CP pushes SIGNAL_STRENGTH_CHANGED (0x0906) on
++                          * its own and handle_indication() already consumes
++                          * it, so the core's periodic GET_SIGNAL_STRENGTH poll
++                          * is redundant -- and not free.
++                          *
++                          * Measured over 547 s on hardware: 79 polls against
++                          * stock's 1, and 50% of the boot's carrier-config
++                          * file reads fall within 3 s of one. The polls
++                          * cluster, so those windows cover only 15% of the
++                          * timeline -- 3.3x above chance, not an artifact of
++                          * both being frequent. Stock asks once and then
++                          * listens.
++                          */
++                         MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED, TRUE,
++                         /*
+                           * The CS domain is real on this modem: with IMS down
+                           * it drops to UMTS and places circuit-switched calls,
+                           * and the CP answers GET_VOICE_REGISTRATION (0x0700)
