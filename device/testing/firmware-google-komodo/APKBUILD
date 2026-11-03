@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-komodo
 pkgver=20260627
-pkgrel=2
+pkgrel=3
 pkgdesc="Firmware for Google Pixel 9 Pro XL"
 subpackages="
 	$pkgname-brcm_a0
@@ -27,7 +27,14 @@ makedepends="
 # Source
 _owner="TheMuppets"
 _repository="proprietary_vendor_google_komodo"
-_commit="lineage-24.0"
+# Pinned to the blob import that matches this device's vendor partition.
+# The device reports vendor CP2A.260605.016; this import's uecapconfig and
+# carrierconfig are byte-identical to it -- 1398/1398 and 1305/1305 files by
+# git blob sha. Tracking the branch tip instead picked up CP3A.260905.009,
+# where 653 of 1398 uecapconfig files differ from what the modem on this
+# device was shipped with. A branch name here is also not a pin: the tarball
+# changes under the recorded checksum whenever upstream pushes.
+_commit="eeadf643f25b96045802ef6ff4cfa2cd40c705b6"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
 	initramfs_setup_modemfw.sh
@@ -202,7 +209,7 @@ mfc() {
 		"$subpkgdir/usr/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
-23facfa55a0eae07e28c8fe538092af1f74f50e5494d779ca8330a85344ff2a20c2e65da7b21676211ffe8603e72c228ab835b35a5c787799a3bd1b3d42946de  firmware-google-komodo-lineage-24.0.tar.gz
+1fb0dfeaf496f5afbf8fb5b8e98c20153ece62dbeb89b0382874cbe7be7e98c9daa44f9f17ca39ebf5f290e20cc55f58b7c5c6fc8fb88413d2e411e79c7b4b6c  firmware-google-komodo-eeadf643f25b96045802ef6ff4cfa2cd40c705b6.tar.gz
 f082c8c88af39bef00ed21876bf512bb1b15ef81a6985ad1a29e9251ff46662b65101eefffaee533fd1cd7ae577d67ee4a2f8a1a6c13a5496853e58c197dbc7b  initramfs_setup_modemfw.sh
 fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
 b0ab040928d08c59723088484ecec950a2b0f0605f91f240139a2511fc1110dc2fa934851dfa980a43343341366637c7a8406712d0fb844b911999d83e550122  aosp-carrier-defaults.txt
