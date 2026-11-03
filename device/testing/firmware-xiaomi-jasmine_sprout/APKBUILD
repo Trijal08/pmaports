@@ -1,7 +1,7 @@
 maintainer="Alexey Minnekhanov <alexeymin@minlexx.ru>"
 pkgname=firmware-xiaomi-jasmine_sprout
-pkgver=1
-pkgrel=1
+pkgver=2
+pkgrel=0
 pkgdesc="Firmware files for Xiaomi Mi A2"
 url="https://gitlab.com/m.01001101.01010110/$pkgname"
 arch="aarch64"
@@ -18,7 +18,7 @@ source="
 "
 
 builddir="src"
-_fwdir="/lib/firmware"
+_fwdir="/usr/lib/firmware"
 
 package() {
 	ath10k-fwencoder --create \
