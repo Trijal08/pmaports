@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=19
+pkgrel=20
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -48,6 +48,7 @@ source="
 	gipc-close-the-read.patch
 	gipc-drop-the-serve-pacing.patch
 	gipc-one-sequence-per-reply.patch
+	gipc-data-blocks-are-partial.patch
 	caimito-modem-setup.sh
 	pixel-modem-stage.service
 	exynos-modem.service
@@ -219,6 +220,7 @@ d527b97d00c5d47bb8fa4de06ed7276729f26b97c1bbea0e48071bc139cf09c6f71097e8e3f1d48c
 394f37bc611b574c0f9e391b8fb9ce29061aab5a6799b0d6de02384c40ff58584b9c682aa96188b34ccc11487a688b36fb1dd75ae7a97d56f7168536cbb616ab  gipc-close-the-read.patch
 931b5a48bca88f0967e81b7b8482c4e011b711b8f404ac9bf742f0b04421d22e3c3064b16aa63300e823a52e805aef113fa06531df204f94b0f0a79c143bd507  gipc-drop-the-serve-pacing.patch
 314c571bc0d9f42883ee6c0216af45cb8fad20d52ef5b5d386868631e4d3324895ddb8298c222e587e47f7a28642558b334b2ff4533302077926eddd1f0822eb  gipc-one-sequence-per-reply.patch
+3a78bf364ee0a59131bc573ecf6cd06fd8960e883e50c631876961439dc627a4f9f12feb4212f2ee5315f42b8c90ae2a1cd804fc81a5c6ed66bca82f147eb4a3  gipc-data-blocks-are-partial.patch
 f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
 582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
 872284e112edf8f7d834b91e6c82e2bc6bfa04119daf04af568c2aaef7defe17ac2ef92ca075938aa6159115ab709551554136f738b4ad3d6f2a389ec109cbe9  exynos-modem.service
