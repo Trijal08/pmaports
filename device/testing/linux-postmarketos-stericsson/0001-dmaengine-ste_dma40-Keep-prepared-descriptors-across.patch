@@ -1,0 +1,84 @@
+From 2c834e665669dfe02b61e0356218163bec6f1b63 Mon Sep 17 00:00:00 2001
+From: Linus Walleij <linusw@kernel.org>
+Date: Wed, 4 Nov 2026 22:22:44 +0100
+Subject: [PATCH] dmaengine: ste_dma40: Keep prepared descriptors across
+ termination
+
+MMCI can prepare the next request while the current DMA transfer is
+running. If the current request fails, its error handler terminates the
+channel before the next descriptor has been submitted.
+
+d40_term_all() frees that descriptor from prepare_queue, although MMCI
+still holds its pointer. Submitting it later accesses freed memory in
+d40_tx_submit(). A reported crash writes to 0x104 through a list pointer
+containing LIST_POISON1, which is consistent with this sequence.
+
+Termination only cancels transfers that have been submitted. Leave
+prepared descriptors on prepare_queue so the client can still submit
+them, and release any remaining prepared descriptors when the channel
+resources are freed. Keep tracking them so abandoned descriptors are
+reclaimed at channel teardown.
+
+Fixes: 82babbb361f2 ("dmaengine/ste_dma40: fix memory leak due to prepared descriptors")
+Signed-off-by: Linus Walleij <linusw@kernel.org>
+---
+ drivers/dma/ste_dma40.c | 22 +++++++++-------------
+ 1 file changed, 9 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/dma/ste_dma40.c b/drivers/dma/ste_dma40.c
+index 74dd4cbdc3c0..f1cbc719c4f0 100644
+--- a/drivers/dma/ste_dma40.c
++++ b/drivers/dma/ste_dma40.c
+@@ -1166,14 +1166,6 @@ static void d40_term_all(struct d40_chan *d40c)
+ 			d40_desc_free(d40c, d40d);
+ 		}
+ 
+-	/* Release descriptors in prepare queue */
+-	if (!list_empty(&d40c->prepare_queue))
+-		list_for_each_entry_safe(d40d, _d,
+-					 &d40c->prepare_queue, node) {
+-			d40_desc_remove(d40d);
+-			d40_desc_free(d40c, d40d);
+-		}
+-
+ 	d40c->pending_tx = 0;
+ }
+ 
+@@ -2222,7 +2214,8 @@ static int d40_config_memcpy(struct d40_chan *d40c)
+ 
+ static int d40_free_dma(struct d40_chan *d40c)
+ {
+-
++	struct d40_desc *d40d;
++	struct d40_desc *_d;
+ 	int res = 0;
+ 	u32 event = D40_TYPE_TO_EVENT(d40c->dma_cfg.dev_type);
+ 	struct d40_phy_res *phy = d40c->phy_chan;
+@@ -2252,6 +2245,12 @@ static int d40_free_dma(struct d40_chan *d40c)
+ 	/* Release descriptor state; this does not access DMA40 registers. */
+ 	d40_term_all(d40c);
+ 
++	/* Release any prepared descriptors the client did not submit. */
++	list_for_each_entry_safe(d40d, _d, &d40c->prepare_queue, node) {
++		d40_desc_remove(d40d);
++		d40_desc_free(d40c, d40d);
++	}
++
+ 	res = pm_runtime_resume_and_get(d40c->base->dev);
+ 	if (res >= 0) {
+ 		res = d40_channel_execute_command(d40c, D40_DMA_STOP);
+@@ -2508,10 +2507,7 @@ d40_prep_sg(struct dma_chan *dchan, struct scatterlist *sg_src,
+ 		goto free_desc;
+ 	}
+ 
+-	/*
+-	 * add descriptor to the prepare queue in order to be able
+-	 * to free them later in terminate_all
+-	 */
++	/* Track prepared descriptors until submission or channel release. */
+ 	list_add_tail(&desc->node, &chan->prepare_queue);
+ 
+ 	spin_unlock_irqrestore(&chan->lock, flags);
+-- 
+2.43.0
+

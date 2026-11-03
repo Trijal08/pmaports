@@ -3,7 +3,7 @@ maintainer="Stefan Hansson <newbyte@postmarketos.org>"
 _flavor="postmarketos-stericsson"
 _config="config-$_flavor.armv7"
 pkgname=linux-$_flavor
-pkgver=7.2.0
+pkgver=7.4_rc2
 pkgrel=0
 pkgdesc="Mainline kernel for ST-Ericsson NovaThor devices"
 arch="armv7"
@@ -20,6 +20,7 @@ options="!strip !check !tracedeps
 makedepends="
 	bison
 	clang
+	clang-libclang
 	elfutils-dev
 	findutils
 	flex
@@ -31,17 +32,19 @@ makedepends="
 	perl
 	postmarketos-installkernel
 	python3
+	rust
+	rust-bindgen
+	rust-src
+	rustfmt
 	zstd
 	"
-case $pkgver in
-	*.*.*)	_kernver=${pkgver%.0};;
-	*.*)	_kernver=$pkgver;;
-esac
+_kernver=${pkgver/_/-}
 source="
-	https://cdn.kernel.org/pub/linux/kernel/v${_kernver%%.*}.x/linux-$_kernver.tar.xz
+	https://git.kernel.org/torvalds/t/linux-$_kernver.tar.gz
 	config-$_flavor.armv7
+	0001-dmaengine-ste_dma40-Keep-prepared-descriptors-across.patch
 	"
-builddir="$srcdir/linux-${_kernver//_/-}"
+builddir="$srcdir/linux-$_kernver"
 _defconfig="u8500_defconfig"
 
 prepare() {
@@ -70,6 +73,7 @@ package() {
 }
 
 sha512sums="
-47e63679363261a864d271277340a6f2d45f544e1a056be4159df081f4f6537d0efa865c4af26611ab33a3079ee65db88ec2f6bc0e5fff43e0c043cde0cd91e1  linux-7.2.tar.xz
-58de2313be4f3de35a59fc12895322e908e0359c270b2b0cc1bac2be8575631d36220baec486c97fa856fd26dbd082a6a9837f24abb41c95c1e6925952888ba3  config-postmarketos-stericsson.armv7
+91bb66b7a387c4b35c21fd9dfeaebae682cf18091bae53d5551374b8e63a5102ef89c30fbd1028f4792b1cf2f5d695e2038d632caf9847e46edbb36ed0e829f4  linux-7.4-rc2.tar.gz
+d60ef1a82d0f809164cd3f63c2663c3f53bece6365572fea17589fd2f801e9b7191243c2f7b816cbb9c9742afd6ff8f4001e20dc931e3699e560670a39fa23e7  config-postmarketos-stericsson.armv7
+1733c01d617fa6e076a6e93cabc232c879075bfd0d4ebfb20a433150a2a29b023fe64d59c072aea9e217cb055604adfdd5ce70d1cc3e9ec24f738b024e2dd327  0001-dmaengine-ste_dma40-Keep-prepared-descriptors-across.patch
 "
