@@ -3,7 +3,7 @@
 maintainer="Arnav Singh <me@arnavion.dev>"
 pkgname=u-boot-pinephone
 pkgver=2023.01
-pkgrel=5
+pkgrel=6
 pkgdesc="U-Boot bootloader for the PINE64 PinePhone"
 url="https://source.denx.de/u-boot"
 arch="aarch64"
@@ -29,6 +29,7 @@ source="https://source.denx.de/u-boot/u-boot/-/archive/v$pkgver/u-boot-v$pkgver.
 	0002-disable-bootdelay.patch
 	0003-libfdt.i_shipped-use-SWIG_AppendOutput.patch
 	0004-python-3.13-binman-migrate-from-pkg_resources-to-imp.patch
+	0005-pylibfdt-Replace-removed-SWIG-Python-2-compatibility.patch
 	"
 builddir="$srcdir/u-boot-v$pkgver"
 _frequencies='528 552 624'
@@ -59,7 +60,7 @@ package() {
 		install -D -m644 "build-$freq/u-boot-sunxi-with-spl.bin.sha512" \
 			"$pkgdir/usr/share/u-boot/pine64-pinephone/u-boot-sunxi-with-spl-$freq.bin.sha512"
 	done
-	install -D -m 755 "$srcdir"/update-u-boot "$pkgdir"/usr/sbin/update-u-boot
+	install -D -m 755 "$srcdir"/update-u-boot "$pkgdir"/usr/bin/update-u-boot
 }
 
 sha512sums="
@@ -69,4 +70,5 @@ c25aae1b0d2f677d295587c6d318f23d52bc3a79e968bed9093645943a9840c56b1f6f44e5649d23
 9b9a5bd2cb5c04715a5bb2d34bfc06e63817dba7ec40fa2b09000a0827590623e85ed5877d6b6bb39f2bb917e5e9d8e1379e3df9128e3304be06abc487c68df2  0002-disable-bootdelay.patch
 016ef30dbbb1021dad4f58eeda3f5a5e89ff3a76dbc69e8e4cf6a3fc3983aef998cfe1087abb4b21bb2f859bd5cffe26c1da42d13f1c3d2e3c053c399f38720b  0003-libfdt.i_shipped-use-SWIG_AppendOutput.patch
 c0545c6a1d17507f7e4bc337200fa3a4a1a89d62122cc6599ea00f27187b85f3e322d945683a84cdff98d981cf604187ded05d7b93bb5fae5a3fe7f9751077a2  0004-python-3.13-binman-migrate-from-pkg_resources-to-imp.patch
+2f0bf96fffd4541608e8079a571920b0887a46e6cf2abb137d8ce2bebe992a7562b1792553f11d41ae19a33292f8275dbcece1a3aaa26cba35268a0f6709aee1  0005-pylibfdt-Replace-removed-SWIG-Python-2-compatibility.patch
 "
