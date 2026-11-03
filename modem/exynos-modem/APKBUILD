@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=17
+pkgrel=18
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -46,6 +46,7 @@ source="
 	rfs-userspace-and-channel-prologues.patch
 	gipc-uecap-payload-is-bare-bytes.patch
 	gipc-close-the-read.patch
+	gipc-drop-the-serve-pacing.patch
 	caimito-modem-setup.sh
 	pixel-modem-stage.service
 	exynos-modem.service
@@ -215,6 +216,7 @@ d527b97d00c5d47bb8fa4de06ed7276729f26b97c1bbea0e48071bc139cf09c6f71097e8e3f1d48c
 408a000c5f409e5ab270d7a618f4382f4a8a51d4faeec761afdca59465a2b2e6a7c7ef581e8a9f9edbe651e85416a2ec97cc297c51caf560eaa66e447de4a522  rfs-userspace-and-channel-prologues.patch
 9769344b6dbc78c4cf44b3709009905b4583f68e01de5b3839eb0aedbd3b8413335f5443243ce6ba387b708db76ed5e5276d8a923345bed51f162fdcdcd5e0d5  gipc-uecap-payload-is-bare-bytes.patch
 394f37bc611b574c0f9e391b8fb9ce29061aab5a6799b0d6de02384c40ff58584b9c682aa96188b34ccc11487a688b36fb1dd75ae7a97d56f7168536cbb616ab  gipc-close-the-read.patch
+931b5a48bca88f0967e81b7b8482c4e011b711b8f404ac9bf742f0b04421d22e3c3064b16aa63300e823a52e805aef113fa06531df204f94b0f0a79c143bd507  gipc-drop-the-serve-pacing.patch
 f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
 582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
 872284e112edf8f7d834b91e6c82e2bc6bfa04119daf04af568c2aaef7defe17ac2ef92ca075938aa6159115ab709551554136f738b4ad3d6f2a389ec109cbe9  exynos-modem.service
