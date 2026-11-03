@@ -2,7 +2,7 @@
 maintainer="Bart Ribbers <bribbers@disroot.org>"
 pkgname=postmarketos-ui-plasma-bigscreen
 pkgver=3
-pkgrel=0
+pkgrel=1
 _commit_configs="a8bd93e279c222be6058ef46b065c11e88aa8400"
 pkgdesc="(Wayland) 10-feet variant of Plasma, made for big screen TVs"
 url="https://plasma-bigscreen.org"
@@ -28,6 +28,9 @@ install="
 	$pkgname.post-upgrade
 	"
 replaces="jellyfin-desktop"
+subpackages="
+	$pkgname-pipewire
+	"
 source="$pkgname-$_commit_configs.tar.gz::https://invent.kde.org/plasma-bigscreen/bigscreen-image-settings/-/archive/$_commit_configs/bigscreen-image-settings-$_commit_configs.tar.gz
 	nymphcast.desktop
 	org.jellyfin.JellyfinDesktop.desktop
@@ -55,6 +58,13 @@ extras() {
 	_pmb_recommends="
 		kodi
 		"
+
+	mkdir -p "$subpkgdir"
+}
+
+pipewire() {
+	install_if="$pkgname pipewire"
+	depends="pipewire-zeroconf"
 
 	mkdir -p "$subpkgdir"
 }
