@@ -23,6 +23,33 @@ ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
   ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", \
   ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/lib/firmware/google/s5400/carrierconfig"
 
+# The device identity the CP puts in its IMS configuration, and from which the
+# SIP User-Agent is built. Left to the running system these come out as the
+# device tree's model and /etc/os-release, which do not match what this
+# hardware's own stock stack sends -- captured from komodo's Android on the
+# same SIM:
+#
+#            stock                      ours, unpinned
+#   model    Pixel9ProXL                Pixel 9 Pro XL      (device-tree spaces)
+#   build    CP2A.260605.016            nura edge           (os-release ID + BUILD_ID)
+#   UA       Telus Pixel9ProXL CP2A.260605.016
+#            Telus Pixel-9-Pro-XL nura-edge
+#
+# expand_user_agent() builds the UA from #MODEL# and #BUILD#, so pinning these
+# two fixes the UA as well. The IMS core provisions a device profile per
+# subscription and the User-Agent is how a REGISTER identifies against it,
+# which is the remaining difference between our registration attempt and
+# stock's on this SIM.
+#
+# This is the identity of *this* device as its own vendor stack reports it, on
+# the owner's own subscription -- not a claim to be some other device. Note it
+# does reverse a deliberate earlier choice to name postmarketOS here (see the
+# comment on expand_user_agent in mm-sit-ims-config.c); that string did
+# register on o2, so if a carrier turns out to prefer it, this is the knob.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
+  ENV{ID_MM_SIT_DEVICE_MODEL}="Pixel9ProXL", \
+  ENV{ID_MM_SIT_DEVICE_BUILD}="CP2A.260605.016"
+
 # The CP's AT service is a veneer over the control plane the plugin already
 # speaks, and a call-waiting query through it knocks the CP off its serving
 # network. The plugin grabs it as ignored anyway; this stops ModemManager
