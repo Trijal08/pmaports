@@ -1,8 +1,7 @@
-# Co-Maintainer: Pablo Correa Gomez <pabloyoyoista@postmarketos.org>
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+maintainer="Pablo Correa Gomez <pabloyoyoista@postmarketos.org>"
 pkgname=postmarketos-test
 pkgver=1.4.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Common test utilities for postmarketOS"
 url="https://postmarketos.org"
 arch="noarch"
