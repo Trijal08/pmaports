@@ -1,10 +1,9 @@
 #!/bin/sh
 # Universal single-stage initramfs hook for Google Caimito Modem Firmware
 #
-# Mounts the vendor modem partitions, then stages the three files the
-# s5xxx_modem driver expects under fixed names.  The driver deliberately parses
-# nothing itself -- no CDT parse, no JSON, no gunzip, no tar builder -- so the
-# resolution, decompression and packing all happen here:
+# Stages the three files the s5xxx_modem driver expects under fixed names.  The
+# driver deliberately parses nothing itself -- no CDT parse, no JSON, no gunzip,
+# no tar builder -- so the resolution, decompression and packing all happen here:
 #
 #   google/s5400/hwcfg.bin          52-byte digest of the resolved HW/RF ids
 #   google/s5400/rf_cfg.bin         this unit's RF_CFG image, decompressed
@@ -14,6 +13,27 @@
 # ONLINE and then self-disables a few seconds later without ever servicing the
 # IPC rings), which is why it is repacked here on every boot rather than shipped
 # in the package.
+#
+# The `modem` partition is NOT mounted.  Its contents are build artifacts --
+# modem.bin, hardware_config.json and the RF_CFG_* set, all under
+# images/<baseband-tag>/ -- and the package provides them at the same path the
+# mount used to supply, $FW/modem/images/, so the firmware and the carrier
+# database in carrierconfig/ can be versioned together.  cfg.db is paired to the
+# baseband by a shared <date>-B-<number> tag and a mismatch misbehaves, so they
+# must move as one.
+#
+# The `modem/` level stays in the path deliberately: the driver loads the CP
+# image straight from the DT, which names it
+# "google/s5400/modem/images/default/modem.bin"
+# (zumapro-caimito-s5400.dtsi).  Keeping it means the package is a drop-in
+# replacement for the mount with no DT change -- and `default` is a symlink
+# inside the vendor image, so it survives extraction and no longer has to be
+# created by hand.
+#
+# The other three partitions stay mounted because what they carry is per-unit
+# and cannot be shipped: modem_userdata holds this unit's replay/dds.bin, and
+# efs and persist hold its calibration (the driver reads persist/modem/cpsha
+# directly).
 set -e
 
 FW=/sysroot/lib/firmware/google/s5400
@@ -21,11 +41,11 @@ FW=/sysroot/lib/firmware/google/s5400
 echo "Initializing early-boot modem storage mounts..."
 
 # 1. Create target directories directly on the persistent storage rootfs
-mkdir -p "$FW/modem" "$FW/modem_userdata" "$FW/efs" "$FW/persist"
+mkdir -p "$FW/modem_userdata" "$FW/efs" "$FW/persist"
 
 # 2. Mount each hardware partition directly into the /sysroot path
 # These will stay cleanly mounted and transfer straight over to the running OS
-mount -t ext4 /dev/disk/by-partlabel/modem_a "$FW/modem" -o ro,nodev,nosuid
+# (the `modem` partition is deliberately absent -- see the comment above)
 mount -t f2fs /dev/disk/by-partlabel/modem_userdata "$FW/modem_userdata" -o ro,nodev,nosuid
 mount -t f2fs /dev/disk/by-partlabel/efs "$FW/efs" -o ro,nodev,nosuid
 mount -t f2fs /dev/disk/by-partlabel/persist "$FW/persist" -o ro,nodev,nosuid

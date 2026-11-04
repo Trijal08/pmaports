@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-komodo
 pkgver=20260627
-pkgrel=4
+pkgrel=5
 pkgdesc="Firmware for Google Pixel 9 Pro XL"
 subpackages="
 	$pkgname-brcm_a0
@@ -22,6 +22,7 @@ options="!check !strip !archcheck !tracedeps pmb:cross-native"
 makedepends="
 	carrier-settings-tool
 	rsync
+	e2fsprogs-extra
 "
 
 # Source
@@ -154,6 +155,10 @@ brcm_b1() {
 modem() {
 	pkgdesc="Google Pixel 9 Pro XL S5400 Modem and GNSS firmware"
 
+	# Modem Main Firmware Blobs
+	install -d "$subpkgdir/usr/lib/firmware/google/s5400/modem/"
+	debugfs -R "rdump images $subpkgdir/usr/lib/firmware/google/s5400/modem" "$srcdir"/modem.img
+
 	# Modem Partition Mounting Script
 	install -Dm755 "$srcdir"/initramfs_setup_modemfw.sh \
 		-t "$subpkgdir/usr/share/mkinitfs/hooks-cleanup/"
@@ -181,7 +186,7 @@ modem() {
 	install -d "$subpkgdir/usr/lib/firmware/google/s5400/uecapconfig/"
 	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/uecapconfig/ "$subpkgdir/usr/lib/firmware/google/s5400/uecapconfig/"
 
-	# Main Firmware Blob
+	# GNSS Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/kepler.bin \
 		"$subpkgdir/usr/lib/firmware/google/s5400/kepler.bin"
 }
@@ -235,7 +240,7 @@ mfc() {
 }
 sha512sums="
 31bdf835556914d5caf5038d87f6f00b8cf29443159b1c85cc8d54dfedb9ff3c4c7e6b7c04083b66be0de67f657370cc2cd21b6752b097b6308c53d7bfc7ed4a  firmware-google-komodo-1aa6782a3ef467a08b600c0dd3bdc073c8008cf0.tar.gz
-f082c8c88af39bef00ed21876bf512bb1b15ef81a6985ad1a29e9251ff46662b65101eefffaee533fd1cd7ae577d67ee4a2f8a1a6c13a5496853e58c197dbc7b  initramfs_setup_modemfw.sh
+1343f675d3983df502508c188e69a0268950bfa9849937cb15fd91e0fdd4f5f3c65a094450548786ee92e848aba223b4a8c7838b83fff2c8c3836e5f43379f2f  initramfs_setup_modemfw.sh
 fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
 b0ab040928d08c59723088484ecec950a2b0f0605f91f240139a2511fc1110dc2fa934851dfa980a43343341366637c7a8406712d0fb844b911999d83e550122  aosp-carrier-defaults.txt
 "
