@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-komodo
 pkgver=20260627
-pkgrel=5
+pkgrel=6
 pkgdesc="Firmware for Google Pixel 9 Pro XL"
 subpackages="
 	$pkgname-brcm_a0
@@ -23,6 +23,7 @@ makedepends="
 	carrier-settings-tool
 	rsync
 	e2fsprogs-extra
+	curl
 "
 
 # Source
@@ -156,8 +157,37 @@ modem() {
 	pkgdesc="Google Pixel 9 Pro XL S5400 Modem and GNSS firmware"
 
 	# Modem Main Firmware Blobs
+	#
+	# radio/modem.img is a git-lfs pointer and TheMuppets host their objects
+	# themselves (.lfsconfig), so the tarball carries 134 bytes of text rather
+	# than the image. Resolve the oid out of the pointer and fetch the object
+	# directly -- keeping it keyed on the commit's own pointer instead of a
+	# hardcoded oid, so a repin needs no edit here.
+	#
+	# The oid *is* the sha256 of the content, so verifying against it is a
+	# stronger check than a sha512sums entry would be.
+	local _ptr="$builddir"/radio/modem.img
+	local _oid="$(sed -n 's/^oid sha256://p' "$_ptr")"
+	# Anchored: .lfsconfig also carries a pushurl, and matching both yields a
+	# two-line value that resolves to Endpoint=<unknown>.
+	local _lfs="$(sed -n 's/^[[:space:]]*url[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' \
+		"$builddir"/.lfsconfig)"
+	[ -n "$_oid" ] || die "radio/modem.img is not an LFS pointer"
+	[ -n "$_lfs" ] || die "no lfs url in .lfsconfig"
+
+	curl -fsSL -o "$srcdir"/modem.img "$_lfs/objects/$_oid"
+	echo "$_oid  $srcdir/modem.img" | sha256sum -c - >/dev/null \
+		|| die "modem.img does not match its LFS oid"
+
 	install -d "$subpkgdir/usr/lib/firmware/google/s5400/modem/"
 	debugfs -R "rdump images $subpkgdir/usr/lib/firmware/google/s5400/modem" "$srcdir"/modem.img
+	# debugfs exits 0 even when it cannot open the image, so the result has to
+	# be checked or the package silently ships an empty modem/ directory.
+	# -s also proves the images/default symlink (carried in from the image)
+	# resolved.
+	[ -s "$subpkgdir/usr/lib/firmware/google/s5400/modem/images/default/modem.bin" ] \
+		|| die "modem.bin was not extracted from modem.img"
+	chown -R root:root "$subpkgdir/usr/lib/firmware/google/s5400/modem/images"
 
 	# Modem Partition Mounting Script
 	install -Dm755 "$srcdir"/initramfs_setup_modemfw.sh \
