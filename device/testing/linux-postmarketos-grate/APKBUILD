@@ -3,13 +3,11 @@ maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
 pkgname=linux-postmarketos-grate
 pkgver=7.3.1
 pkgrel=0
+_commit="eab1ff1e1eefc77e0adb3384f45dc3aadd9f5714"
 pkgdesc="Linux kernel with experimental patches for Tegra"
+url="https://codeberg.org/libre-tegra/linux"
 arch="armv7"
-# todo: change URL back once 7.3.1 got pushed to it
-# url="https://codeberg.org/libre-tegra/linux"
-url="https://codeberg.org/clamor-s/linux"
 license="GPL-2.0-only"
-options="!strip !check !tracedeps pmb:cross-native pmb:kconfigcheck-community pmb:kconfigcheck-uefi"
 makedepends="
 	bison
 	clang
@@ -24,24 +22,33 @@ makedepends="
 	perl
 	postmarketos-installkernel
 	python3
-	xz
 	zstd
 "
-
 # Source
-_flavor="${pkgname#linux-}"
 _tag="stable"
-_commit="eab1ff1e1eefc77e0adb3384f45dc3aadd9f5714"
 _carch="arm"
-_config="config-$_flavor.$arch"
-source="$pkgname-$_tag.tar.gz::$url/archive/$_commit.tar.gz
-	$_config
+source="$pkgname-$_tag.tar.gz::https://codeberg.org/libre-tegra/linux/archive/$_commit.tar.gz
+	config-${pkgname#linux-}.$arch
 "
 builddir="$srcdir/linux"
+options="
+	!check
+	!strip
+	!tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+	pmb:kconfigcheck-uefi
+"
+
+# Used internally by pmbootstrap. Don't touch.
+# TODO: Remove once minimum default pmbootstrap version supports
+# kernel packages without '_flavor' and '_config'.
+_config="config-${pkgname#linux-}"
+_flavor="${pkgname#linux-}"
 
 prepare() {
 	default_prepare
-	cp "$srcdir/config-$_flavor.$CARCH" .config
+	cp "$srcdir"/config-${pkgname#linux-}.$arch .config
 }
 
 build() {
@@ -61,7 +68,7 @@ package() {
 		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
 	rm -f "$pkgdir"/usr/lib/modules/*/build "$pkgdir"/usr/lib/modules/*/source
 
-	install -D "$builddir"/include/config/kernel.release \
+	install -Dm644 "$builddir"/include/config/kernel.release \
 		"$pkgdir"/usr/share/kernel/$_flavor/kernel.release
 }
 
