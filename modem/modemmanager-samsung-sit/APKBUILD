@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=26
+pkgrel=27
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -82,6 +82,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	sms-dedup-and-no-resend.patch
 	sms-delivery-report-race.patch
 	carrier-config-push-once.patch
+	ims-never-escalate-the-attach.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -214,4 +215,5 @@ b1c290462766e4eb5c79a625b12ac7ba68c9a9afae3d7b1a78f0bc1cf55a3cabdd793717b2683f96
 233050cb63c361595316cb3e0dc086c61e742a81651b4ebcd355fc929ffc3fb9f8bcd4e3c3afa64cd8ebf5f5aa204746942a77111e8bd390d80be7de7c668471  sms-dedup-and-no-resend.patch
 b99b00e6038c40ee9fb25db45363330c9e9070a58b4e8618193d1413b5297fb68a8b2c0aa53ef54555f3f711186e773a6d810af9eae7bbb02e97b23bcb83f6f5  sms-delivery-report-race.patch
 75eb900f7ddcc149013345e83ea7bb7ea1742fc4771c3aa8cfe41be7d91311a698e62a2598cc43ff567fa3a391e27b3659325acda9041da8301e4962422a4267  carrier-config-push-once.patch
+11284aee51fecfaab2accac59a2df4c2f07ac424ac72d7653a66ba6e0558b2dbc4d6fe6b3f1c6ef98ae04d5a03363e98f2cceda899943ff4bf64e5078daa3773  ims-never-escalate-the-attach.patch
 "
