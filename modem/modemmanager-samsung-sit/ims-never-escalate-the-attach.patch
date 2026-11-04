@@ -1,19 +1,26 @@
 --- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
 +++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
-@@ -1071,6 +1071,12 @@
+@@ -1071,6 +1071,19 @@
   * CP or firmware that accepts the DNN never reaches this path. The IMS sequence
   * retries on its own timer, so the next attempt uses the new attach APN.
   */
 +/*
 + * Whether a 2253 on the IMS PDN moves the modem-wide attach APN to the IMS
 + * entry. FALSE matches the stock stack; see ims_pdn_refused().
++ *
++ * TRUE for now, deliberately. Stock does not need this and neither should we,
++ * but until 2253 is understood, FALSE means no VoLTE at all on a SIM whose IMS
++ * PDN is refused -- which is every SIM, every boot. The escalation is a poor
++ * workaround: it costs that SIM its data, and the P-CSCF pool it yields
++ * registers only about one boot in five. A poor workaround still beats no
++ * telephony. Flip to FALSE to see the refusal unmasked.
 + */
-+static const gboolean escalate_attach_to_ims = FALSE;
++static const gboolean escalate_attach_to_ims = TRUE;
 +
  static void
  ims_pdn_refused (MMSitIms                   *ims,
                   guint                       cause,
-@@ -1084,6 +1090,43 @@
+@@ -1084,6 +1097,43 @@
  
      if (cause != MM_SIT_REJECT_CAUSE_MATCH_ALL_RULE_NOT_ALLOWED)
          return;
