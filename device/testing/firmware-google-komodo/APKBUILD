@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-komodo
 pkgver=20260627
-pkgrel=3
+pkgrel=4
 pkgdesc="Firmware for Google Pixel 9 Pro XL"
 subpackages="
 	$pkgname-brcm_a0
@@ -27,14 +27,39 @@ makedepends="
 # Source
 _owner="TheMuppets"
 _repository="proprietary_vendor_google_komodo"
-# Pinned to the blob import that matches this device's vendor partition.
-# The device reports vendor CP2A.260605.016; this import's uecapconfig and
-# carrierconfig are byte-identical to it -- 1398/1398 and 1305/1305 files by
-# git blob sha. Tracking the branch tip instead picked up CP3A.260905.009,
-# where 653 of 1398 uecapconfig files differ from what the modem on this
-# device was shipped with. A branch name here is also not a pin: the tarball
-# changes under the recorded checksum whenever upstream pushes.
-_commit="eeadf643f25b96045802ef6ff4cfa2cd40c705b6"
+# A branch name is not a pin: the tarball changes under the recorded checksum
+# whenever upstream pushes, so this always names a commit.
+#
+# Currently pinned to 1aa6782a -- "komodo: Pin rust binaries to CP2A.260805.005"
+# (2026-10-20), 7 commits ahead of eeadf643. It boots and works.
+#
+# Note this pin does NOT change the CP's own firmware, so it cannot move
+# anything about the 2253 refusal: kepler.bin here is the *GNSS* image
+# (S5XXX_GNSS_FW in s5xxx_modem.c), and the baseband runs modem.bin out of the
+# read-only modem partition, which no package touches.
+#
+# What it does change, by git blob sha against eeadf643 (which IS this
+# device's build): 653 of 1398 uecapconfig files, 6 carrierconfig files plus
+# ~400 renames each way, kepler.bin and aoc.bin. Those uecap/carrier counts are
+# *identical* to the CP3A.260905.009 branch tip, so the blob divergence landed
+# at or before CP2A.260805.005.
+#
+# Measured regressions on this pin, 2026-11-04:
+#  - the CP re-reads TELUS_*.binarypb 5x per boot instead of once (8 uecap
+#    reads against Android's 4), losing the parity won in exynos-modem r20
+#  - Telus IMS draws the good P-CSCF pool and then does not register, where
+#    eeadf643 registered 7/7 times on that pool
+#  - Freedom's first two bearer connects fail with SIT command timeouts
+#
+# Previously eeadf643f25b96045802ef6ff4cfa2cd40c705b6, which was verified
+# byte-identical to this device's own vendor partition: the device reports
+# vendor CP2A.260605.016 and that import's uecapconfig and carrierconfig
+# matched it 1398/1398 and 1305/1305 by git blob sha. Tracking the branch tip
+# instead picked up CP3A.260905.009, where 653 of 1398 uecapconfig files
+# differed from what the modem on this device shipped with. If the modem
+# misbehaves after a pin change, check the blob shas against the device before
+# looking anywhere else.
+_commit="1aa6782a3ef467a08b600c0dd3bdc073c8008cf0"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
 	initramfs_setup_modemfw.sh
@@ -209,7 +234,7 @@ mfc() {
 		"$subpkgdir/usr/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
-1fb0dfeaf496f5afbf8fb5b8e98c20153ece62dbeb89b0382874cbe7be7e98c9daa44f9f17ca39ebf5f290e20cc55f58b7c5c6fc8fb88413d2e411e79c7b4b6c  firmware-google-komodo-eeadf643f25b96045802ef6ff4cfa2cd40c705b6.tar.gz
+31bdf835556914d5caf5038d87f6f00b8cf29443159b1c85cc8d54dfedb9ff3c4c7e6b7c04083b66be0de67f657370cc2cd21b6752b097b6308c53d7bfc7ed4a  firmware-google-komodo-1aa6782a3ef467a08b600c0dd3bdc073c8008cf0.tar.gz
 f082c8c88af39bef00ed21876bf512bb1b15ef81a6985ad1a29e9251ff46662b65101eefffaee533fd1cd7ae577d67ee4a2f8a1a6c13a5496853e58c197dbc7b  initramfs_setup_modemfw.sh
 fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
 b0ab040928d08c59723088484ecec950a2b0f0605f91f240139a2511fc1110dc2fa934851dfa980a43343341366637c7a8406712d0fb844b911999d83e550122  aosp-carrier-defaults.txt
