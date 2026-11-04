@@ -1,7 +1,7 @@
 maintainer="Antoine Martin (ayakael) <dev@ayakael.net>"
 pkgname=u-boot-clockworkpi-uconsole-radxa-cm5
 pkgver=2017.09
-pkgrel=2
+pkgrel=3
 _ddr_ver=1.19
 pkgdesc="U-Boot fork for the Radxa CM5 for uConsole"
 arch="aarch64"
@@ -62,7 +62,7 @@ build() {
 }
 
 package() {
-	install -D -m755 "$srcdir"/update-u-boot "$pkgdir"/usr/sbin/update-u-boot
+	install -D -m755 "$srcdir"/update-u-boot "$pkgdir"/usr/bin/update-u-boot
 	install -Dm644 \
 		"$builddir"/idbloader.img \
 		"$builddir"/u-boot.itb \
