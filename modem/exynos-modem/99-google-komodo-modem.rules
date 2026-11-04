@@ -68,7 +68,20 @@ ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ENV{ID_MM_PORT_IGNO
 # hence the rmnet0-14 / rmnet15-29 split. The AT port follows stack 0.
 ACTION!="add|change|move|bind", GOTO="google_komodo_modem_end"
 SUBSYSTEM!="wwan|net", GOTO="google_komodo_modem_end"
-SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit0", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0", ENV{ID_MM_SIT_LOGICAL_STACK}="0"
+# ID_MM_SIT_ESCALATE_ATTACH_TO_IMS: may a 2253 on this stack's IMS PDN take the
+# modem-wide attach APN? Only stack 0 (Telus here).
+#
+# The escalation is a workaround for 2253 and it is not free: taking the attach
+# APN makes the CP refuse that stack's *data* APN, so the SIM loses data. That
+# trade is only worth making on the SIM you want VoLTE on -- this device wants
+# VoLTE on Telus (stack 0) and data on Fizz (stack 1).
+#
+# Setting it on both stacks is what broke this: with firmware and carrier config
+# matched, stack 1's IMS PDN is granted too, so it escalated at t=16s -- before
+# NetworkManager had brought its bearer up, so the plugin's "don't escalate over
+# a live connection" guard never saw a connection to protect -- and the device
+# ended up with no data on either SIM and no VoLTE either.
+SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit0", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0", ENV{ID_MM_SIT_LOGICAL_STACK}="0", ENV{ID_MM_SIT_ESCALATE_ATTACH_TO_IMS}="1"
 SUBSYSTEM=="wwan", DRIVERS=="s5xxx-modem", KERNEL=="wwan*sit1", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack1", ENV{ID_MM_SIT_LOGICAL_STACK}="1"
 SUBSYSTEM=="net", DRIVERS=="s5xxx-modem", KERNEL=="rmnet[0-9]|rmnet1[0-4]", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack0"
 SUBSYSTEM=="net", DRIVERS=="s5xxx-modem", KERNEL=="rmnet1[5-9]|rmnet2[0-9]", ENV{ID_MM_PHYSDEV_UID}="s5400-$id-stack1"
