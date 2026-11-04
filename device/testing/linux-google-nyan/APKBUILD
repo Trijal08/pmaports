@@ -2,7 +2,7 @@
 maintainer="WeirdTreeThing <bradyn127@protonmail.com>"
 pkgname=linux-google-nyan
 pkgver=6.6.144
-pkgrel=0
+pkgrel=1
 pkgdesc="Mainline kernel fork for Google Nyan Chromebooks"
 arch="armv7"
 _carch="arm"
@@ -71,7 +71,7 @@ package() {
 		INSTALL_MOD_PATH="$pkgdir"/usr \
 		INSTALL_MOD_STRIP=1 \
 		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
-	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+	rm "$pkgdir"/usr/lib/modules/*/build
 
 	#clean up unneeded dtbs
 	rm -f "$pkgdir"/boot/dtbs/keystone*.dtb "$pkgdir"/boot/dtbs/tegra20*.dtb "$pkgdir"/boot/dtbs/tegra30*.dtb

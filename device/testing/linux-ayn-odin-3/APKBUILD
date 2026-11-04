@@ -1,7 +1,7 @@
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=linux-ayn-odin-3
 pkgver=7.2
-pkgrel=0
+pkgrel=1
 pkgdesc="AYN Odin 3 kernel fork"
 arch="aarch64"
 _carch="arm64"
@@ -184,7 +184,7 @@ package() {
 		INSTALL_MOD_STRIP=1 \
 		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
 
-	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+	rm "$pkgdir"/usr/lib/modules/*/build
 
 	install -D "$builddir"/include/config/kernel.release \
 		"$pkgdir"/usr/share/kernel/$_flavor/kernel.release
