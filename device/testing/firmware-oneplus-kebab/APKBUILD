@@ -1,6 +1,6 @@
 maintainer="Frieder Hannenheim <git@fhannenheim.net>"
 pkgname=firmware-oneplus-kebab
-pkgver=1
+pkgver=2
 pkgrel=0
 pkgdesc="Firmware for OnePlus 8T (kebab)"
 url="https://git.sr.ht/~jane400/firmware-oneplus-kebab"
@@ -24,16 +24,16 @@ builddir="$srcdir/firmware-oneplus-kebab-$_commit"
 package() {
 	mkdir -p "$pkgdir"
 
-	install -Dm644 "$builddir/adsp.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
-	install -Dm644 "$builddir/cdsp.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/adsp.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/cdsp.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
 
-	install -Dm644 "$builddir/a650_zap.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/a650_zap.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
 
-	install -Dm644 "$builddir/ipa_fws.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
-	install -Dm644 "$builddir/ipa_uc.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/ipa_fws.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/ipa_uc.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
 
-	install -Dm644 "$builddir/slpi.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
-	install -Dm644 "$builddir/venus.mbn" -t $pkgdir/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/slpi.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
+	install -Dm644 "$builddir/venus.mbn" -t $pkgdir/usr/lib/firmware/qcom/sm8250/OnePlus/kebab
 }
 
 
