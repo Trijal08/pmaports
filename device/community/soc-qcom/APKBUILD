@@ -1,8 +1,7 @@
-# Co-Maintainer: Aelin <aelin@postmarketos.org>
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+maintainer="Aelin <aelin@postmarketos.org>"
 pkgname=soc-qcom
 pkgdesc="Common package for Qualcomm devices"
-pkgver=14
+pkgver=15
 pkgrel=0
 url="https://postmarketos.org"
 license="BSD-3-Clause"
