@@ -4,7 +4,7 @@ maintainer="Antoine Martin <dev@ayakael.net>"
 pkgname=akms
 _pkgver=0.3.0
 pkgver=9999$_pkgver
-pkgrel=1
+pkgrel=2
 pkgdesc="Alpine Kernel Module Support"
 url="https://github.com/jirutka/akms"
 arch="noarch"
@@ -27,7 +27,7 @@ build() {
 }
 
 package() {
-	make install DESTDIR="$pkgdir" prefix=/usr
+	make install DESTDIR="$pkgdir" sbindir=/usr/bin prefix=/usr
 
 	# See https://github.com/jirutka/akms/issues/5
 	install -Dm644 "$srcdir"/modules-load.conf "$pkgdir"/usr/lib/modules-load.d/$pkgname.conf
