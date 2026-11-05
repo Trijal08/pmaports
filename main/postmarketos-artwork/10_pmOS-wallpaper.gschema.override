@@ -9,3 +9,9 @@ picture-uri-dark='file:///usr/share/wallpapers/postmarketos/contents/images_dark
 [org.gnome.desktop.screensaver:Phosh]
 picture-options='zoom'
 picture-uri='file:///usr/share/wallpapers/postmarketos/contents/images/2000x2000.png'
+
+[com.lomiri.Shell]
+background-picture-uri='file:///usr/share/wallpapers/postmarketos/contents/images/2000x2000.png'
+
+[com.lomiri.Shell.Greeter]
+background-picture-uri='file:///usr/share/wallpapers/postmarketos/contents/images/2000x2000.png'
