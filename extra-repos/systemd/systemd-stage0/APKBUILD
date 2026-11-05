@@ -2,7 +2,7 @@
 # Co-Maintainer: Oliver Smith <ollieparanoid@postmarketos.org>
 maintainer="Clayton Craft <craftyguy@postmarketos.org>"
 pkgname=systemd-stage0
-pkgver=262.1
+pkgver=262.2
 _pkgver="${pkgver/_/-}"
 # pkgrel must match systemd!
 pkgrel=0
@@ -156,5 +156,5 @@ package() {
 }
 
 sha512sums="
-a4d696dc03d096b815b6780f910fab4e79e01b8414b26529a8585b437b27a50b10c1082e534f1cdcb8bbec330a2af0f98fdcacf189e75f64a157c8bbc4774976  systemd-262.1.tar.gz
+111da2e78c999f299c40532a69d5ea7aa564e9f761e889d781777c90f771770767ba5625b79d7b4ae179830b191cae2f80dca85799dd5ad973144e82d0b3735d  systemd-262.2.tar.gz
 "
