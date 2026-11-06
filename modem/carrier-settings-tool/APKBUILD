@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname=carrier-settings-tool
 pkgver=0.1.0_git20260731
-pkgrel=0
+pkgrel=1
 pkgdesc="Offline converter for Google's CarrierSettings protobufs into ims.db"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 # Build-host tool, never installed on a device. The firmware-google-* aports are
@@ -54,5 +54,5 @@ package() {
 
 sha512sums="
 9239384d823a9f62f5129398ef023cc2732b9874bbac949f793ee72589b278c0c92d0f63244888115a5f3c4cd1779a76c3f7bd63e2a1b925d64d56fe251cbe9a  exynos-modem-9cee4624713f6a0029e451790c8d2e2db642e809.tar.gz
-653ae863f6770b420cfd7a2d40d8398fb6e86f209ab10d3ee1125e5a98c8c56668af1f1f995e56211900595b8e19abbf0b79144c27a8bbba84ef7fea19343377  apn-list-in-ims-db.patch
+2aeb4d14e4958cd8e1097fd6886079881b57d1819aacd627dcc2f8f4ec907e604e2bd28311e05b9001b63a6b94ffdc22923f26f777ad64984208564e4799f8c4  apn-list-in-ims-db.patch
 "

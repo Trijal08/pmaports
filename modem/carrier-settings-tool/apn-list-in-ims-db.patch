@@ -29,7 +29,7 @@ index 8a99081..827fbc6 100644
  -- Merged and already transformed: `value` is what the CP is handed.
  CREATE TABLE setting (
      carrier INTEGER NOT NULL REFERENCES carrier(id),
-@@ -217,10 +237,60 @@ CREATE TABLE setting (
+@@ -217,10 +237,106 @@ CREATE TABLE setting (
  ) WITHOUT ROWID;
  ";
  
@@ -44,8 +44,8 @@ index 8a99081..827fbc6 100644
 +    pub roaming: u8,
 +}
 +
-+/// `ApnItem.type` and `bearer_bitmask` are 1-based enum lists; AOSP turns each
-+/// into `1 << (n - 1)`.
++/// `bearer_bitmask` lists `TelephonyManager.NETWORK_TYPE_*`, which are 1-based;
++/// AOSP turns each into `1 << (n - 1)`.
 +fn bitmask<I: IntoIterator<Item = i32>>(values: I) -> u32 {
 +    values
 +        .into_iter()
@@ -53,8 +53,48 @@ index 8a99081..827fbc6 100644
 +        .fold(0u32, |m, v| m | 1 << (v - 1))
 +}
 +
++/// `ApnItem.ApnType` -> `android.hardware.radio.data.ApnTypes`.
++///
++/// Deliberately a table, not `1 << (v - 1)`. Two things that arithmetic gets
++/// wrong, both measured against the stock capture on identical firmware:
++///
++/// * The proto enum is `ALL DEFAULT MMS SUPL DUN HIPRI FOTA IMS CBS IA
++///   EMERGENCY XCAP UT RCS` with **no MCX**, while `ApnTypes` has
++///   `MCX = 1 << 10` between EMERGENCY and XCAP. So everything from XCAP up is
++///   one bit out: `xcap` and `services.telus.com` went out 1024 where stock
++///   sends 2048.
++/// * `DEFAULT` carries `HIPRI`, because `ApnSetting.TYPE_DEFAULT` is
++///   `ApnTypes.DEFAULT | ApnTypes.HIPRI`. An APN typed `default,mms,supl`
++///   is 23 to stock and was 7 here.
++///
++/// `ALL` (0) is dropped: it means "every kind", and what that expands to is the
++/// framework's own `TYPE_ALL`, not something to invent here. `UT` (12) has no
++/// `ApnTypes` member, so it is dropped rather than aliased onto XCAP.
++fn apn_type_mask<I: IntoIterator<Item = i32>>(values: I) -> u32 {
++    const DEFAULT: u32 = 1 << 0;
++    const HIPRI: u32 = 1 << 4;
++    values.into_iter().fold(0u32, |m, v| {
++        m | match v {
++            1 => DEFAULT | HIPRI,
++            2 => 1 << 1,   // MMS
++            3 => 1 << 2,   // SUPL
++            4 => 1 << 3,   // DUN
++            5 => HIPRI,
++            6 => 1 << 5,   // FOTA
++            7 => 1 << 6,   // IMS
++            8 => 1 << 7,   // CBS
++            9 => 1 << 8,   // IA
++            10 => 1 << 9,  // EMERGENCY
++            11 => 1 << 11, // XCAP; MCX holds 1 << 10
++            13 => 1 << 15, // RCS
++            _ => 0,
++        }
++    })
++}
++
 +/// `ApnItem.Protocol` is IP = 0, IPV6 = 1, IPV4V6 = 2; SIT numbers the same
-+/// three from one. Absent means IPv4, which is the vendor's own default.
++/// three from one. Absent means IP, which is both the proto default and
++/// `ApnSetting`'s.
 +fn sit_pdp(protocol: Option<i32>) -> u8 {
 +    (protocol.unwrap_or(0) + 1) as u8
 +}
@@ -74,10 +114,16 @@ index 8a99081..827fbc6 100644
 +            Some(ApnRow {
 +                name: a.name.clone().unwrap_or_default(),
 +                apn,
-+                types: bitmask(a.r#type.iter().copied()),
++                types: apn_type_mask(a.r#type.iter().copied()),
 +                bearers,
 +                protocol: sit_pdp(a.protocol),
-+                roaming: sit_pdp(a.roaming_protocol.or(a.protocol)),
++                // Not `.or(a.protocol)`. proto2 omits a field equal to its
++                // default and this one's default is IP, so a carrier that says
++                // roaming_protocol="IP" arrives as None -- falling back to the
++                // home protocol then sends the wrong value. `sp.telus.com` is
++                // exactly that case: protocol="IPV4V6" roaming_protocol="IP",
++                // stock sends 1, the fallback sent 3.
++                roaming: sit_pdp(a.roaming_protocol),
 +            })
 +        })
 +        .collect()
@@ -91,7 +137,7 @@ index 8a99081..827fbc6 100644
      index: &CarrierIndex,
  ) -> Result<(), rusqlite::Error> {
      let _ = std::fs::remove_file(path);
-@@ -236,10 +306,27 @@ pub fn write(
+@@ -236,10 +352,27 @@ pub fn write(
               (carrier, tag, kind, int_value, text_value, blob_value, key)
               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
          )?;
@@ -120,6 +166,62 @@ index 8a99081..827fbc6 100644
              for r in rows {
                  ins_setting.execute(rusqlite::params![
                      id,
+@@ -274,3 +407,55 @@
+     tx.commit()?;
+     Ok(())
+ }
++
++#[cfg(test)]
++mod apn_mapping_tests {
++    use super::{apn_type_mask, sit_pdp};
++
++    /// The proto enum values, for readable cases below.
++    const DEFAULT: i32 = 1;
++    const MMS: i32 = 2;
++    const SUPL: i32 = 3;
++    const HIPRI: i32 = 5;
++    const IMS: i32 = 7;
++    const IA: i32 = 9;
++    const EMERGENCY: i32 = 10;
++    const XCAP: i32 = 11;
++    const UT: i32 = 12;
++    const ALL: i32 = 0;
++
++    /// Every value here was read off the stock capture on identical firmware,
++    /// so a change that breaks one is a change away from the modem's own
++    /// Android.
++    #[test]
++    fn matches_the_stock_wire() {
++        // fizz mobile.bm is typed `default,mms,supl` and stock sends 23:
++        // TYPE_DEFAULT is DEFAULT|HIPRI, so 1|16|2|4.
++        assert_eq!(apn_type_mask([DEFAULT, MMS, SUPL]), 23);
++        // telus sp.telus.com, `default,mms,supl,hipri,ia`.
++        assert_eq!(apn_type_mask([DEFAULT, MMS, SUPL, HIPRI, IA]), 279);
++        // XCAP is bit 11, not bit 10 -- MCX holds bit 10 and the proto has no
++        // MCX, which is what `1 << (v - 1)` got wrong.
++        assert_eq!(apn_type_mask([XCAP]), 2048);
++        assert_eq!(apn_type_mask([XCAP, MMS]), 2050);
++        assert_eq!(apn_type_mask([IMS]), 64);
++        assert_eq!(apn_type_mask([EMERGENCY]), 512);
++    }
++
++    #[test]
++    fn drops_what_it_cannot_map() {
++        assert_eq!(apn_type_mask([ALL]), 0);
++        assert_eq!(apn_type_mask([UT]), 0);
++        assert_eq!(apn_type_mask([UT, IMS]), 64);
++    }
++
++    /// proto2 omits a field equal to its default, so an explicit
++    /// roaming_protocol="IP" arrives as None. It must stay IP rather than
++    /// borrow the home protocol.
++    #[test]
++    fn absent_roaming_protocol_is_ip() {
++        assert_eq!(sit_pdp(None), 1);
++        assert_eq!(sit_pdp(Some(0)), 1);
++        assert_eq!(sit_pdp(Some(2)), 3);
++    }
++}
 diff --git a/crates/carrier-settings/src/main.rs b/crates/carrier-settings/src/main.rs
 index 5c87dda..43df42f 100644
 --- a/crates/carrier-settings/src/main.rs
