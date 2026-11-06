@@ -1,0 +1,927 @@
+Close every remaining AP->CP content gap against the capture
+
+Sequence-aligning r47 against stock on identical firmware left 60 of stock's
+196 requests on ch 0xf5 missing or out of order. About forty of those are the
+same ids at different moments -- MM's polling cadence, which appears in both
+the missing and the extra list. The rest were genuine content gaps, and this
+closes all of them.
+
+**SET_INDICATION_FILTER sent the wrong byte.** Stock sends `ff 00 00 00`; we
+sent `7f 00 00 00`. Six named bits plus bit 7, which nothing we have names.
+This was previously asserted to be byte-identical on the strength of a dump of
+our own side only -- it was never compared against stock's.
+
+**GET_RADIO_CAPABILITY, 1 -> 4 per stack.** The request carries no payload at
+all, so the three extra occurrences go in the boot-parity table at stock's own
+positions. Tables are now 124 and 122 rows.
+
+**GET_FACILITY_LOCK, one 0x10/0x03 pair per application.** Stock issues four
+requests on the stack whose SIM carries an ISIM and two on the one that does
+not, the second pair differing only in the AID:
+
+    ch0xf6  facility 0x10  AID a0 00 00 00 87 10 02 ff 33 ...   (USIM)
+    ch0xf6  facility 0x03  AID a0 00 00 00 87 10 02 ff 33 ...
+    ch0xf6  facility 0x10  AID a0 00 00 00 87 10 04 ff ff ...   (ISIM)
+    ch0xf6  facility 0x03  AID a0 00 00 00 87 10 04 ff ff ...
+
+The client cached only apps[0], so the ISIM pass was impossible. It now keeps
+every AID the card reports and the pass walks them.
+
+**The UICC access-control probe, which we sent none of** -- seven 0x0247, three
+0x020f and one 0x020e on stack 0. It is carrier-privilege discovery: look for
+the GSMA access-rule applets by AID, and when they are absent read EF_DIR to
+enumerate the card's applications.
+
+    0x0247 open by AID A0000001514143 4C ("..QACL", ARA-M) -> ffffffff 6a82
+    0x0247 open by AID A000000063 "PKCS-15" (ARF)          -> ffffffff 6a82
+    0x0247 open by AID A000000018 "GPAC-15"                -> ffffffff 6a82
+    0x0247 open with NO AID                                -> channel 1, 9000
+    0x020f SELECT 3F00, SELECT 2F00, READ RECORD 1
+    0x020e close the channel
+
+This could never have been a table row, which is why it went unclosed for so
+long: the channel number comes back in the open response and every later frame
+carries it, so a verbatim replay would transmit on a channel the CP never gave
+us and leak the one it did. Hence an explicit sequence that always closes what
+it opened, including on error. All reads; nothing is written to the card and
+nothing is reported -- it exists for parity.
+
+**GET_SIM_SLOT_STATUS, 3 -> 1.** Stock reads the inventory once per boot; we
+read it three times inside 40 ms, once in mm_sit_cp_prepare() and once per
+modem from load_sim_slots(). prepare() polls until both logical stacks are
+mapped, so it holds the authoritative answer by the time either modem gets
+that far; the modems now read that instead of asking again, and the cache is
+dropped on SIM_SLOT_STATUS_CHANGED so a hot-swap still re-reads.
+
+The boot-config fake peer gains the eight UICC frames and asserts the channel
+reaches every one of them and that the close happens. Writing that fixture
+caught a mistake in it rather than in the code: with the status word byte-
+swapped (`00 90` instead of the capture's `90 00`) the client correctly took
+the no-channel path, and the suite hung on the frames it then never sent.
+
+--- a/src/plugins/samsung-sit/mm-sit-protocol.h
++++ b/src/plugins/samsung-sit/mm-sit-protocol.h
+@@ -65,6 +65,14 @@
+     MM_SIT_MESSAGE_IMS_NEW_SMS                = 0x0d1e,
+     MM_SIT_MESSAGE_GET_SIM_STATUS             = 0x0200,
+     MM_SIT_MESSAGE_SIM_IO                     = 0x0208,
++    /*
++     * The UICC access-control triple. Stock opens a logical channel by AID to
++     * look for the GSMA access-control applets, falls back to reading EF_DIR,
++     * and closes the channel again; see mm_sit_client_probe_uicc_access_rules().
++     */
++    MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL        = 0x0247,
++    MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL       = 0x020e,
++    MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL       = 0x020f,
+     MM_SIT_MESSAGE_GET_FACILITY_LOCK          = 0x0209,
+     MM_SIT_MESSAGE_SIM_STATUS_CHANGED         = 0x0210,
+     MM_SIT_MESSAGE_GET_SIM_SLOT_STATUS        = 0x024d,
+@@ -132,7 +140,15 @@
+     MM_SIT_INDICATION_FILTER_PHYSICAL_CHANNEL     = 1 << 4,
+     MM_SIT_INDICATION_FILTER_REGISTRATION_FAILURE = 1 << 5,
+     MM_SIT_INDICATION_FILTER_BARRING_INFO         = 1 << 6,
+-    MM_SIT_INDICATION_FILTER_ALL                   = 0x7f,
++    /*
++     * Stock sends 0xff, not 0x7f -- measured on identical firmware, every
++     * SET_INDICATION_FILTER in the capture is `ff 00 00 00` on both stacks.
++     * Six named bits plus bit 7, whose meaning the vendor headers do not give
++     * a name; enabling it is what stock does, and an indication we do not
++     * understand is ignored rather than harmful.
++     */
++    MM_SIT_INDICATION_FILTER_UNKNOWN_BIT7         = 1 << 7,
++    MM_SIT_INDICATION_FILTER_ALL                   = 0xff,
+ } MMSitIndicationFilter;
+ 
+ /* Address families to ask the network for in a data context. The CP's own
+--- a/src/plugins/samsung-sit/mm-sit-boot-parity.h
++++ b/src/plugins/samsung-sit/mm-sit-boot-parity.h
+@@ -125,7 +125,7 @@
+ static const guint8 mm_sit_parity_pay_049[19] = { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x0b, 0x04, 0x16, 0x17, 0x1f, 0x00, 0x00, 0x03, 0x00 };
+ static const guint8 mm_sit_parity_pay_050[10] = { 0x00, 0x02, 0x24, 0x05, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
+ 
+-/* ch 0xf5 -- logical stack 0. 120 requests. */
++/* ch 0xf5 -- logical stack 0. 124 requests. */
+ static const MMSitParityRequest mm_sit_parity_requests_stack0[] = {
+     { 0x090b, MM_SIT_PARITY_PHASE_BOOT, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=2.795 SET_DEBUG_TRACE */
+     { 0x0404, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 12, mm_sit_parity_pay_001 }, /* t=2.803 SEND_SGC_VALUE */
+@@ -137,6 +137,7 @@
+     { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=4.642 SIT_SET_GPS_NFW_STATUS */
+     { 0x0903, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=5.474 ? */
+     { 0x0711, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.845 GET_PS_SERVICE */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.862 ? */
+     { 0x0413, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.863 ? */
+     { 0x097b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 13, mm_sit_parity_pay_004 }, /* t=5.865 ? */
+     { 0x0403, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.866 GET_DEV_ID */
+@@ -217,9 +218,11 @@
+     { 0x0760, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 11, mm_sit_parity_pay_028 }, /* t=9.931 ? */
+     { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=9.932 SET_VONR_CAPA */
+     { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.936 ? */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.938 ? */
+     { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.940 ? */
+     { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=9.993 SET_VONR_CAPA */
+     { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.996 ? */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.999 ? */
+     { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.020 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+     { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.030 GET_VOICE_REGISTRATION */
+     { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.034 QUERY_NETWORK_SELECTION_MODE */
+@@ -228,6 +231,7 @@
+     { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=10.152 SIT_SET_GPS_NFW_STATUS */
+     { 0x0d3a, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=10.325 ? */
+     { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=10.366 SET_VONR_CAPA */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.369 ? */
+     { 0x0d0b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_036 }, /* t=10.377 ? */
+     { 0x0d39, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_035 }, /* t=10.378 ? */
+     { 0x0d0b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 10, mm_sit_parity_pay_037 }, /* t=10.469 ? */
+@@ -249,12 +253,13 @@
+     { 0x0700, MM_SIT_PARITY_PHASE_PRE_PDN, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=11.235 GET_VOICE_REGISTRATION */
+ };
+ 
+-/* ch 0xf6 -- logical stack 1. 118 requests. */
++/* ch 0xf6 -- logical stack 1. 122 requests. */
+ static const MMSitParityRequest mm_sit_parity_requests_stack1[] = {
+     { 0x0c20, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_002 }, /* t=2.804 SIT_SET_GPS_LOCK_MODE */
+     { 0x0c33, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 1, mm_sit_parity_pay_000 }, /* t=2.805 SIT_SET_GPS_NFW_STATUS */
+     { 0x0903, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_003 }, /* t=5.564 ? */
+     { 0x0711, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.843 GET_PS_SERVICE */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.941 ? */
+     { 0x0413, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.944 ? */
+     { 0x0403, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=5.947 GET_DEV_ID */
+     { 0x097b, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 13, mm_sit_parity_pay_004 }, /* t=5.954 ? */
+@@ -324,6 +329,7 @@
+     { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.644 ? */
+     { 0x0760, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 11, mm_sit_parity_pay_028 }, /* t=9.647 ? */
+     { 0x0762, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 312, mm_sit_parity_pay_027 }, /* t=9.684 ? */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=9.932 ? */
+     { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.018 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+     { 0x0703, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.040 QUERY_NETWORK_SELECTION_MODE */
+     { 0x0700, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.046 GET_VOICE_REGISTRATION */
+@@ -345,8 +351,10 @@
+     { 0x0943, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 55, mm_sit_parity_pay_015 }, /* t=10.295 SET_SIGNAL_REPORT_CRITERIA */
+     { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=10.368 SET_VONR_CAPA */
+     { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.370 ? */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.372 ? */
+     { 0x0954, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_033 }, /* t=10.375 SET_VONR_CAPA */
+     { 0x0755, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.377 ? */
++    { 0x0718, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 0, NULL }, /* t=10.379 ? */
+     { 0x0c14, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 2, mm_sit_parity_pay_044 }, /* t=10.439 ? */
+     { 0x0605, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_045 }, /* t=10.439 ? */
+     { 0x074f, MM_SIT_PARITY_PHASE_RADIO, MM_SIT_PARITY_SUB_NONE, 4, mm_sit_parity_pay_034 }, /* t=10.473 SET_ALLOWED_NETWORK_TYPE_BITMAP */
+--- a/src/plugins/samsung-sit/mm-sit-cp.h
++++ b/src/plugins/samsung-sit/mm-sit-cp.h
+@@ -20,6 +20,11 @@
+  * Internal IMS setup does not claim the internet-data preference. */
+ gboolean mm_sit_cp_claim_data (MMSitCp *self, guint stack, guint8 cid, GError **error);
+ /* Name the stack that owns mobile data to the CP; a no-op if unchanged. */
++/* The inventory prepare() already polled, so the modems need not ask again;
++ * FALSE when nothing is cached. Dropped on SIM_SLOT_STATUS_CHANGED. */
++gboolean mm_sit_cp_peek_sim_slot_status (MMSitCp *self, MMSitSimSlotStatus *out);
++void mm_sit_cp_forget_sim_slot_status (MMSitCp *self);
++
+ void mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack);
+ gboolean mm_sit_cp_data_reserved (MMSitCp *self, guint8 cid);
+ void mm_sit_cp_commit_data (MMSitCp *self, guint8 cid);
+--- a/src/plugins/samsung-sit/mm-sit-cp.c
++++ b/src/plugins/samsung-sit/mm-sit-cp.c
+@@ -12,6 +12,15 @@
+     gint data_pref;        /* stack last named to the CP, -1 if never */
+     gboolean secondary_off;
+     gboolean primary_off;
++    /*
++     * The slot inventory this object already polled, shared with the modems.
++     * Stock reads it once per boot; we read it three times inside 40 ms -- once
++     * here and once per modem from load_sim_slots(). prepare() polls until both
++     * logical stacks are mapped, so it holds the authoritative answer by the
++     * time either modem gets that far. Dropped on SIM_SLOT_STATUS_CHANGED.
++     */
++    gboolean slot_status_valid;
++    MMSitSimSlotStatus slot_status;
+     guint attempts;
+     MMSitLogicalSlotMapping mapping[2];
+ };
+@@ -130,6 +139,22 @@
+  * Fire and forget. If the CP refuses there is nothing useful to do about it
+  * here, and the caller is in the middle of something else.
+  */
++gboolean
++mm_sit_cp_peek_sim_slot_status (MMSitCp *self, MMSitSimSlotStatus *out)
++{
++    if (!self || !self->slot_status_valid)
++        return FALSE;
++    *out = self->slot_status;
++    return TRUE;
++}
++
++void
++mm_sit_cp_forget_sim_slot_status (MMSitCp *self)
++{
++    if (self)
++        self->slot_status_valid = FALSE;
++}
++
+ void
+ mm_sit_cp_prefer_data_stack (MMSitCp *self, guint stack)
+ {
+@@ -198,6 +223,8 @@
+         prepare_complete (self, error);
+         return;
+     }
++    self->slot_status = status;
++    self->slot_status_valid = TRUE;
+     for (i = 0; i < status.slot_count; i++) {
+         for (j = 0; j < status.slots[i].port_count; j++) {
+             const MMSitSimPort *port = &status.slots[i].ports[j];
+--- a/src/plugins/samsung-sit/mm-sit-client.h
++++ b/src/plugins/samsung-sit/mm-sit-client.h
+@@ -240,6 +240,29 @@
+                                                  GCancellable       *cancellable,
+                                                  GAsyncReadyCallback callback,
+                                                  gpointer            user_data);
++/* How many applications the card named, and the facility query against one of
++ * them; stock repeats the pair once per application. */
++/*
++ * Stock's UICC access-control probe: look for the GSMA access-rule applets by
++ * AID, fall back to reading EF_DIR, and close the channel. Read-only, and it
++ * always closes what it opened. Nothing is reported; it exists for parity.
++ */
++void     mm_sit_client_probe_uicc_access_rules        (MMSitClient        *self,
++                                                       GCancellable       *cancellable,
++                                                       GAsyncReadyCallback callback,
++                                                       gpointer            user_data);
++gboolean mm_sit_client_probe_uicc_access_rules_finish (MMSitClient        *self,
++                                                       GAsyncResult       *res,
++                                                       GError            **error);
++
++guint    mm_sit_client_get_aid_count (MMSitClient *self);
++void     mm_sit_client_get_facility_lock_for_aid (MMSitClient        *self,
++                                                  guint8              facility,
++                                                  guint               aid_index,
++                                                  GCancellable       *cancellable,
++                                                  GAsyncReadyCallback callback,
++                                                  gpointer            user_data);
++
+ gboolean mm_sit_client_get_facility_lock_finish (MMSitClient        *self,
+                                                  GAsyncResult       *res,
+                                                  gboolean           *out_locked,
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -83,6 +83,15 @@
+      * file reads can address it the way the downstream RIL does. */
+     guint8               sim_aid[MM_SIT_MAX_AID_LENGTH];
+     gsize                sim_aid_len;
++    /*
++     * Every application the card reports, not just the subscription one.
++     * Stock queries the facility-lock pair once per application: four requests
++     * on the stack whose SIM has an ISIM (AID ...871004...), two on the one
++     * that does not. Caching only apps[0] made that impossible.
++     */
++    guint8               sim_aids[MM_SIT_MAX_SIM_APPS][MM_SIT_MAX_AID_LENGTH];
++    gsize                sim_aid_lens[MM_SIT_MAX_SIM_APPS];
++    guint                sim_aid_count;
+     /* Service centre the CP reports, cached on first use: the downstream RIL
+      * puts it in every send and this CP answers a send that lacks one with an
+      * empty response. */
+@@ -128,6 +137,7 @@
+          * state before notifying their users. */
+         self->priv->has_carrier_sim_info = FALSE;
+         self->priv->sim_aid_len = 0;
++        self->priv->sim_aid_count = 0;
+         self->priv->smsc_len = 0;
+     }
+     if (message->id == MM_SIT_MESSAGE_CARRIER_CONFIG_SIM_INFO) {
+@@ -361,6 +371,7 @@
+     self->priv->has_carrier_sim_info = FALSE;
+     self->priv->sim_iccid_len = 0;
+     self->priv->sim_aid_len = 0;
++    self->priv->sim_aid_count = 0;
+     self->priv->smsc_len = 0;
+     self->priv->radio_state_trusted = FALSE;
+ }
+@@ -808,10 +819,19 @@
+             memcpy (self->priv->sim_iccid, status->iccid, status->iccid_len);
+         }
+         if (status->app_count) {
++            guint a;
++
+             self->priv->sim_aid_len = MIN (status->apps[0].aid_len, MM_SIT_MAX_AID_LENGTH);
+             memcpy (self->priv->sim_aid, status->apps[0].aid, self->priv->sim_aid_len);
+-        } else
++            self->priv->sim_aid_count = MIN (status->app_count, MM_SIT_MAX_SIM_APPS);
++            for (a = 0; a < self->priv->sim_aid_count; a++) {
++                self->priv->sim_aid_lens[a] = MIN (status->apps[a].aid_len, MM_SIT_MAX_AID_LENGTH);
++                memcpy (self->priv->sim_aids[a], status->apps[a].aid, self->priv->sim_aid_lens[a]);
++            }
++        } else {
+             self->priv->sim_aid_len = 0;
++            self->priv->sim_aid_count = 0;
++        }
+         g_task_return_pointer (task, status, g_free);
+     } else {
+         g_free (status);
+@@ -2396,6 +2416,7 @@
+     BOOT_CONFIG_STEP_SOFTWARE_VERSION,
+     BOOT_CONFIG_STEP_OEM_CONFIG,
+     BOOT_CONFIG_STEP_MODEM_CONFIG,
++    BOOT_CONFIG_STEP_UICC_RULES,
+     BOOT_CONFIG_STEP_LAST,
+ } BootConfigStep;
+ 
+@@ -2500,6 +2521,20 @@
+     boot_config_step (task);
+ }
+ 
++static void boot_config_step (GTask *task);
++
++static void
++boot_config_uicc_ready (MMSitClient  *self,
++                        GAsyncResult *res,
++                        GTask        *task)
++{
++    BootConfigContext *ctx = g_task_get_task_data (task);
++
++    mm_sit_client_probe_uicc_access_rules_finish (self, res, NULL);
++    ctx->step++;
++    boot_config_step (task);
++}
++
+ static void
+ boot_config_step (GTask *task)
+ {
+@@ -2583,6 +2618,13 @@
+         request = mm_sit_request_new_set_modem_config_count (
+             mm_sit_client_next_token (self), self->priv->cp ? 2 : 1);
+         break;
++    case BOOT_CONFIG_STEP_UICC_RULES:
++        /* Stock's carrier-privilege discovery; see
++         * mm_sit_client_probe_uicc_access_rules(). It cannot fail the boot. */
++        mm_sit_client_probe_uicc_access_rules (self, g_task_get_cancellable (task),
++                                               (GAsyncReadyCallback) boot_config_uicc_ready,
++                                               task);
++        return;
+     case BOOT_CONFIG_STEP_LAST:
+         self->priv->boot_config_done = TRUE;
+         g_task_return_boolean (task, TRUE);
+@@ -3910,6 +3952,278 @@
+     mm_sit_client_command (self, request, 5, cancellable,
+                            (GAsyncReadyCallback) get_facility_lock_ready, task);
+ }
++
++/*
++ * The UICC access-control probe, reproduced from stock.
++ *
++ * Measured on identical firmware, ch 0xf5, 5.74-5.86 s -- a block we sent none
++ * of at all, and the largest single content gap left against the capture
++ * (seven 0x0247, three 0x020f and one 0x020e on stack 0; nine, two and two on
++ * stack 1):
++ *
++ *   0x0247 open by AID A0000001514143 4C ("..QACL", GSMA ARA-M) -> ffffffff 6a82
++ *   0x0247 open by AID A000000063 "PKCS-15"      (ARF)          -> ffffffff 6a82
++ *   0x0247 open by AID A000000018 "GPAC-15"                     -> ffffffff 6a82
++ *   0x0247 open with NO AID                                     -> channel 1, 9000
++ *   0x020f SELECT 3F00 (MF) on that channel
++ *   0x020f SELECT 2F00 (EF_DIR)
++ *   0x020f READ RECORD 1                        -> 4f 10 a0 00 00 00 87 10 02 ...
++ *   0x020e close the channel
++ *
++ * It is carrier-privilege discovery: look for the access-rule applets, and
++ * when they are absent read EF_DIR to enumerate the card's applications. All
++ * reads, nothing written to the card.
++ *
++ * This cannot be a boot-parity table row, which is why it was missing for so
++ * long: the channel number is handed back in the open response and every later
++ * frame has to carry it, so a verbatim replay would transmit on a channel the
++ * CP never gave us and leak the one it did. Hence the explicit sequence, which
++ * always closes what it opened -- including on error.
++ *
++ * Request layouts, from the capture:
++ *   0x0247  [u8 aid_len][aid, 16 bytes zero-padded][u8 pad]            = 18
++ *   0x020f  [u32 ch][u32 cla][u32 ins][u32 p1][u32 p2][u32 p3]
++ *           [u16 data_len][data...]
++ *   0x020e  [u32 ch]                                                   = 4
++ */
++#define UICC_NO_CHANNEL 0xffffffffu
++
++static const guint8 uicc_aid_ara_m[]  = { 0xa0, 0x00, 0x00, 0x01, 0x51, 0x41, 0x43, 0x4c };
++static const guint8 uicc_aid_pkcs15[] = { 0xa0, 0x00, 0x00, 0x00, 0x63, 0x50, 0x4b, 0x43,
++                                          0x53, 0x2d, 0x31, 0x35 };
++static const guint8 uicc_aid_gpac[]   = { 0xa0, 0x00, 0x00, 0x00, 0x18, 0x47, 0x50, 0x41,
++                                          0x43, 0x2d, 0x31, 0x35 };
++
++typedef enum {
++    UICC_STEP_OPEN_ARA_M,
++    UICC_STEP_OPEN_PKCS15,
++    UICC_STEP_OPEN_GPAC,
++    UICC_STEP_OPEN_PLAIN,
++    UICC_STEP_SELECT_MF,
++    UICC_STEP_SELECT_EF_DIR,
++    UICC_STEP_READ_RECORD,
++    UICC_STEP_CLOSE,
++    UICC_STEP_DONE,
++} UiccStep;
++
++typedef struct {
++    UiccStep step;
++    guint32  channel;
++} UiccProbeContext;
++
++static void uicc_probe_step (GTask *task);
++
++static GByteArray *
++uicc_build_open (MMSitClient *self, const guint8 *aid, gsize aid_len, GError **error)
++{
++    guint8 body[18] = { 0 };
++
++    if (aid && aid_len) {
++        body[0] = (guint8) aid_len;
++        memcpy (&body[1], aid, MIN (aid_len, 16));
++    }
++    return mm_sit_request_new (MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL,
++                               mm_sit_client_next_token (self), body, sizeof (body), error);
++}
++
++static GByteArray *
++uicc_build_apdu (MMSitClient *self, guint32 channel, guint8 ins, guint8 p1, guint8 p2,
++                 guint8 p3, const guint8 *data, gsize data_len, GError **error)
++{
++    guint8 body[32] = { 0 };
++    gsize  len = 26;
++
++    memcpy (&body[0],  &channel, 4);
++    body[4]  = 1;      /* the class byte stock uses on this channel */
++    body[8]  = ins;
++    body[12] = p1;
++    body[16] = p2;
++    body[20] = p3;
++    body[24] = (guint8) data_len;
++    if (data && data_len) {
++        memcpy (&body[26], data, MIN (data_len, 4));
++        len = 26 + MIN (data_len, 4);
++    }
++    return mm_sit_request_new (MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL,
++                               mm_sit_client_next_token (self), body, len, error);
++}
++
++static void
++uicc_probe_ready (MMSitClient  *self,
++                  GAsyncResult *res,
++                  GTask        *task)
++{
++    g_autoptr(MMSitMessage) response = NULL;
++    g_autoptr(GError)       error = NULL;
++    UiccProbeContext       *ctx = g_task_get_task_data (task);
++
++    response = mm_sit_client_command_finish (self, res, &error);
++
++    if (ctx->step == UICC_STEP_OPEN_PLAIN) {
++        /* The only answer this sequence reads: the channel to work on. The
++         * named-AID opens before it are expected to fail with 6a82 on a card
++         * that carries no access-rule applet, which is both of ours. */
++        const guint8 *payload = NULL;
++        gsize         payload_len = 0;
++
++        if (response)
++            payload = mm_sit_message_get_payload (response, &payload_len);
++        /* get_payload() is frame+8, so the four status bytes come first and
++         * the channel the CP assigned sits at +4, its SW at +8. */
++        if (payload && payload_len >= 10) {
++            guint32 channel;
++            guint16 sw;
++
++            memcpy (&channel, payload + 4, 4);
++            memcpy (&sw, payload + 8, 2);
++            if (channel != UICC_NO_CHANNEL && sw == 0x0090) {
++                ctx->channel = channel;
++                mm_obj_dbg (self->priv->port, "UICC access rules: reading EF_DIR on channel %u",
++                            channel);
++            } else {
++                mm_obj_dbg (self->priv->port, "UICC access rules: no channel (sw %04x); done",
++                            sw);
++                ctx->step = UICC_STEP_DONE;
++            }
++        } else {
++            ctx->step = UICC_STEP_DONE;
++        }
++    } else if (!response && ctx->channel != UICC_NO_CHANNEL && ctx->step < UICC_STEP_CLOSE) {
++        /* Never leave a channel open because a read failed. */
++        mm_obj_dbg (self->priv->port, "UICC access rules: step %d failed (%s); closing the channel",
++                    (int) ctx->step, error ? error->message : "no response");
++        ctx->step = UICC_STEP_CLOSE;
++        uicc_probe_step (task);
++        return;
++    }
++
++    ctx->step++;
++    uicc_probe_step (task);
++}
++
++static void
++uicc_probe_step (GTask *task)
++{
++    MMSitClient           *self = g_task_get_source_object (task);
++    UiccProbeContext      *ctx = g_task_get_task_data (task);
++    g_autoptr(GByteArray)  request = NULL;
++    g_autoptr(GError)      error = NULL;
++    static const guint8    ef_mf[2]  = { 0x3f, 0x00 };
++    static const guint8    ef_dir[2] = { 0x2f, 0x00 };
++
++    /* Nothing here is reported to anyone, so a step that cannot even be built
++     * is skipped rather than failed -- except the close, which matters. */
++    switch (ctx->step) {
++    case UICC_STEP_OPEN_ARA_M:
++        request = uicc_build_open (self, uicc_aid_ara_m, sizeof (uicc_aid_ara_m), &error);
++        break;
++    case UICC_STEP_OPEN_PKCS15:
++        request = uicc_build_open (self, uicc_aid_pkcs15, sizeof (uicc_aid_pkcs15), &error);
++        break;
++    case UICC_STEP_OPEN_GPAC:
++        request = uicc_build_open (self, uicc_aid_gpac, sizeof (uicc_aid_gpac), &error);
++        break;
++    case UICC_STEP_OPEN_PLAIN:
++        request = uicc_build_open (self, NULL, 0, &error);
++        break;
++    case UICC_STEP_SELECT_MF:
++        request = uicc_build_apdu (self, ctx->channel, 0xa4, 0x00, 0x04, 0x02,
++                                   ef_mf, sizeof (ef_mf), &error);
++        break;
++    case UICC_STEP_SELECT_EF_DIR:
++        request = uicc_build_apdu (self, ctx->channel, 0xa4, 0x00, 0x04, 0x02,
++                                   ef_dir, sizeof (ef_dir), &error);
++        break;
++    case UICC_STEP_READ_RECORD:
++        request = uicc_build_apdu (self, ctx->channel, 0xb2, 0x01, 0x04, 0x26,
++                                   NULL, 0, &error);
++        break;
++    case UICC_STEP_CLOSE:
++        if (ctx->channel == UICC_NO_CHANNEL)
++            break;
++        request = mm_sit_request_new (MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL,
++                                      mm_sit_client_next_token (self),
++                                      (const guint8 *) &ctx->channel, 4, &error);
++        ctx->channel = UICC_NO_CHANNEL;
++        break;
++    case UICC_STEP_DONE:
++    default:
++        g_task_return_boolean (task, TRUE);
++        g_object_unref (task);
++        return;
++    }
++
++    if (!request) {
++        if (error)
++            mm_obj_dbg (self->priv->port, "UICC access rules: couldn't build step %d: %s",
++                        (int) ctx->step, error->message);
++        ctx->step++;
++        uicc_probe_step (task);
++        return;
++    }
++
++    mm_sit_client_command (self, request, 10, g_task_get_cancellable (task),
++                           (GAsyncReadyCallback) uicc_probe_ready, task);
++}
++
++void
++mm_sit_client_probe_uicc_access_rules (MMSitClient        *self,
++                                       GCancellable       *cancellable,
++                                       GAsyncReadyCallback callback,
++                                       gpointer            user_data)
++{
++    UiccProbeContext *ctx;
++    GTask            *task;
++
++    task = g_task_new (self, cancellable, callback, user_data);
++    ctx = g_new0 (UiccProbeContext, 1);
++    ctx->channel = UICC_NO_CHANNEL;
++    g_task_set_task_data (task, ctx, g_free);
++    uicc_probe_step (task);
++}
++
++gboolean
++mm_sit_client_probe_uicc_access_rules_finish (MMSitClient  *self,
++                                              GAsyncResult *res,
++                                              GError      **error)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), FALSE);
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++guint
++mm_sit_client_get_aid_count (MMSitClient *self)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), 0);
++    return self->priv->sim_aid_count;
++}
++
++/* The same query against one named application, for the per-AID pass stock
++ * makes. Out-of-range falls back to whatever the card named first. */
++void
++mm_sit_client_get_facility_lock_for_aid (MMSitClient        *self,
++                                         guint8              facility,
++                                         guint               aid_index,
++                                         GCancellable       *cancellable,
++                                         GAsyncReadyCallback callback,
++                                         gpointer            user_data)
++{
++    g_autoptr(GByteArray) request = NULL;
++    GTask                *task;
++    const guint8         *aid = self->priv->sim_aid_len ? self->priv->sim_aid : NULL;
++    gsize                 aid_len = self->priv->sim_aid_len;
++
++    if (aid_index < self->priv->sim_aid_count && self->priv->sim_aid_lens[aid_index]) {
++        aid = self->priv->sim_aids[aid_index];
++        aid_len = self->priv->sim_aid_lens[aid_index];
++    }
++
++    task = g_task_new (self, cancellable, callback, user_data);
++    request = mm_sit_request_new_get_facility_lock (mm_sit_client_next_token (self), facility,
++                                                    aid, aid_len);
++    mm_sit_client_command (self, request, 5, cancellable,
++                           (GAsyncReadyCallback) get_facility_lock_ready, task);
++}
+ 
+ gboolean
+ mm_sit_client_get_facility_lock_finish (MMSitClient  *self,
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -1775,8 +1775,11 @@
+                           const MMSitMessage *message,
+                           MMBroadbandModemSamsungSit *self)
+ {
+-    if (message->id == MM_SIT_MESSAGE_SIM_SLOT_STATUS_CHANGED)
++    if (message->id == MM_SIT_MESSAGE_SIM_SLOT_STATUS_CHANGED) {
++        /* The cached inventory load_sim_slots() reads is now stale. */
++        mm_sit_cp_forget_sim_slot_status (self->priv->cp);
+         schedule_sim_check (self);
++    }
+ }
+ 
+ static void
+@@ -1855,8 +1858,10 @@
+     if (message->id == MM_SIT_MESSAGE_SIM_STATUS_CHANGED) {
+         invalidate_carrier_config (self);
+         schedule_sim_check (self);
+-    } else if (message->id == MM_SIT_MESSAGE_SIM_SLOT_STATUS_CHANGED)
++    } else if (message->id == MM_SIT_MESSAGE_SIM_SLOT_STATUS_CHANGED) {
++        mm_sit_cp_forget_sim_slot_status (self->priv->cp);
+         schedule_sim_check (self);
++    }
+     else if (message->id == MM_SIT_MESSAGE_CARRIER_CONFIG_STATUS) {
+         gboolean applied = FALSE;
+ 
+@@ -3330,12 +3335,27 @@
+     g_object_unref (task);
+ }
+ 
+-/* Stock's first facility query. Its answer is not something ModemManager
+- * reports, so it is consumed and the real query follows either way. */
++/*
++ * Stock's facility-lock pass: 0x10 then 0x03, once per application the card
++ * names. Measured on identical firmware -- four requests on the stack whose
++ * SIM carries an ISIM (AID ...87 10 04...) and two on the one that does not,
++ * the second pair differing only in the AID. Only the last 0x03 feeds anything
++ * ModemManager reports; the rest are consumed.
++ *
++ * `aid_index` walks the applications. 0x10 is written as a literal because
++ * nothing we have names it, and inventing a name would be worse.
++ */
++typedef struct {
++    guint aid_index;
++    guint aid_count;
++} FacilityLockContext;
++
++static void facility_lock_step (GTask *task, gboolean want_pin);
++
+ static void
+-facility_lock_parity_probe_ready (MMSitClient  *client,
+-                                  GAsyncResult *res,
+-                                  GTask        *task)
++facility_lock_probe_ready (MMSitClient  *client,
++                           GAsyncResult *res,
++                           GTask        *task)
+ {
+     MMBroadbandModemSamsungSit *self = g_task_get_source_object (task);
+     g_autoptr(GError)           error = NULL;
+@@ -3343,10 +3363,45 @@
+ 
+     if (!mm_sit_client_get_facility_lock_finish (client, res, &locked, &error))
+         mm_obj_dbg (self, "facility 0x10 query failed: %s", error->message);
++    facility_lock_step (task, TRUE);
++}
+ 
+-    mm_sit_client_get_facility_lock (client, MM_SIT_FACILITY_SIM_PIN, NULL,
+-                                     (GAsyncReadyCallback) load_enabled_facility_locks_ready,
+-                                     task);
++static void
++facility_lock_pin_ready (MMSitClient  *client,
++                         GAsyncResult *res,
++                         GTask        *task)
++{
++    FacilityLockContext *ctx = g_task_get_task_data (task);
++
++    /* The last application's answer is the one that counts; earlier ones are
++     * stock's parity traffic and are consumed. */
++    if (++ctx->aid_index >= ctx->aid_count) {
++        load_enabled_facility_locks_ready (client, res, task);
++        return;
++    }
++    facility_lock_step (task, FALSE);
++}
++
++static void
++facility_lock_step (GTask *task, gboolean want_pin)
++{
++    MMBroadbandModemSamsungSit *self = g_task_get_source_object (task);
++    FacilityLockContext        *ctx = g_task_get_task_data (task);
++    MMSitClient                *client = mm_broadband_modem_samsung_sit_peek_client (self, NULL);
++
++    if (!client) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "no SIT client");
++        g_object_unref (task);
++        return;
++    }
++    if (want_pin)
++        mm_sit_client_get_facility_lock_for_aid (client, MM_SIT_FACILITY_SIM_PIN, ctx->aid_index,
++                                                 NULL, (GAsyncReadyCallback) facility_lock_pin_ready,
++                                                 task);
++    else
++        mm_sit_client_get_facility_lock_for_aid (client, 0x10, ctx->aid_index,
++                                                 NULL, (GAsyncReadyCallback) facility_lock_probe_ready,
++                                                 task);
+ }
+ 
+ static void
+@@ -3355,6 +3410,7 @@
+                              gpointer            user_data)
+ {
+     MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (iface);
++    FacilityLockContext        *ctx;
+     MMSitClient                *client;
+     GError                     *error = NULL;
+     GTask                      *task;
+@@ -3366,20 +3422,11 @@
+         g_object_unref (task);
+         return;
+     }
+-    /*
+-     * Stock asks twice per application, in this order: facility 0x10, then
+-     * 0x03 (SIM PIN). Measured on baseband g5400c-260604-260807-B-16035863 --
+-     * four requests on the stack whose SIM has an ISIM, two on the other. Only
+-     * 0x03 feeds anything ModemManager reports, so the first is a parity probe
+-     * whose answer is discarded. 0x10 is written as a literal because nothing
+-     * we have names it, and inventing a name would be worse.
+-     *
+-     * Still short of stock on a SIM with an ISIM: it repeats the pair for the
+-     * ISIM AID, and the client caches only the subscription application.
+-     */
+-    mm_sit_client_get_facility_lock (client, 0x10, NULL,
+-                                     (GAsyncReadyCallback) facility_lock_parity_probe_ready,
+-                                     task);
++    /* One 0x10/0x03 pair per application; see facility_lock_step(). */
++    ctx = g_new0 (FacilityLockContext, 1);
++    ctx->aid_count = MAX (mm_sit_client_get_aid_count (client), 1);
++    g_task_set_task_data (task, ctx, g_free);
++    facility_lock_step (task, FALSE);
+ }
+ 
+ static GList *
+@@ -4254,22 +4301,35 @@
+     return G_SOURCE_REMOVE;
+ }
+ 
++static void load_sim_slots_apply (MMBroadbandModemSamsungSit *self,
++                                  GTask                      *task,
++                                  const MMSitSimSlotStatus   *in_status);
++
+ static void
+-load_sim_slots_ready (MMSitClient *client,
++load_sim_slots_ready (MMSitClient  *client,
+                       GAsyncResult *res,
+                       GTask        *task)
+ {
+     MMBroadbandModemSamsungSit *self = g_task_get_source_object (task);
+-    LoadSimSlotsContext        *ctx = g_task_get_task_data (task);
+     MMSitSimSlotStatus          status;
+     GError                     *error = NULL;
+-    guint                       i;
+ 
+     if (!mm_sit_client_get_sim_slot_status_finish (client, res, &status, &error)) {
+         g_task_return_error (task, error);
+         g_object_unref (task);
+         return;
+     }
++    load_sim_slots_apply (self, task, &status);
++}
++
++static void
++load_sim_slots_apply (MMBroadbandModemSamsungSit *self,
++                      GTask                      *task,
++                      const MMSitSimSlotStatus   *in_status)
++{
++    LoadSimSlotsContext        *ctx = g_task_get_task_data (task);
++    MMSitSimSlotStatus          status = *in_status;
++    guint                       i;
+ 
+     ctx->sim_slots = g_ptr_array_new_full (status.slot_count, (GDestroyNotify) sim_slot_free);
+     for (i = 0; i < status.slot_count; i++) {
+@@ -4379,6 +4439,7 @@
+     MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (iface);
+     LoadSimSlotsContext        *ctx;
+     MMSitClient                *client;
++    MMSitSimSlotStatus          cached;
+     GError                     *error = NULL;
+     GTask                      *task;
+ 
+@@ -4393,6 +4454,19 @@
+     ctx = g_new0 (LoadSimSlotsContext, 1);
+     ctx->attempts_left = LOAD_SIM_SLOTS_ATTEMPTS;
+     g_task_set_task_data (task, ctx, (GDestroyNotify) load_sim_slots_context_free);
++
++    /*
++     * Reuse the inventory mm_sit_cp_prepare() already polled rather than ask
++     * again. Stock reads the slot status once per boot; we read it three times
++     * inside 40 ms -- there plus once per modem from here. The cache is dropped
++     * on SIM_SLOT_STATUS_CHANGED, so a hot-swap still re-reads.
++     */
++    if (mm_sit_cp_peek_sim_slot_status (self->priv->cp, &cached)) {
++        mm_obj_dbg (self, "using the slot inventory the CP already polled");
++        load_sim_slots_apply (self, task, &cached);
++        return;
++    }
++
+     mm_sit_client_get_sim_slot_status (client, NULL,
+                                        (GAsyncReadyCallback) load_sim_slots_ready,
+                                        task);
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+@@ -2421,7 +2421,23 @@
+         MM_SIT_MESSAGE_GET_IMEISV,
+         MM_SIT_MESSAGE_OEM_CONFIG,
+         MM_SIT_MESSAGE_SET_MODEM_CONFIG,
++        /*
++         * The UICC access-control probe that closes the boot batch: three
++         * opens by AID that the card refuses, one with no AID that yields a
++         * channel, the three EF_DIR reads on it, and the close. Asserting the
++         * exact order is the point -- the channel has to come from the open
++         * response and the close has to happen.
++         */
++        MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL,
++        MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL,
++        MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL,
++        MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL,
++        MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL,
++        MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL,
++        MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL,
++        MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL,
+     };
++    guint opens = 0, apdus = 0;
+     /* A GET_IMEISV payload of the captured shape -- a length byte and 17
+      * digits -- with a test identity, so the software version the batch then
+      * sends can be checked against its tail. */
+@@ -2440,6 +2456,7 @@
+         guint8  response[12 + sizeof (versions_payload)] = { 0 };
+         gsize   response_len = 12;
+         guint16 request_len;
++        guint32 body_channel = 0;
+ 
+         G_STATIC_ASSERT (sizeof (versions_payload) > sizeof (imeisv_payload));
+ 
+@@ -2456,6 +2473,9 @@
+                 g_assert_cmpuint (body[0xda - MM_SIT_HEADER_SIZE], ==, MM_SIT_PDP_TYPE_IPV4V6);
+             if (expected_ids[i] == MM_SIT_MESSAGE_SET_MODEM_CONFIG)
+                 g_assert_cmpuint (body[4], ==, ctx->dsds ? 1 : 0);
++            if (expected_ids[i] == MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL ||
++                expected_ids[i] == MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL)
++                memcpy (&body_channel, body, 4);
+             /* And the software version has to be the one the CP just gave,
+              * not a constant: @12 of the frame, ASCII. */
+             if (expected_ids[i] == MM_SIT_MESSAGE_OEM_CONFIG) {
+@@ -2465,7 +2485,30 @@
+             }
+         }
+ 
+-        if (expected_ids[i] == MM_SIT_MESSAGE_GET_IMEISV) {
++        if (expected_ids[i] == MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL) {
++            /* Channel at frame+12, its SW at +16. The first three opens name
++             * an applet this card does not have (6a82); the fourth names none
++             * and gets channel 1. */
++            response_len = 18;
++            /* SW as the capture has it: `6a 82` for an absent applet and
++             * `90 00` for success, i.e. 0x826a and 0x0090 read little-endian. */
++            if (++opens < 4) {
++                memset (&response[12], 0xff, 4);
++                response[16] = 0x6a;
++                response[17] = 0x82;
++            } else {
++                response[12] = 1;
++                response[16] = 0x90;
++                response[17] = 0x00;
++            }
++        } else if (expected_ids[i] == MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL) {
++            /* Every APDU has to carry the channel the open handed back. */
++            g_assert_cmpuint (body_channel, ==, 1);
++            apdus++;
++        } else if (expected_ids[i] == MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL) {
++            g_assert_cmpuint (apdus, ==, 3);
++            g_assert_cmpuint (body_channel, ==, 1);
++        } else if (expected_ids[i] == MM_SIT_MESSAGE_GET_IMEISV) {
+             memcpy (&response[12], imeisv_payload, sizeof (imeisv_payload));
+             response_len = 12 + sizeof (imeisv_payload);
+         } else if (expected_ids[i] == MM_SIT_MESSAGE_DEVICE_INFO) {

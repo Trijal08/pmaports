@@ -1,0 +1,70 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -982,6 +982,10 @@
+  * retries on its own timer, so the next attempt uses the new attach APN.
+  */
+ 
++static void search_watchdog_radio_off_ready (MMSitClient  *client,
++                                             GAsyncResult *res,
++                                             GTask        *task);
++
+ static void
+ ims_pdn_refused (MMSitIms                   *ims,
+                  guint                       cause,
+@@ -991,6 +995,7 @@
+     MMSitPdpType  pdp;
+     const gchar  *apn;
+     MMSitClient  *client;
++    GTask        *task;
+     MMModemState  state = MM_MODEM_STATE_UNKNOWN;
+ 
+     if (cause != MM_SIT_REJECT_CAUSE_MATCH_ALL_RULE_NOT_ALLOWED)
+@@ -1065,7 +1070,7 @@
+      * goes; data_pdn_refused() is the backstop if it fails for its own reasons.
+      */
+     g_object_get (self, MM_IFACE_MODEM_STATE, &state, NULL);
+-    if (state >= MM_MODEM_STATE_CONNECTING) {
++    if (state >= MM_MODEM_STATE_CONNECTING && !self->priv->escalate_attach_to_ims) {
+         mm_obj_info (self, "the CP refused the IMS PDN (cause %u), but data is %s; "
+                      "leaving the attach APN alone", cause,
+                      state == MM_MODEM_STATE_CONNECTING ? "connecting" : "connected");
+@@ -1082,6 +1087,39 @@
+                  cause, apn);
+     mm_sit_client_set_initial_attach_apn (client, apn, pdp, attach_pcscf_request (self),
+                                           &auth, NULL, NULL, NULL);
++
++    /*
++     * Sending the attach APN is not enough on its own -- the same thing the
++     * back-out below has always known: "the CP keeps serving the attach it
++     * already has, so a change only takes effect at the next attach." The
++     * escalation never produced one, so the APN was accepted on the wire and
++     * then ignored.
++     *
++     * Measured 2026-11-04, exynos-modem r23 / MM r30, ch0xf5: SET_INITIAL_
++     * ATTACH_APN 'ims' went out at t=21.8 s and every later IMS request that
++     * boot was still refused 2253 -- 5 of them -- because the CP was still
++     * attached on 'sp.telus.com'. The journal shows no "applying attach APN
++     * ... before radio-on" for that stack, while the back-out at t=72 s does
++     * log one. That asymmetry is the whole bug, and it is why a grant looked
++     * like a dice roll: it only ever happened when something *else* (a
++     * registration blip, the search watchdog) produced a re-attach.
++     *
++     * Only once registered. power_up_chain_start() takes the radio down first,
++     * and an OFF inside the startup window parks the CP with cp_active 1;
++     * REGISTERED means an attach has already completed, so that window is
++     * closed. If we are not there yet the retry timer comes back round.
++     */
++    if (state < MM_MODEM_STATE_REGISTERED) {
++        mm_obj_dbg (self, "not cycling the radio for the IMS attach yet (state %d); "
++                    "the next provisioning retry will", (int) state);
++        return;
++    }
++
++    mm_obj_info (self, "cycling the radio so the '%s' attach takes effect", apn);
++    task = g_task_new (self, NULL, NULL, NULL);
++    mm_sit_client_set_radio_state (client, MM_SIT_RADIO_STATE_OFF, NULL,
++                                   (GAsyncReadyCallback) search_watchdog_radio_off_ready,
++                                   task);
+ }
+ 
+ /*

@@ -1,0 +1,137 @@
+Re-assert the indication filter and display state after the IMS context
+
+Stock sends SET_INDICATION_FILTER and SET_SCREEN_STATE three times per stack;
+we sent two. Counted on identical firmware (Android B-16035863 vs pmOS r38):
+
+    0x0928 SET_INDICATION_FILTER  ch0xf5  stock 5.9s 5.9s 13.9s   ours 4.0s 4.0s
+    0x0928 SET_INDICATION_FILTER  ch0xf6  stock 6.0s 6.1s 13.9s   ours 4.3s 4.4s
+    0x0902 SET_SCREEN_STATE       ch0xf5  stock 6.0s 6.0s 13.9s   ours 4.0s 4.0s
+    0x0902 SET_SCREEN_STATE       ch0xf6  stock 6.1s 6.1s 13.9s   ours 4.4s 4.4s
+
+The missing one lands once the IMS context is answered, and it is an AP-wide
+event -- both stacks fire within 3 ms of each other, with ch 0xf6 only 2 ms
+after its own response:
+
+    f6  13917 RSP SETUP_DATA_CALL granted
+        13919 REQ SET_INDICATION_FILTER 7f000000
+        13921 REQ SET_SCREEN_STATE      01000000
+    f5  12789 RSP SETUP_DATA_CALL granted
+        13759 IND AIMS_REGISTRATION
+        13918 REQ SET_INDICATION_FILTER 7f000000
+
+Both bodies are already byte-identical to stock's -- 7f000000 and 01000000, the
+latter since the screen-state parity fix -- so only the occurrence was missing.
+Sent from a new STEP_REASSERT_FILTER right after STEP_PDN, which reproduces
+ch 0xf6's 2 ms exactly and ch 0xf5's within about a second.
+
+Skipped when the context was inherited from an earlier attempt rather than
+established by this run, since stock sends it once. Advisory throughout: the
+context is already up by then and nothing here may undo it.
+
+This was found by sequence-aligning the two streams and then mis-read as "we
+send it twice where stock sends once" -- an artifact of the aligner binning our
+pair into an insert block by position. Counting the occurrences showed the
+opposite, that we under-send by one. Hence this patch rather than a removal.
+
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -369,6 +369,7 @@
+     STEP_PROFILES,
+     STEP_PREAMBLE,
+     STEP_PDN,
++    STEP_REASSERT_FILTER,
+     STEP_HIDDEN_MENU,
+     STEP_ADD_PDN_INFO,
+     STEP_DONE,
+@@ -384,6 +385,9 @@
+     /* The carrier's whole profile set, re-pushed before the PDN. */
+     GPtrArray      *apns;
+     guint           apn_sent;
++    /* This run established the context rather than inheriting one. Only then
++     * is the indication filter re-asserted, as stock does. */
++    gboolean        pdn_fresh;
+ } SequenceContext;
+ 
+ static void
+@@ -474,6 +478,7 @@
+         return;
+     }
+ 
++    ctx->pdn_fresh = TRUE;
+     self->priv->pdn_up = TRUE;
+     self->priv->pdn_cid = ctx->call.cid;
+     self->priv->pdn = ctx->call;
+@@ -493,6 +498,33 @@
+ }
+ 
+ static void
++reassert_screen_ready (MMSitClient  *client,
++                       GAsyncResult *res,
++                       GTask        *task)
++{
++    SequenceContext *ctx = g_task_get_task_data (task);
++
++    /* Advisory: the context is already up and nothing here may undo it. */
++    mm_sit_client_set_screen_state_finish (client, res, NULL);
++    ctx->step++;
++    sequence_step (task);
++}
++
++static void
++reassert_filter_ready (MMSitClient  *client,
++                       GAsyncResult *res,
++                       GTask        *task)
++{
++    MMSitIms *self = g_task_get_source_object (task);
++
++    mm_sit_client_set_indication_filter_finish (client, res, NULL);
++    mm_sit_client_set_screen_state (self->priv->client, TRUE,
++                                    g_task_get_cancellable (task),
++                                    (GAsyncReadyCallback) reassert_screen_ready,
++                                    task);
++}
++
++static void
+ preamble_ready (MMSitClient  *client,
+                 GAsyncResult *res,
+                 GTask        *task)
+@@ -598,6 +630,39 @@
+                                                  &frame, &len);
+         break;
+ 
++    case STEP_REASSERT_FILTER:
++        /*
++         * Stock re-asserts the indication filter and the display state once the
++         * IMS context is answered -- a third pair, after the two it sends at
++         * radio-on. Captured on identical firmware, and it is an AP-wide event:
++         * both stacks fire within 3 ms of each other, ch 0xf6 just 2 ms after
++         * its own SETUP_DATA_CALL response.
++         *
++         *   f6  13917 RSP SETUP_DATA_CALL granted
++         *       13919 REQ SET_INDICATION_FILTER 7f000000
++         *       13921 REQ SET_SCREEN_STATE      01000000
++         *   f5  12789 RSP SETUP_DATA_CALL granted
++         *       13759 IND AIMS_REGISTRATION
++         *       13918 REQ SET_INDICATION_FILTER 7f000000
++         *
++         * Stock sends the pair three times per stack where we sent two. Both
++         * bodies are already byte-identical to stock's, so this is only the
++         * missing occurrence, placed where ch 0xf6 puts it. Skipped when the
++         * context was inherited from an earlier attempt, since stock sends it
++         * once.
++         */
++        if (!ctx->pdn_fresh) {
++            ctx->step++;
++            sequence_step (task);
++            return;
++        }
++        mm_sit_client_set_indication_filter (self->priv->client,
++                                             MM_SIT_INDICATION_FILTER_ALL,
++                                             g_task_get_cancellable (task),
++                                             (GAsyncReadyCallback) reassert_filter_ready,
++                                             task);
++        return;
++
+     case STEP_HIDDEN_MENU:
+         send_frame (task,
+                     ctx->menu.frames[ctx->menu_sent],

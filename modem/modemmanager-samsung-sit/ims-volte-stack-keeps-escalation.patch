@@ -1,0 +1,36 @@
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+@@ -1147,6 +1147,33 @@
+         return;
+     }
+ 
++    /*
++     * On the stack the device package designated as the VoLTE stack
++     * (ID_MM_SIT_ESCALATE_ATTACH_TO_IMS) data does not outrank VoLTE: losing
++     * that SIM's data is exactly the trade the designation asks for. Backing
++     * out here threw the trade away 44 s after taking it -- measured on
++     * hardware 2026-11-04 with exynos-modem r23 / MM r30:
++     *
++     *   11:14:35 [modem0] the CP refused the IMS PDN (2253); attaching on 'ims'
++     *   11:15:19 [modem0] a data PDN was refused (2253) while attached on the
++     *                     IMS APN; going back to 'sp.telus.com'
++     *
++     * and every later IMS request on that stack was refused for the rest of
++     * the boot -- 7 of them, all 2253 -- because the attach was no longer
++     * 'ims'. The SIM ended up with neither VoLTE nor (wanted) data.
++     *
++     * So on the designated stack keep the IMS attach and let that SIM's data
++     * APN stay refused. attach_data_wins is deliberately left clear, so a
++     * later refusal does not permanently block re-escalation either. The stack
++     * that carries data is the one *without* the property.
++     */
++    if (self->priv->escalate_attach_to_ims) {
++        mm_obj_info (self, "a data PDN was refused (cause %u) while attached on the IMS APN, "
++                     "but this stack is designated for VoLTE; keeping the IMS attach",
++                     cause);
++        return;
++    }
++
+     self->priv->attach_ims_fallback = FALSE;
+     self->priv->attach_data_wins = TRUE;
+ 

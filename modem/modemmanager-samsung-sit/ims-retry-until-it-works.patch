@@ -1,0 +1,124 @@
+IMS provisioning: no dead end, and a timeout is not a refusal
+
+Telus burns its three-attempt burst on most boots -- 168, 168, then 36 -- and
+was then down until ModemManager restarted. It does not need fewer attempts; it
+needs a fourth. The same request, byte for byte, was granted on a later attempt
+at 48 s, 69 s and 464 s in other runs, each time with the P-CSCF pool that
+registers.
+
+**The dead end.** Exhausting the burst set IMS_STATE_FAILED -- a value nothing
+ever compared against. The start gate only fires from IMS_STATE_STOPPED, so the
+stack could never come back on its own. Recovery depended on an outside event
+that happened to call mm_sit_ims_stop() again (a VoPS drop, a RAT change), and
+on a network where nothing churns there is none. "Giving up until the next
+registration cycle" was aspirational; nothing implemented it.
+
+It now goes back to STOPPED, which mm_sit_ims_stop() already does, and the
+enum member is gone.
+
+The CP is still protected, by the guard that was actually measured to protect
+it rather than by this one. The monotonic floor above doubles 30 s -> 300 s and
+survives stop/start, so a burst can repeat every few minutes but cannot become
+the unbounded loop that once put 26x Android's volume through the 4KiB oem
+ring, delayed an IMS SMS by 11 s and 39 s, and hung the CP into its watchdog.
+That loop had no floor; this one does.
+
+**A transport error is not a decision.** schedule_retry() counted every failure
+against the burst, including "Serial command timed out" -- which means the CP
+never answered, not that it refused the subscription. On one boot a timeout hit
+both stacks at once and ate the retry that usually succeeds. Only a failure
+carrying a cause counts now; the cause is already parsed out two lines later
+for the refusal signal.
+
+Also here, unrelated and cosmetic: read_os_build() joins /etc/os-release's ID
+and VERSION_ID with a hyphen, so DEVICE_INFO's build field and the UA's #BUILD#
+are one token ("nura-edge") the way a vendor build id is. The spaced form was
+briefly suspected of costing an IMS PDN and then exonerated -- the same build
+registered both stacks on the next boot -- so this is tidiness, not a fix.
+
+--- a/src/plugins/samsung-sit/mm-sit-client.c
++++ b/src/plugins/samsung-sit/mm-sit-client.c
+@@ -4958,7 +4958,20 @@
+         version = os_release_value (keyfile, "VERSION_ID");
+     if (!name && !version)
+         return NULL;
+-    return g_strdup_printf ("%s %s", name ?: "linux", version ?: "unknown");
++    /*
++     * One token, hyphenated -- "nura-edge", not "nura edge".
++     *
++     * This string is DEVICE_INFO's build field and the User-Agent's #BUILD#.
++     * A vendor build id is always a single token (CP2A.260605.016), and the UA
++     * path enforces that itself by replacing spaces, so a space here only ever
++     * reached the CP through DEVICE_INFO.
++     *
++     * It is not a fix for anything: the spaced form was briefly suspected of
++     * costing an IMS PDN and then exonerated -- the same build registered both
++     * stacks on the next boot, so that run was variance. This is only a
++     * well-formed value.
++     */
++    return g_strdup_printf ("%s-%s", name ?: "linux", version ?: "unknown");
+ }
+ 
+ static void
+--- a/src/plugins/samsung-sit/mm-sit-ims.c
++++ b/src/plugins/samsung-sit/mm-sit-ims.c
+@@ -86,7 +86,6 @@
+     IMS_STATE_STOPPED,
+     IMS_STATE_STARTING,
+     IMS_STATE_STARTED,
+-    IMS_STATE_FAILED,
+ } ImsState;
+ 
+ struct _MMSitImsPrivate {
+@@ -298,15 +297,47 @@
+                 GError      *error)
+ {
+     clear_retry (self);
+-    if (++self->priv->provisioning_failures >= MAX_PROVISIONING_ATTEMPTS) {
++    /*
++     * Only a refusal counts against the burst. "Serial command timed out" means
++     * the CP never answered, which is not a decision about the subscription --
++     * and it costs an attempt the stack usually needs: on one boot a timeout
++     * hit both stacks at once and ate the retry that normally succeeds. The
++     * cause is parsed out below for the same reason.
++     */
++    if (error && !strstr (error->message, "cause "))
++        mm_obj_dbg (self, "IMS %s attempt failed without a cause (%s); "
++                    "not counting it against the burst", what, error->message);
++    else
++        self->priv->provisioning_failures++;
++
++    if (self->priv->provisioning_failures >= MAX_PROVISIONING_ATTEMPTS) {
+         mm_obj_info (self, "IMS %s failed after %u attempts (%s); giving up until the next registration cycle",
+                      what, self->priv->provisioning_failures,
+                      error ? error->message : "unknown");
+         g_clear_error (&error);
+-        /* Clean up any PDN or stack left by a failure after SETUP. Keep a
+-         * distinct state so ordinary RAT/operator polls cannot restart us. */
++        /*
++         * Clean up any PDN or stack left by a failure after SETUP, and go back
++         * to STOPPED rather than a dead end.
++         *
++         * This used to set IMS_STATE_FAILED, which nothing ever compared
++         * against -- and the start gate only fires from STOPPED, so the stack
++         * could never come back. Recovery needed an outside event that happened
++         * to call stop() again (a VoPS drop, a RAT change); on a network where
++         * nothing churns there was none, so three refusals meant no IMS until
++         * ModemManager restarted. Measured repeatedly: Telus burns the burst
++         * with 168/168/36 and is then down for the boot, while the same request
++         * was granted on a later attempt at 48 s, 69 s and 464 s in other runs.
++         * It does not need fewer attempts, it needs a fourth.
++         *
++         * The CP is still protected, by the thing that was actually measured to
++         * protect it: the monotonic floor above, which doubles to
++         * PROVISIONING_COOLDOWN_MAX_SECS and which a stop/start cannot reset.
++         * So a burst can repeat, but only every few minutes -- not the
++         * unbounded loop that once put 26x Android's volume through the oem
++         * ring. mm_sit_ims_stop() leaves the state STOPPED and clears the
++         * failure count for us.
++         */
+         mm_sit_ims_stop (self);
+-        self->priv->state = IMS_STATE_FAILED;
+         return;
+     }
+     mm_obj_dbg (self, "IMS %s attempt %u/%u failed (%s); retrying in %us",
