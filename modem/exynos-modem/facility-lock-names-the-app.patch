@@ -1,0 +1,109 @@
+--- a/crates/samsung-sit/src/sim.rs
++++ b/crates/samsung-sit/src/sim.rs
+@@ -174,8 +174,26 @@
+ /// frame whose only populated byte is `u8 facility @12`. The reply is 14 bytes
+ /// with `u8 enabled @13`.
+ pub fn build_get_facility_lock(token: u16, facility: u8) -> Vec<u8> {
++    build_get_facility_lock_aid(token, facility, &[])
++}
++
++/// `GET_FACILITY_LOCK` (0x0209) naming the application it asks about.
++///
++/// The 59-byte payload is `[0] = facility`, then at payload+41 a `07`, the AID
++/// length, and the AID itself (`body[45..]`). Stock never omits it: measured on
++/// baseband g5400c-260604-260807-B-16035863 it asks twice per application, for
++/// facility 0x10 and 0x03, with the USIM AID `a0000000871002...` and -- where
++/// the SIM has one -- the ISIM AID `a0000000871004...`. We were sending
++/// facility 0x03 with the AID left as zeros.
++pub fn build_get_facility_lock_aid(token: u16, facility: u8, aid: &[u8]) -> Vec<u8> {
+     let mut body = vec![0u8; 63];
+     body[4] = facility;
++    if !aid.is_empty() {
++        let n = aid.len().min(16);
++        body[45] = 0x07;
++        body[46] = n as u8;
++        body[47..47 + n].copy_from_slice(&aid[..n]);
++    }
+     crate::frame_header(msg_id::GET_FACILITY_LOCK, token, &body)
+ }
+ 
+@@ -603,6 +621,16 @@
+     /// Captured facility-lock query and its two observed replies.
+     #[test]
+     fn facility_lock_round_trip() {
++        let aid: [u8; 16] = [
++            0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xff, 0x33, 0xff, 0xff, 0x89, 0x01, 0x01,
++            0x01, 0x00,
++        ];
++        let withaid = build_get_facility_lock_aid(7, 0x10, &aid);
++        // payload+0 is the facility; payload+41 is 07, the length, then the AID.
++        assert_eq!(withaid[12], 0x10);
++        assert_eq!(&withaid[53..55], &[0x07, 0x10]);
++        assert_eq!(&withaid[55..71], &aid);
++
+         let req = build_get_facility_lock(7, 0x03);
+         assert_eq!(req.len(), 71);
+         assert_eq!(&req[..8], &[0x00, 0x00, 0x09, 0x02, 0x47, 0x00, 0x07, 0x00]);
+--- a/crates/samsung-sit/src/lib.rs
++++ b/crates/samsung-sit/src/lib.rs
+@@ -76,7 +76,7 @@
+ };
+ pub use signal::{parse_signal, GsmSignal, LteSignal, Nr5gSignal, Signal, WcdmaSignal};
+ pub use sim::{
+-    app_state, build_get_facility_lock, build_sim_io, parse_carrier_sim_info, parse_facility_lock,
++    app_state, build_get_facility_lock, build_get_facility_lock_aid, build_sim_io, parse_carrier_sim_info, parse_facility_lock,
+     parse_sim_io, parse_sim_status, pin_state, sim_io_cmd, CarrierSimInfo, SimApp, SimIoRequest,
+     SimIoResponse, SimStatus, SIM_IO_MAX_AID, SIM_IO_MAX_DATA, SIM_IO_MAX_PATH,
+ };
+--- a/crates/samsung-sit-ffi/src/builders.rs
++++ b/crates/samsung-sit-ffi/src/builders.rs
+@@ -680,6 +680,29 @@
+     emit_bytes(sit::build_get_facility_lock(token, facility), out, out_len)
+ }
+ 
++/// As `samsung_sit_build_get_facility_lock`, naming the application via its
++/// AID (`aid_len` 0 keeps the old all-zero field).
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_build_get_facility_lock_aid(
++    token: u16,
++    facility: u8,
++    aid: *const u8,
++    aid_len: usize,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let aid = if aid.is_null() || aid_len == 0 {
++        &[][..]
++    } else {
++        std::slice::from_raw_parts(aid, aid_len)
++    };
++    emit_bytes(
++        sit::build_get_facility_lock_aid(token, facility, aid),
++        out,
++        out_len,
++    )
++}
++
+ /// Build a send request: `SEND_SMS` (0x0100), `SEND_SMS_EXPECT_MORE` (0x0101)
+ /// when more parts of the same message follow, or the IMS `SEND_SMS` (0x0d1b)
+ /// when `over_ims` is set.
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+@@ -1192,6 +1192,17 @@
+                                                      size_t *out_len);
+ 
+ /*
++ As `samsung_sit_build_get_facility_lock`, naming the application via its AID
++ (`aid_len` 0 keeps the old all-zero field).
++ */
++SamsungSitStatus samsung_sit_build_get_facility_lock_aid(uint16_t token,
++                                                         uint8_t facility,
++                                                         const uint8_t *aid,
++                                                         size_t aid_len,
++                                                         uint8_t **out,
++                                                         size_t *out_len);
++
++/*
+  Build a send request: `SEND_SMS` (0x0100), `SEND_SMS_EXPECT_MORE` (0x0101)
+  when more parts of the same message follow, or the IMS `SEND_SMS` (0x0d1b)
+  when `over_ims` is set.

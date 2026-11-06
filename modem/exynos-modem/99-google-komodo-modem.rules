@@ -56,14 +56,37 @@ ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
 # The *only* differing bytes are this identity block, so it is the only thing
 # left to test without touching the firmware pin.
 #
-# Note this pin is not inherently fatal -- a boot on eeadf643 registered with
-# it in place -- so if unpinning does not help, re-enable it: matching stock's
-# identity is correct on its own merits (stock sends
-# "Telus Pixel9ProXL CP2A.260605.016"; unpinned we send
-# "Telus Pixel-9-Pro-XL nura-edge", from the device tree and /etc/os-release).
-#ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
-#  ENV{ID_MM_SIT_DEVICE_MODEL}="Pixel9ProXL", \
-#  ENV{ID_MM_SIT_DEVICE_BUILD}="CP2A.260605.016"
+# MEASURED AND CORRECTED 2026-11-04, against Android running this exact vendor
+# commit (baseband g5400c-260604-260807-B-16035863). SET_DEVICE_INFO (0x0922)
+# carries four 32-byte fields; stock sends, on both stacks:
+#
+#     "Pixel 9 Pro XL"  "CP2A.260605.016"  "komodo"  "17"
+#
+# and we were sending
+#
+#     "Pixel 9 Pro XL"  "nura edge"        "google,komodo"  ""
+#
+# So field 1 was already right and the old note here was wrong: stock does NOT
+# send "Pixel9ProXL" without spaces, and pinning MODEL to that would have
+# *broken* parity. Do not re-add a MODEL override.
+#
+# Field 3 is fixed generically in the plugin (the board name is what follows the
+# last ',' or '-' of /proc/device-tree/compatible, so "google,komodo" ->
+# "komodo"). Field 4 is a vendor software-version constant with no counterpart
+# on postmarketOS, so it comes from the property below.
+#
+# DEVICE_BUILD is deliberately NOT pinned.
+#
+# It was, to the Android vendor build id, for DEVICE_INFO parity -- but the
+# same field is the SIP User-Agent's #BUILD# token, so pinning it made this
+# machine introduce itself to the IMS core as an Android build it is not.
+# Unpinned, mm_sit_client read_os_build() derives it from /etc/os-release
+# (ID + VERSION_ID), which is what the OS actually is. The 2253/VoLTE fix
+# turned out to be the ims.db profile content, not this identity, so the
+# parity argument for pinning no longer has anything behind it.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", \
+  ENV{ID_MM_SIT_DEVICE_SW_VERSION}="17", \
+  ENV{ID_MM_SIT_CP_SW_VERSION}="67"
 
 # The CP's AT service is a veneer over the control plane the plugin already
 # speaks, and a call-waiting query through it knocks the CP off its serving

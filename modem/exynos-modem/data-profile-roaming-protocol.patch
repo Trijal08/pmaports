@@ -1,0 +1,119 @@
+SET_DATA_PROFILE: carry the carrier's roaming protocol
+
+build_set_data_profile() sent roaming_pdp_type as a copy of the home protocol.
+Stock sends the carrier's own, which is not always the same. Measured against
+the capture on identical firmware, frame+0x76:
+
+    ch0xf5 services.telus.com   pdp 2   stock roaming 3   ours 2
+    ch0xf5 sos                  pdp 2   stock roaming 3   ours 2
+    ch0xf5 ims                  pdp 2   stock roaming 2   ours 2   (agree)
+
+The carrier database already carries the column -- `ims.db` has
+`roaming` alongside `protocol`, and the rows say 3 for both of those APNs -- so
+the value was there all along and the builder was throwing it away.
+
+The field feeds the profile table the CP matches URSP route selection against,
+which is the machinery behind the 2253/168 refusals, so a wrong value there is
+not cosmetic.
+
+A new entry point rather than a changed signature: build_set_data_profile()
+keeps its meaning for callers that genuinely have one protocol, and forwards to
+the new one with the home protocol for both. The FFI gains
+samsung_sit_build_set_data_profile_roaming and keeps the old symbol, so nothing
+linking against it has to change.
+
+--- a/crates/samsung-sit/src/lib.rs
++++ b/crates/samsung-sit/src/lib.rs
+@@ -42,7 +42,8 @@
+     build_carrier_manifest, build_deactivate_data_call, build_device_info,
+     build_get_base_band_version, build_get_data_call_list, build_oem_config, build_query,
+     build_set_ap_system_time,
+-    build_set_data_profile, build_set_fast_dormancy_info, build_set_indication_filter,
++    build_set_data_profile, build_set_data_profile_roaming, build_set_fast_dormancy_info,
++    build_set_indication_filter,
+     build_set_initial_attach_apn, build_set_initial_attach_apn_for_stack, build_set_logical_slot_mapping, build_set_modem_config, build_set_modem_config_count,
+     build_set_preferred_modem, build_set_radio_power, build_set_screen_state,
+     build_setup_data_call, apn_type, ApnAuth, AuthType, DeactReason, LogicalSlotMapping,
+--- a/crates/samsung-sit/src/builders.rs
++++ b/crates/samsung-sit/src/builders.rs
+@@ -296,11 +296,31 @@
+     bearers: u32,
+     auth: &ApnAuth,
+ ) -> Result<Vec<u8>, SitError> {
++    build_set_data_profile_roaming(token, apn, pdp, pdp, apn_types, bearers, auth)
++}
++
++/// As above, with the roaming protocol given separately.
++///
++/// Stock sends the carrier's own roaming protocol here, which is not always the
++/// home one. Measured against the capture on identical firmware:
++/// `services.telus.com` and `sos` go out with pdp 2 and roaming **3**, where
++/// copying the home protocol sent 2. Keeping the copying form above means the
++/// callers that genuinely have only one protocol stay unchanged.
++#[allow(clippy::too_many_arguments)]
++pub fn build_set_data_profile_roaming(
++    token: u16,
++    apn: &str,
++    pdp: PdpType,
++    roaming_pdp: PdpType,
++    apn_types: u32,
++    bearers: u32,
++    auth: &ApnAuth,
++) -> Result<Vec<u8>, SitError> {
+     let request = SetDataProfileRequest {
+         profile_id: u32::MAX,
+         apn: check_apn(apn)?,
+         pdp_type: pdp as u8,
+-        roaming_pdp_type: pdp as u8,
++        roaming_pdp_type: roaming_pdp as u8,
+         auth: auth.auth as u8,
+         user: check_credential(auth.user, "APN username")?,
+         password: check_credential(auth.password, "APN password")?,
+--- a/crates/samsung-sit-ffi/src/builders.rs
++++ b/crates/samsung-sit-ffi/src/builders.rs
+@@ -155,6 +155,45 @@
+     )
+ }
+ 
++/// `SET_DATA_PROFILE` with the carrier's roaming protocol named separately;
++/// see `build_set_data_profile_roaming`. The older symbol above copies the home
++/// protocol and is kept so nothing that links against it has to change.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn samsung_sit_build_set_data_profile_roaming(
++    token: u16,
++    apn: *const c_char,
++    pdp: SamsungSitPdpType,
++    roaming_pdp: SamsungSitPdpType,
++    apn_types: u32,
++    bearers: u32,
++    auth: *const SamsungSitApnAuth,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let apn = match cstr(apn) {
++        Ok(a) => a,
++        Err(s) => return s,
++    };
++    let auth = match apn_auth(auth) {
++        Ok(a) => a,
++        Err(s) => return s,
++    };
++    emit_result(
++        sit::build_set_data_profile_roaming(
++            token,
++            apn,
++            pdp.into(),
++            roaming_pdp.into(),
++            apn_types,
++            bearers,
++            &auth,
++        ),
++        out,
++        out_len,
++    )
++}
++
+ #[no_mangle]
+ pub unsafe extern "C" fn samsung_sit_build_set_initial_attach_apn(
+     token: u16,
