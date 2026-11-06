@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=62
+pkgrel=69
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -110,6 +110,12 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	sit-pipeline-requests-like-stock.patch
 	retire-the-boot-parity-replay.patch
 	connect-does-not-narrow-cell-broadcast.patch
+	ims-registration-watchdog-is-not-a-provisioning-failure.patch
+	sit-cap-registration-queries-in-flight.patch
+	sit-send-the-boot-queries-stock-sends.patch
+	sit-read-a-whole-elementary-file.patch
+	sit-profile-before-the-context-like-stock.patch
+	sit-read-all-of-ef-fdn.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -270,4 +276,10 @@ eaffb85fe2933dc1c5f9b2a8957037c1163a04b9d8e71df056dd9842bff4100c140518fb99b96382
 749bbd14f774192371f1cc11c17dcfad96d06b61ce82e46b840a85c485484736cac70803bb82c901535c51f00f9f63166022624e9062ee7b89a4e27ec74b95d5  sit-pipeline-requests-like-stock.patch
 f1904b441bb634dbdc5f9b771aa4269670484a69119c4c40bef2226dd65d4336e8df757b047ee0af2fbfa69f05a4495bc53260c2f05970a7a776c0d178c85f69  retire-the-boot-parity-replay.patch
 b43e44d00216e1c09587f47ddcd092eb3a82fb58753f767d1695d58744661c9e59c619bbaf772880d9276261a89d5ade1a25d398a5256dde9d987f8fc2e49fee  connect-does-not-narrow-cell-broadcast.patch
+50fce46bfcd6cf3534002b160d87fe0e287cea6f8f5006976d94275b96157b3729c2262d1dfeb7882f5b7f94091a45540b949cae80db544333242b92db0878e0  ims-registration-watchdog-is-not-a-provisioning-failure.patch
+4372cb5610660789aacb984b2a7304b85242e35b7d876840cf8ac62e602e4456bd916b621f2ac35d7ccbe7371ae02950d8b0cf3354043c5ccb611458db2b0f83  sit-cap-registration-queries-in-flight.patch
+2fbd743f7923e3294e0782fc61ea012a9e05fe0669ea229ca0bca47163d3d42ac860c1c6bfc94fddf6d5008dc4c89c52108304212fe081a4017d389ba36dd679  sit-send-the-boot-queries-stock-sends.patch
+7974441600d85bb1241fb95171141b2080c9e271667e1222559c906e759cfcf83a462de33bba889cde73bdcb14592c1a3038a89f605ab56f91636ff9c662b69b  sit-read-a-whole-elementary-file.patch
+1d74142b8554c2b3586feffcc1e14c424d8863500db655c83fac06456a439a8f1b2972d9336363119b79dcab364cf18de20667ea2b6cfbe4c9d9466fd5d31830  sit-profile-before-the-context-like-stock.patch
+2c10448d2818220e72673427b8417129d7fff3445acef18fac6e9117fd88ddfcfc64384904ef132423819902289afcb7ad4164c739e07a15d1f44cc73d2e8d98  sit-read-all-of-ef-fdn.patch
 "
