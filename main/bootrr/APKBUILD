@@ -2,11 +2,12 @@ maintainer="Casey Connolly <kcxt@postmarketos.org>"
 pkgname=bootrr
 pkgver=0.1_git20240706
 _commit="7dd53678fe1e677a63883639c2dad927d7266c00"
-pkgrel=0
+pkgrel=1
 pkgdesc="A sanity checker for boards under automated test"
 url="https://github.com/andersson/bootrr"
 arch="noarch"
 license="BSD-3-Clause"
+depends="findutils"
 source="
 	bootrr-$_commit.tar.gz::https://github.com/andersson/bootrr/archive/$_commit.tar.gz
 "
