@@ -2,7 +2,7 @@
 maintainer=""
 pkgname=systemd-boot-x86
 _pkgname=systemd-boot  # for monitoring
-pkgver=262.1
+pkgver=262.2
 pkgrel=0
 pkgdesc="systemd's EFI boot manager for x86 EFI on x86_64."
 url="https://systemd.io/"
@@ -120,7 +120,7 @@ efistub() {
 }
 
 sha512sums="
-a4d696dc03d096b815b6780f910fab4e79e01b8414b26529a8585b437b27a50b10c1082e534f1cdcb8bbec330a2af0f98fdcacf189e75f64a157c8bbc4774976  systemd-262.1.tar.gz
+111da2e78c999f299c40532a69d5ea7aa564e9f761e889d781777c90f771770767ba5625b79d7b4ae179830b191cae2f80dca85799dd5ad973144e82d0b3735d  systemd-262.2.tar.gz
 15ca9dd7042a0bb9e8ffdb9306989c0a4569e4064ad1143d62da48929b220c9c2d73ec62c33eea3e5d8e4466b3e439db2a167a32eba72dc25f39364a7a092979  0001-meson-disable-libintl-check-if-pam-is-disabled.patch
 ad54e2c7e7a21bfa9b5f9e8db1b6af6a6d78a3e5dfe2dafcec77488f6224865ab4d4c8a8c8ee1c54c99d1741361e9fb3a51e5d36bcbc7a1c3fdcc4d0c1672132  cross-x86.meson
 "
