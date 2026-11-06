@@ -17,7 +17,7 @@ pkgname=systemd
 pkgver=262.2
 _pkgver="${pkgver/_/-}"
 # pkgrel must match systemd-stage0!
-pkgrel=2
+pkgrel=3
 pkgdesc="System and service manager"
 url="https://github.com/systemd/systemd"
 # armhf: no linux-stable
@@ -250,7 +250,6 @@ build() {
 	abuild-meson \
 		-Dlibc=musl \
 		-Dmode=release \
-		-Dsplit-bin=true \
 		\
 		-Dquotaon-path=/usr/sbin/quotaon \
 		-Dquotacheck-path=/usr/sbin/quotacheck \
@@ -375,8 +374,8 @@ udevd() {
 	amove usr/lib/udev
 
 	# Install symlinks to be more like eudev
-	mkdir -p "$subpkgdir"/usr/sbin
-	ln -sf ../bin/udevadm "$subpkgdir"/usr/sbin/udevd
+	mkdir -p "$subpkgdir"/usr/bin
+	ln -sf ../bin/udevadm "$subpkgdir"/usr/bin/udevd
 }
 
 udevd_bcomp() {
@@ -448,7 +447,7 @@ resolved() {
 	provides="resolvconf"
 
 	amove usr/bin/resolvectl
-	amove usr/sbin/resolvconf
+	amove usr/bin/resolvconf
 	amove usr/bin/systemd-resolve
 	amove usr/lib/systemd/resolv.conf
 	amove usr/lib/systemd/system/systemd-resolved.service
