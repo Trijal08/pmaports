@@ -2,7 +2,7 @@
 maintainer="Alistair Francis <alistair@alistair23.me>"
 pkgname=u-boot-librem5
 pkgver=2022.10
-pkgrel=4
+pkgrel=5
 # 'upstream/librem5' branch in uboot repo
 _commit="c4960dade272da9d6a7f53f6956d4d6747d573e9"
 # 'librem5' branch in atf repo
@@ -93,7 +93,7 @@ package() {
 	install -D -m644 "$builddir"/phone-boot.img.sha512 \
 		"$pkgdir/usr/share/u-boot/librem5/phone-boot.img.sha512"
 	install -D -m 755 "$srcdir"/update-u-boot \
-		"$pkgdir"/usr/sbin/update-u-boot
+		"$pkgdir"/usr/bin/update-u-boot
 }
 
 devkit() {
@@ -109,7 +109,7 @@ devkit() {
 	# install -D -m644 "$builddir"/devkit-boot.img.sha512 \
 	# 	"$pkgdir/usr/share/u-boot/librem5/devkit-boot.img.sha512"
 	# install -D -m 755 "$srcdir"/update-u-boot \
-	# 	"$pkgdir"/usr/sbin/update-u-boot
+	# 	"$pkgdir"/usr/bin/update-u-boot
 }
 
 sha512sums="
