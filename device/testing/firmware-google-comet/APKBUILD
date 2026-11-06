@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-comet
 pkgver=20260627
-pkgrel=2
+pkgrel=3
 pkgdesc="Firmware for Google Pixel 9 Pro Fold"
 subpackages="
 	$pkgname-brcm_a0
@@ -22,12 +22,25 @@ options="!check !strip !archcheck !tracedeps pmb:cross-native"
 makedepends="
 	carrier-settings-tool
 	rsync
+	e2fsprogs-extra
+	curl
 "
 
 # Source
 _owner="TheMuppets"
 _repository="proprietary_vendor_google_comet"
-_commit="lineage-24.0"
+# A branch name is not a pin: the tarball changes under the recorded checksum
+# whenever upstream pushes, so this always names a commit.
+#
+# Pinned to the lineage-24.0 tip as of 2026-11-05, "comet: Pin rust binaries to
+# CP2A.260805.005" (2026-10-22) -- the same import batch as komodo's 1aa6782a.
+#
+# Unlike komodo this has not been checked against a device's own vendor
+# partition. If the modem misbehaves on this device, compare the uecapconfig
+# and carrierconfig blob shas against what the device shipped with before
+# looking anywhere else; firmware-google-komodo records how that is done and
+# what it turned up there.
+_commit="295082c7ab0846362962da351dfdd0b19690ab33"
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
 	initramfs_setup_modemfw.sh
@@ -122,6 +135,39 @@ brcm_b1() {
 modem() {
 	pkgdesc="Google Pixel 9 Pro Fold S5400 Modem and GNSS firmware"
 
+	# Modem Main Firmware Blobs
+	#
+	# radio/modem.img is a git-lfs pointer and TheMuppets host their objects
+	# themselves (.lfsconfig), so the tarball carries 134 bytes of text rather
+	# than the image. Resolve the oid out of the pointer and fetch the object
+	# directly -- keeping it keyed on the commit's own pointer instead of a
+	# hardcoded oid, so a repin needs no edit here.
+	#
+	# The oid *is* the sha256 of the content, so verifying against it is a
+	# stronger check than a sha512sums entry would be.
+	local _ptr="$builddir"/radio/modem.img
+	local _oid="$(sed -n 's/^oid sha256://p' "$_ptr")"
+	# Anchored: .lfsconfig also carries a pushurl, and matching both yields a
+	# two-line value that resolves to Endpoint=<unknown>.
+	local _lfs="$(sed -n 's/^[[:space:]]*url[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' \
+		"$builddir"/.lfsconfig)"
+	[ -n "$_oid" ] || die "radio/modem.img is not an LFS pointer"
+	[ -n "$_lfs" ] || die "no lfs url in .lfsconfig"
+
+	curl -fsSL -o "$srcdir"/modem.img "$_lfs/objects/$_oid"
+	echo "$_oid  $srcdir/modem.img" | sha256sum -c - >/dev/null \
+		|| die "modem.img does not match its LFS oid"
+
+	install -d "$subpkgdir/usr/lib/firmware/google/s5400/modem/"
+	debugfs -R "rdump images $subpkgdir/usr/lib/firmware/google/s5400/modem" "$srcdir"/modem.img
+	# debugfs exits 0 even when it cannot open the image, so the result has to
+	# be checked or the package silently ships an empty modem/ directory.
+	# -s also proves the images/default symlink (carried in from the image)
+	# resolved.
+	[ -s "$subpkgdir/usr/lib/firmware/google/s5400/modem/images/default/modem.bin" ] \
+		|| die "modem.bin was not extracted from modem.img"
+	chown -R root:root "$subpkgdir/usr/lib/firmware/google/s5400/modem/images"
+
 	# Modem Partition Mounting Script
 	install -Dm755 "$srcdir"/initramfs_setup_modemfw.sh \
 		-t "$subpkgdir/usr/share/mkinitfs/hooks-cleanup/"
@@ -149,7 +195,7 @@ modem() {
 	install -d "$subpkgdir/usr/lib/firmware/google/s5400/uecapconfig/"
 	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/uecapconfig/ "$subpkgdir/usr/lib/firmware/google/s5400/uecapconfig/"
 
-	# Main Firmware Blob
+	# GNSS Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/kepler.bin \
 		"$subpkgdir/usr/lib/firmware/google/s5400/kepler.bin"
 }
@@ -202,7 +248,7 @@ mfc() {
 		"$subpkgdir/usr/lib/firmware/google/zumapro/mfc_fw.bin"
 }
 sha512sums="
-26805a312c06c9c8707795d3367af4956426138f3932a73a5ca04fb0fa892dfaba8d64d53aecd530ddff330dd15cdfe63cebfc919d9fe76d66557b6ab4b87f9c  firmware-google-comet-lineage-24.0.tar.gz
+94cf04782c1364e183d6390edddcacd231215ca26f7d2ed0d3f7607098101207619ce33dc9d7281c292e2982f1313b74af691819a8f9d826fdb6248e285f3ee6  firmware-google-comet-295082c7ab0846362962da351dfdd0b19690ab33.tar.gz
 f082c8c88af39bef00ed21876bf512bb1b15ef81a6985ad1a29e9251ff46662b65101eefffaee533fd1cd7ae577d67ee4a2f8a1a6c13a5496853e58c197dbc7b  initramfs_setup_modemfw.sh
 fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
 b0ab040928d08c59723088484ecec950a2b0f0605f91f240139a2511fc1110dc2fa934851dfa980a43343341366637c7a8406712d0fb844b911999d83e550122  aosp-carrier-defaults.txt
