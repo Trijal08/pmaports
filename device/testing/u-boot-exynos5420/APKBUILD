@@ -1,7 +1,7 @@
 maintainer="Hendrik Noack <hendrik.noack@protonmail.com>"
 pkgname=u-boot-exynos5420
 pkgver=2026.07_p0
-pkgrel=0
+pkgrel=1
 pkgdesc="U-Boot bootloader for Samsung Exynos5420"
 url="https://gitlab.com/exynos5-mainline/u-boot"
 arch="armv7"
@@ -57,7 +57,7 @@ package() {
 			-t "$pkgdir/usr/share/u-boot/samsung/"
 	done
 
-	install -D -m 755 "$srcdir"/update-u-boot "$pkgdir"/usr/sbin/update-u-boot
+	install -D -m 755 "$srcdir"/update-u-boot "$pkgdir"/usr/bin/update-u-boot
 }
 
 sha512sums="
