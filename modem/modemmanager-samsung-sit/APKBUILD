@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=61
+pkgrel=62
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -109,6 +109,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	port-serial-send-without-the-queue.patch
 	sit-pipeline-requests-like-stock.patch
 	retire-the-boot-parity-replay.patch
+	connect-does-not-narrow-cell-broadcast.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -268,4 +269,5 @@ eaffb85fe2933dc1c5f9b2a8957037c1163a04b9d8e71df056dd9842bff4100c140518fb99b96382
 8ed0b0e212ccac7b1e089893ee2e34fc026339b8737382e9d1822f8d2a8d2feed1dcdb498b61f1145acf1a17f607b4d8e3a0f66b070085b9b69e7fedc69bb469  port-serial-send-without-the-queue.patch
 749bbd14f774192371f1cc11c17dcfad96d06b61ce82e46b840a85c485484736cac70803bb82c901535c51f00f9f63166022624e9062ee7b89a4e27ec74b95d5  sit-pipeline-requests-like-stock.patch
 f1904b441bb634dbdc5f9b771aa4269670484a69119c4c40bef2226dd65d4336e8df757b047ee0af2fbfa69f05a4495bc53260c2f05970a7a776c0d178c85f69  retire-the-boot-parity-replay.patch
+b43e44d00216e1c09587f47ddcd092eb3a82fb58753f767d1695d58744661c9e59c619bbaf772880d9276261a89d5ade1a25d398a5256dde9d987f8fc2e49fee  connect-does-not-narrow-cell-broadcast.patch
 "
