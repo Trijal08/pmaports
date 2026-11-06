@@ -17,7 +17,7 @@ pkgname=systemd
 pkgver=262.2
 _pkgver="${pkgver/_/-}"
 # pkgrel must match systemd-stage0!
-pkgrel=0
+pkgrel=1
 pkgdesc="System and service manager"
 url="https://github.com/systemd/systemd"
 # armhf: no linux-stable
@@ -244,7 +244,7 @@ _default_zshcomp() {
 }
 
 build() {
-	# TODO: after usr-merge completion: remove hardcoded "-D*-path" options
+	# TODO: after usr-merge completion in Alpine: remove hardcoded "-D*-path" options
 	abuild-meson \
 		-Dlibc=musl \
 		-Dmode=release \
@@ -350,12 +350,6 @@ package() {
 		# this stuff is packaged in Alpine aports under "systemd-boot"
 		rm -rf "$pkgdir"/usr/lib/systemd/boot
 	fi
-
-	# Workaround for an apk-tools bug:
-	# https://gitlab.alpinelinux.org/alpine/apk-tools/-/merge_requests/425
-	# Drop this once a fixed apk-tools is available.
-	mkdir -p "$pkgdir"/sbin
-	ln -sf ../usr/lib/systemd/systemd "$pkgdir"/sbin/init
 }
 
 udevd() {
@@ -381,12 +375,6 @@ udevd() {
 	# Install symlinks to be more like eudev
 	mkdir -p "$subpkgdir"/usr/sbin
 	ln -sf ../bin/udevadm "$subpkgdir"/usr/sbin/udevd
-
-	# Workaround for an apk-tools bug:
-	# https://gitlab.alpinelinux.org/alpine/apk-tools/-/merge_requests/425
-	# Drop this once a fixed apk-tools is available.
-	mkdir -p "$subpkgdir"/bin
-	ln -sf ../usr/bin/udevadm "$subpkgdir"/bin/udevadm
 }
 
 udevd_bcomp() {

@@ -5,7 +5,7 @@ pkgname=systemd-stage0
 pkgver=262.2
 _pkgver="${pkgver/_/-}"
 # pkgrel must match systemd!
-pkgrel=0
+pkgrel=1
 pkgdesc="Minimal systemd bootstrap package"
 url="https://github.com/systemd/systemd"
 # armhf: pmb#2618
