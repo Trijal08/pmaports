@@ -67,15 +67,45 @@ put_le32() {
 # ---------------------------------------------------------------------------
 # hwcfg.bin + rf_cfg.bin -- resolve this unit against the vendor config table
 # ---------------------------------------------------------------------------
-CDT=$(sed -n 's/.*androidboot\.cdt_hwid = "0x\([0-9a-fA-F]*\)".*/\1/p' /proc/bootconfig)
+# Two sources for the same identifiers, in preference order:
+#
+#   androidboot.cdt_hwid in /proc/bootconfig -- what the vendor stack reads,
+#   and present only when the running boot image carries the bootloader's
+#   bootconfig blob.  A postmarketOS boot image does not, so /proc/bootconfig
+#   is empty here and this never matches on pmOS.
+#
+#   /proc/device-tree/chosen/plat -- the same decoded CDT, published by the
+#   bootloader as one big-endian cell per identifier.  It survives any boot
+#   image, which makes it the one that actually fires on pmOS.
+#
+# The two name three fields differently; the driver's struct comments give the
+# mapping (rf_sku is the CDT's modem_sku, board is its stage).
+PLAT=/proc/device-tree/chosen/plat
+CDT=$(sed -n 's/.*androidboot\.cdt_hwid = "0x\([0-9a-fA-F]*\)".*/\1/p' \
+	/proc/bootconfig 2>/dev/null)
 
-if [ -n "$CDT" ] && [ -r "$JSON" ]; then
+# A DT cell is big-endian, so read it as one hex run rather than per byte.
+be32() { printf '%d' "0x$(od -An -tx1 -N4 "$1" | tr -d ' \n')"; }
+
+IDS=
+if [ -n "$CDT" ]; then
 	# androidboot.cdt_hwid packs fixed-width hex nibbles (vendor cbd
 	# scan_cdt_property_data); the trailing 8 are vestigial.
 	h() { printf '%d' "0x$(echo "$CDT" | cut -c"$1"-"$2")"; }
 	PLATFORM=$(h 1 4);   PRODUCT=$(h 5 6);    BOARD=$(h 7 8)
 	MAJOR=$(h 9 12);     MINOR=$(h 13 14);    VARIANT=$(h 15 16)
 	RF_SKU=$(h 17 18);   MODEM_HW=$(h 19 20); RF_SUB=$(h 21 24)
+	IDS=cdt_hwid
+elif [ -r "$PLAT/platform" ]; then
+	PLATFORM=$(be32 "$PLAT/platform"); PRODUCT=$(be32 "$PLAT/product")
+	BOARD=$(be32 "$PLAT/stage");       VARIANT=$(be32 "$PLAT/variant")
+	MAJOR=$(be32 "$PLAT/major");       MINOR=$(be32 "$PLAT/minor")
+	RF_SKU=$(be32 "$PLAT/modem_sku");  MODEM_HW=$(be32 "$PLAT/modem_hw")
+	RF_SUB=$(be32 "$PLAT/rf_sub")
+	IDS=chosen/plat
+fi
+
+if [ -n "$IDS" ] && [ -r "$JSON" ]; then
 
 	# Pick the configurations[] entry by (platform, product), then the
 	# config_table row by the remaining identifiers -- same as vendor cbd.
@@ -110,7 +140,7 @@ if [ -n "$CDT" ] && [ -r "$JSON" ]; then
 		RF_FILE=${ROW%% *}; REST=${ROW#* }
 		RFID=${REST%% *};   HWINFO=${REST#* }
 		RF_FILE=${RF_FILE##*/}	# config_file is an absolute vendor path
-		echo "Modem: cdt_hwid -> rfid=$RFID hwinfo=$HWINFO $RF_FILE"
+		echo "Modem: $IDS -> rfid=$RFID hwinfo=$HWINFO $RF_FILE"
 
 		# struct s5300_hwcfg: magic "S5HW", version, 11 identifiers.
 		{
@@ -144,10 +174,10 @@ if [ -n "$CDT" ] && [ -r "$JSON" ]; then
 			echo "Modem: WARNING $RF_FILE(.gz) missing; rf_cfg.bin not staged"
 		fi
 	else
-		echo "Modem: WARNING no config_table row matches this cdt_hwid"
+		echo "Modem: WARNING no config_table row matches this unit ($IDS)"
 	fi
 else
-	echo "Modem: WARNING cdt_hwid or hardware_config.json unavailable"
+	echo "Modem: WARNING no HW ids (bootconfig/chosen-plat) or hardware_config.json"
 fi
 
 # ---------------------------------------------------------------------------
