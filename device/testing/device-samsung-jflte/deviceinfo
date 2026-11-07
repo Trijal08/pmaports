@@ -22,6 +22,7 @@ deviceinfo_flash_offset_ramdisk="0x03200000"
 deviceinfo_flash_offset_second="0x00f00000"
 deviceinfo_flash_offset_tags="0x02e00000"
 deviceinfo_flash_pagesize="2048"
+deviceinfo_flash_heimdall_partition_kernel="BOOT"
 deviceinfo_dtb="qcom-apq8064-samsung-jflte"
 
 # lk2nd does not support GPT for subpartitions/SD cards yet

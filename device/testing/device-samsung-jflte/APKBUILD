@@ -2,7 +2,7 @@
 maintainer="Alex-min <contact@alex-min.fr>"
 pkgname=device-samsung-jflte
 pkgver=7
-pkgrel=0
+pkgrel=1
 pkgdesc="Samsung Galaxy S4"
 url="https://nura.eco"
 arch="armv7"
@@ -13,6 +13,7 @@ depends="
 	firmware-samsung-jflte
 	linux-firmware-brcm
 	linux-postmarketos-qcom-apq8064
+	lk2nd-msm8960
 	mkbootimg
 	msm-firmware-loader
 	postmarketos-base
@@ -82,7 +83,7 @@ xfce() {
 
 sha512sums="
 f5e2a9cd2a0468ef7492096245319954e7d4de2db363f42a9b69d7e738b8808a0162fc74aa3d7bd44ebc30039d023e160e7be1bd571aeb0a7a2a3984090eaa94  adreno-a3xx-quirks.sh
-058925dbfccc3104a6c54f8af66804b1bfa3f9161d8cf4817dc2e710cbb86549717ba878f67e43116fc5a8072558d1d1b7746425c8e53ab37323eda53f8c91e7  deviceinfo
+8321b76407e0928fb4a26d4763d7a3a7a6f4cf71d4c59119c2069c934afdb5f3992fa9d65a804efb5d768f16ac9c3f2c555ea0f1c3813d309a51734764b8f86d  deviceinfo
 568ad708d6844512f8e24ded91762671e1a5b9ecfd4c6fd52f5ec9fa1c7c2cf692ebd803117aa451e4e2ea7612eed1ecaf2b9cc2367998025cfacb170058f32d  device-samsung-jflte-lomiri.post-install
 dce529d931031708299d534cb59e5d9862fb6d7bdb42f687242c6c88f5df96f184c39b99a27d734bea30471710dc63e80a356a6d9de78e4998e9da738158c252  kernel-cmdline.conf
 9ca7f02064767ad912e74b0b4762f6fe975a81d536e4515607fda48473de7512eda0d8331809263e90ce567a8ec2d091bbdcd5887303ac330a4668f18681afb1  lomiri-init.sh
