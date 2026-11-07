@@ -2,7 +2,7 @@
 maintainer="Alistair Francis <alistair@alistair23.me>"
 pkgname=u-boot-librem5
 pkgver=2022.10
-pkgrel=5
+pkgrel=6
 # 'upstream/librem5' branch in uboot repo
 _commit="c4960dade272da9d6a7f53f6956d4d6747d573e9"
 # 'librem5' branch in atf repo
@@ -35,6 +35,7 @@ source="
 	0002-libfdt-Fix-invalid-version-warning.patch
 	0003-libfdt.i_shipped-use-SWIG_AppendOutput.patch
 	0004-python-3.13-binman-migrate-from-pkg_resources-to-imp.patch
+	0005-pylibfmt-Replace-removed-SWIG-Python-2-compatibility.patch
 	"
 install="$pkgname.post-upgrade"
 install="$pkgname.post-upgrade $pkgname-devkit.post-upgrade"
@@ -121,4 +122,5 @@ f5c8a49bda189639386f2367418ab492f10e0e3c0c3f4ca078c461c0cf4427e113a90f49c37f01ef
 895a6e7794257a2b13ecd4e10426d1539338b3ed2000df99ec94c7a319154895794a60aeae2946f4ca32d37095e4142ebbdb049bbccf70f257e77e977b1cedf8  0002-libfdt-Fix-invalid-version-warning.patch
 016ef30dbbb1021dad4f58eeda3f5a5e89ff3a76dbc69e8e4cf6a3fc3983aef998cfe1087abb4b21bb2f859bd5cffe26c1da42d13f1c3d2e3c053c399f38720b  0003-libfdt.i_shipped-use-SWIG_AppendOutput.patch
 c0545c6a1d17507f7e4bc337200fa3a4a1a89d62122cc6599ea00f27187b85f3e322d945683a84cdff98d981cf604187ded05d7b93bb5fae5a3fe7f9751077a2  0004-python-3.13-binman-migrate-from-pkg_resources-to-imp.patch
+c2d2a801d12a3b11abf2202c0f46dceab69c4b2302d024fe2af1342fd764aab766269ec066ce57c0a3f436292bf107155012076c9a2de4cd7eccf72144dc42ca  0005-pylibfmt-Replace-removed-SWIG-Python-2-compatibility.patch
 "
