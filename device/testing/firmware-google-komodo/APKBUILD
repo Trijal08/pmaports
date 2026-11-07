@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-komodo
 pkgver=20260627
-pkgrel=9
+pkgrel=10
 pkgdesc="Firmware for Google Pixel 9 Pro XL"
 subpackages="
 	$pkgname-brcm_a0
@@ -20,7 +20,7 @@ url="https://kernel.org"
 license="proprietary"
 options="!check !strip !archcheck !tracedeps pmb:cross-native"
 makedepends="
-	carrier-settings-tool
+	carrier-settings-tool>=0.1.0_git20260731-r2
 	rsync
 	e2fsprogs-extra
 	curl
