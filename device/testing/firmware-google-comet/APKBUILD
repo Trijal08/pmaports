@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-comet
 pkgver=20260627
-pkgrel=3
+pkgrel=4
 pkgdesc="Firmware for Google Pixel 9 Pro Fold"
 subpackages="
 	$pkgname-brcm_a0
@@ -24,6 +24,7 @@ makedepends="
 	rsync
 	e2fsprogs-extra
 	curl
+	unzip
 "
 
 # Source
@@ -41,8 +42,28 @@ _repository="proprietary_vendor_google_comet"
 # looking anywhere else; firmware-google-komodo records how that is done and
 # what it turned up there.
 _commit="295082c7ab0846362962da351dfdd0b19690ab33"
+# The LineageOS device tree, for the parts of the telephony configuration that
+# are open rather than vendor blobs: the overlays under overlay/ are Apache-2.0
+# and are the source the device's own RROs are built from, so they can be read
+# directly instead of decoded out of a compiled resources.arsc.
+#
+# Pinned for the same reason as the vendor import above: a branch name is not a
+# pin. This is the lineage-24.0 tip as of 2026-11-07, taken from LineageOS
+# upstream. Comet is its own device tree rather than part of caimito, so its
+# TeleService overlay is named for it.
+# The device tree carries the per-device overlays; the SoC tree carries the
+# ones shared by every zumapro board, and the IMS service override is one of
+# those, not a caimito one.
+_lineage_owner="LineageOS"
+_lineage_repo="android_device_google_comet"
+_lineage_commit="25bbf17df9bd27dbde92ca71c849145273a47af6"
+_soc_repo="android_device_google_zumapro"
+_soc_commit="c03df81e8fed84aeb4f2d26e9cef2ea5762d7c3f"
+
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/$_owner/$_repository/archive/$_commit.tar.gz
+	$_lineage_repo-$_lineage_commit.tar.gz::https://github.com/$_lineage_owner/$_lineage_repo/archive/$_lineage_commit.tar.gz
+	$_soc_repo-$_soc_commit.tar.gz::https://github.com/$_lineage_owner/$_soc_repo/archive/$_soc_commit.tar.gz
 	initramfs_setup_modemfw.sh
 	initramfs_setup_serialnumber.sh
 	aosp-carrier-defaults.txt
@@ -195,6 +216,80 @@ modem() {
 	install -d "$subpkgdir/usr/lib/firmware/google/s5400/uecapconfig/"
 	rsync -a --chmod=D755,F644 "$builddir"/proprietary/vendor/firmware/uecapconfig/ "$subpkgdir/usr/lib/firmware/google/s5400/uecapconfig/"
 
+	# IMS configuration the vendor IMS service carries in its own assets
+	#
+	# ims.db covers what AOSP CarrierConfig knows, and that is about a third of
+	# what the CP is told on Android. The rest is inside ShannonIms.apk: XML
+	# keyed by MCC, then MNC, then MVNO, with the vendor's own key names
+	# (SUPPORT_EMERG_REG_TIMER, EMERGENCY_CALL_AFTER_IMS_REG, UT_OVER_LTE and
+	# the like) that never pass through CarrierConfig at all. Measured on this
+	# device: the stock hidden-menu push is ~2 KB across four groups against
+	# our 615 bytes, and the CP then registers SIP in 1.5 s where we take 13 s.
+	#
+	# Only the assets are taken, not the app: it is 3.9 MB of dex we have no
+	# use for, and these are 744 KB of plain XML. Names are flattened on the
+	# way out -- sim_configuration_302.xml becomes sim/302.xml -- because the
+	# directory already says what they are.
+	local _ims="$subpkgdir/usr/lib/firmware/google/s5400/imsconfig"
+	local _apk="$builddir"/proprietary/system_ext/priv-app/ShannonIms/ShannonIms.apk
+	[ -f "$_apk" ] || die "ShannonIms.apk is missing from the vendor import"
+	rm -rf "$srcdir"/imsassets
+	unzip -q -o "$_apk" 'assets/*' -d "$srcdir"/imsassets
+	local _a="$srcdir"/imsassets/assets
+	[ -d "$_a"/sim_configurations ] || die "no sim_configurations in ShannonIms.apk"
+
+	install -d "$_ims"/sim "$_ims"/rcs
+	local _f _mcc
+	for _f in "$_a"/sim_configurations/sim_configuration_*.xml; do
+		_mcc=${_f##*/sim_configuration_}
+		install -Dm644 "$_f" "$_ims/sim/${_mcc}"
+	done
+	# Global layers, under the per-MCC ones.
+	install -Dm644 "$_a"/common_configuration.xml "$_ims"/common.xml
+	install -Dm644 "$_a"/operator_config.xml      "$_ims"/operator.xml
+	install -Dm644 "$_a"/ut_default_setting.xml   "$_ims"/ut-default.xml
+	install -Dm644 "$_a"/emergency_type.xml       "$_ims"/emergency-type.xml
+	install -Dm644 "$_a"/sim_operator_list.xml    "$_ims"/operator-list.xml
+	for _f in "$_a"/rcs_*.xml; do
+		_mcc=${_f##*/rcs_}
+		install -Dm644 "$_f" "$_ims/rcs/${_mcc}"
+	done
+	[ -s "$_ims/sim/302.xml" ] || die "the per-MCC IMS configuration did not land"
+
+	# The one device override, taken from its own source rather than restated.
+	#
+	# ShannonImsOverlayProductZumapro is a static RRO against
+	# com.shannon.imsservice whose whole content is a single boolean, and it
+	# lives in the SoC tree because it is true of every zumapro board rather
+	# than of caimito. VDSDA is dual SIM dual *active*: the IMS service is
+	# told this device is not dual-standby, which is worth having here because
+	# everything difficult about this modem has been the second stack.
+	#
+	# Converted to key=value so nothing has to read Android resource XML to
+	# use it, with the source named so the value can always be checked.
+	local _soc="$srcdir/$_soc_repo-$_soc_commit"
+	local _bools="$_soc"/overlay/ShannonImsOverlayProductZumapro/res/values/bools.xml
+	[ -f "$_bools" ] || die "the ShannonIms overlay is missing from the SoC tree"
+	{
+		echo "# Device overrides for the vendor IMS configuration above."
+		echo "# Source: $_soc_repo overlay/ShannonImsOverlayProductZumapro"
+		echo "# (Apache-2.0), targetPackage com.shannon.imsservice, static."
+		sed -n 's/.*<bool name="\([^"]*\)">\([^<]*\)<\/bool>.*/\1=\2/p' "$_bools"
+	} > "$_ims"/device.conf
+	grep -q '^enable_vdsda=' "$_ims"/device.conf || die "no bools came out of the overlay"
+	chmod 644 "$_ims"/device.conf
+
+	# Emergency-call routing policy, from the LineageOS device tree.
+	#
+	# TeleServiceOverlayVendorComet is Apache-2.0 and names the countries
+	# where emergency calls are dynamically routed, as ISO3166 codes. It is
+	# kept beside the vendor IMS configuration because it belongs to the same
+	# decision and because, unlike that configuration, it is readable and
+	# editable source rather than a blob.
+	local _lin="$srcdir/$_lineage_repo-$_lineage_commit"
+	install -Dm644 "$_lin"/overlay/TeleServiceOverlayVendorComet/res/values/config.xml \
+		"$_ims"/emergency-routing.xml
+
 	# GNSS Main Firmware Blob
 	install -Dm644 "$builddir"/proprietary/vendor/firmware/kepler.bin \
 		"$subpkgdir/usr/lib/firmware/google/s5400/kepler.bin"
@@ -249,6 +344,8 @@ mfc() {
 }
 sha512sums="
 94cf04782c1364e183d6390edddcacd231215ca26f7d2ed0d3f7607098101207619ce33dc9d7281c292e2982f1313b74af691819a8f9d826fdb6248e285f3ee6  firmware-google-comet-295082c7ab0846362962da351dfdd0b19690ab33.tar.gz
+28a605ee19496615f49fb65c170d029a518150ee74b164fe1b985cb825e222d8e0cf01fdac6743007c9c9cfc784ffe42fc49b3f47848dcfa535885e118dafcb7  android_device_google_comet-25bbf17df9bd27dbde92ca71c849145273a47af6.tar.gz
+994dd443f6ad24fb74df06a525b41ec674cb72491c02fe2d5a29c2ba66d7fd6bcc565295938c0760fd7e8c6145dfc7d5f3fd95c452afa3013687314f9b086968  android_device_google_zumapro-c03df81e8fed84aeb4f2d26e9cef2ea5762d7c3f.tar.gz
 f082c8c88af39bef00ed21876bf512bb1b15ef81a6985ad1a29e9251ff46662b65101eefffaee533fd1cd7ae577d67ee4a2f8a1a6c13a5496853e58c197dbc7b  initramfs_setup_modemfw.sh
 fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
 b0ab040928d08c59723088484ecec950a2b0f0605f91f240139a2511fc1110dc2fa934851dfa980a43343341366637c7a8406712d0fb844b911999d83e550122  aosp-carrier-defaults.txt
