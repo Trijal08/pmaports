@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=75
+pkgrel=76
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -122,6 +122,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	ims-quiet-the-stack-while-it-registers.patch
 	ims-push-the-config-in-three-like-stock.patch
 	ims-send-the-emergency-location.patch
+	ims-do-not-go-silent-while-registering.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -294,4 +295,5 @@ a4f2620f60924380576b26c1c704a8896e17d9d939b3baced43d89cae5acfdb05b696b75fa6a9e7c
 5f14ab67af520d970b5eead216d11e3fa19412c9191ab76099bb2ef51173048bdd917be0dc86d6fa37453d2c32c471ca709fd433bd1187209bed3367def38a95  ims-quiet-the-stack-while-it-registers.patch
 d4959210574b5efdab72a0fa86d345b289fcc64af3b419da698204d2947cb316d51553fd2efe6e090692418bc95b9066c3f7faaadabcc69bf309fd4af87b5880  ims-push-the-config-in-three-like-stock.patch
 b718a668f23adfcaaee08e684f8781979643bf50a99e420e57323dc87866ddb80a8b8a2899727d86fc4960415253e42d6fde6f5c0db3e9a6176a9b3f6d53e04a  ims-send-the-emergency-location.patch
+83fbf106a02338defff9fad7a57db1d03346a069645fa69fbfc67900e78f512e9498355d55582ab5257ec72036de5b9f1f9d9f75caf14e5f218dd257e7bc6dd9  ims-do-not-go-silent-while-registering.patch
 "
