@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=firmware-google-tegu
 pkgver=20260627
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Google Pixel 9a"
 subpackages="
 	$pkgname-brcm_a3
@@ -115,6 +115,6 @@ mfc() {
 }
 sha512sums="
 7ba8c1fa20ca98a2d40ee4016c151056211e04b8937421976a8c8fdda08087ba5c630cf08860e532b10b1b908331f47e4727030517ec0024c1523436ad1e5235  firmware-google-tegu-lineage-24.0.tar.gz
-027e5dfd2a21af0db4b0d23437d96cfcb3f45dba6b46583ec7452fa322b195b9a74dae1cd0f49f2fc3de9e00d41ed9e68a63170774985408ead5ddc93cb1bac2  initramfs_setup_modemfw.sh
+133807283b77c6de7c5d421acf80d62bac4bd7f9645640dec2cbcd97b8829b5f6d1331fc572922cf98e3c461691cbccf66e16b6d573c3b83b42425ea4f2921aa  initramfs_setup_modemfw.sh
 fc9efd3b47301e2bb9d1f6107c641d34269ee291b4e36c284663f2fd5abf66b6faecbb382d40dd69e1a1bcf9e920dd151a85ad6d2d1abeeb81ab225fc94558b1  initramfs_setup_serialnumber.sh
 "

@@ -49,40 +49,45 @@ put_le32() {
 # ---------------------------------------------------------------------------
 # Two sources for the same identifiers, in preference order:
 #
-#   androidboot.cdt_hwid in /proc/bootconfig -- what the vendor stack reads,
-#   and present only when the running boot image carries the bootloader's
-#   bootconfig blob.  A postmarketOS boot image does not, so /proc/bootconfig
-#   is empty here and this never matches on pmOS.
+#   /proc/device-tree/chosen/plat -- the decoded CDT exactly as the bootloader
+#   publishes it, one big-endian cell per identifier.  Preferred: it does not
+#   depend on the boot image, nor on the kernel having accepted a bootconfig.
 #
-#   /proc/device-tree/chosen/plat -- the same decoded CDT, published by the
-#   bootloader as one big-endian cell per identifier.  It survives any boot
-#   image, which makes it the one that actually fires on pmOS.
+#   androidboot.cdt_hwid in /proc/bootconfig -- what the vendor stack reads,
+#   kept only as a last resort.  The bootloader hands the kernel a bootconfig
+#   whose size field spans its own 20-byte trailer, and since "bootconfig:
+#   Reject unexpected data after null character" the kernel discards the whole
+#   blob instead of parsing what precedes the padding, so /proc/bootconfig
+#   comes up empty.  It is likewise empty when the running boot image carries
+#   no bootconfig section at all.
 #
 # The two name three fields differently; the driver's struct comments give the
 # mapping (rf_sku is the CDT's modem_sku, board is its stage).
 PLAT=/proc/device-tree/chosen/plat
-CDT=$(sed -n 's/.*androidboot\.cdt_hwid = "0x\([0-9a-fA-F]*\)".*/\1/p' \
-	/proc/bootconfig 2>/dev/null)
 
 # A DT cell is big-endian, so read it as one hex run rather than per byte.
 be32() { printf '%d' "0x$(od -An -tx1 -N4 "$1" | tr -d ' \n')"; }
 
 IDS=
-if [ -n "$CDT" ]; then
-	# androidboot.cdt_hwid packs fixed-width hex nibbles (vendor cbd
-	# scan_cdt_property_data); the trailing 8 are vestigial.
-	h() { printf '%d' "0x$(echo "$CDT" | cut -c"$1"-"$2")"; }
-	PLATFORM=$(h 1 4);   PRODUCT=$(h 5 6);    BOARD=$(h 7 8)
-	MAJOR=$(h 9 12);     MINOR=$(h 13 14);    VARIANT=$(h 15 16)
-	RF_SKU=$(h 17 18);   MODEM_HW=$(h 19 20); RF_SUB=$(h 21 24)
-	IDS=cdt_hwid
-elif [ -r "$PLAT/platform" ]; then
+if [ -r "$PLAT/platform" ]; then
 	PLATFORM=$(be32 "$PLAT/platform"); PRODUCT=$(be32 "$PLAT/product")
 	BOARD=$(be32 "$PLAT/stage");       VARIANT=$(be32 "$PLAT/variant")
 	MAJOR=$(be32 "$PLAT/major");       MINOR=$(be32 "$PLAT/minor")
 	RF_SKU=$(be32 "$PLAT/modem_sku");  MODEM_HW=$(be32 "$PLAT/modem_hw")
 	RF_SUB=$(be32 "$PLAT/rf_sub")
 	IDS=chosen/plat
+else
+	CDT=$(sed -n 's/.*androidboot\.cdt_hwid = "0x\([0-9a-fA-F]*\)".*/\1/p' \
+		/proc/bootconfig 2>/dev/null)
+	if [ -n "$CDT" ]; then
+		# androidboot.cdt_hwid packs fixed-width hex nibbles (vendor
+		# cbd scan_cdt_property_data); the trailing 8 are vestigial.
+		h() { printf '%d' "0x$(echo "$CDT" | cut -c"$1"-"$2")"; }
+		PLATFORM=$(h 1 4);   PRODUCT=$(h 5 6);    BOARD=$(h 7 8)
+		MAJOR=$(h 9 12);     MINOR=$(h 13 14);    VARIANT=$(h 15 16)
+		RF_SKU=$(h 17 18);   MODEM_HW=$(h 19 20); RF_SUB=$(h 21 24)
+		IDS=cdt_hwid
+	fi
 fi
 
 if [ -n "$IDS" ] && [ -r "$JSON" ]; then
