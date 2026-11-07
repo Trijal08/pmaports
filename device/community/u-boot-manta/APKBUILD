@@ -1,7 +1,7 @@
 maintainer="Lukas Timmermann <linux@timmermann.space>"
 pkgname=u-boot-manta
-pkgver=2026.01
-pkgrel=2
+pkgver=2026.01_git20260917
+pkgrel=0
 pkgdesc="U-Boot bootloader for the Samsung Manta (Google Nexus 10) Tablet"
 url="https://gitlab.com/LaT3St/u-boot"
 arch="armv7"
@@ -21,7 +21,7 @@ makedepends="
 	android-tools
 	"
 options="!check"
-_commit="dd7d46d00213b3b01ceafd68bfd30af8d7eb9b63" # branch lat3st/google-manta
+_commit="0647ad4b9220f339d641b173e4d785e6719bcd87" # branch lat3st/google-manta
 source="$pkgname-$_commit.tar.gz::https://gitlab.com/LaT3St/u-boot/-/archive/$_commit/u-boot-$_commit.tar.gz
 	update-u-boot
 	"
@@ -49,6 +49,6 @@ package() {
 }
 
 sha512sums="
-189f91dcfb59c79758d4f2e82e6ac7e88e5e7bee8b7f68acc81f5a252073bd7fca34bcc624fe07a6d3851ea9d73bb8ec1d01b729449b6ae3e913c24aa883ad94  u-boot-manta-dd7d46d00213b3b01ceafd68bfd30af8d7eb9b63.tar.gz
+2bf2bcbe799fe34872160c859aa3ce30ba924df4c87e8888533f4ec2634bfc97d1d0b70a8cad89e6b00aa0b820bbb13c6bc7988499fd2571204cdbf3f736f160  u-boot-manta-0647ad4b9220f339d641b173e4d785e6719bcd87.tar.gz
 654c3fe5ed9eb078f97b990d2743dd875fb3d395bcbbb8a3082fd8e73bdf1842f8919f7b58a81c4446f00739e935d31cfabb59086d255c5d978e0f7a0bc3c3d8  update-u-boot
 "
