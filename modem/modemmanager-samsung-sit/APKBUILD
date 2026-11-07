@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=70
+pkgrel=75
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -24,7 +24,7 @@ makedepends="
 	gobject-introspection-dev
 	gtk-doc
 	libgudev-dev
-	libsamsung-sit-ffi>=0.1.0_git20260731-r26
+	libsamsung-sit-ffi>=0.1.0_git20260731-r31
 	linux-headers
 	meson
 	polkit-dev
@@ -117,6 +117,11 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	sit-profile-before-the-context-like-stock.patch
 	sit-read-all-of-ef-fdn.patch
 	sit-registration-quartet-and-no-settle-wait.patch
+	vendor-databases-belong-to-exynos-modem.patch
+	ims-report-the-isim-to-the-resolver.patch
+	ims-quiet-the-stack-while-it-registers.patch
+	ims-push-the-config-in-three-like-stock.patch
+	ims-send-the-emergency-location.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -284,4 +289,9 @@ b43e44d00216e1c09587f47ddcd092eb3a82fb58753f767d1695d58744661c9e59c619bbaf772880
 1d74142b8554c2b3586feffcc1e14c424d8863500db655c83fac06456a439a8f1b2972d9336363119b79dcab364cf18de20667ea2b6cfbe4c9d9466fd5d31830  sit-profile-before-the-context-like-stock.patch
 2c10448d2818220e72673427b8417129d7fff3445acef18fac6e9117fd88ddfcfc64384904ef132423819902289afcb7ad4164c739e07a15d1f44cc73d2e8d98  sit-read-all-of-ef-fdn.patch
 ea79c4ef4eff9dbf1418107c76012c6f644d37834d7606cc56d14d06b32c97d0b1f71ce72c7bed2a0e5777358ed7095ef52c1e32eeb7be05f61aa97b08a5bfe1  sit-registration-quartet-and-no-settle-wait.patch
+fd87067cb8b9a06f45cd485b041b8d275cae6747cf17e4a6da1bb4956a7ac9e733d3b61bdcd3aaf84c2a02d6228fef1131e6f8e2732eb23ef89d1a63aafe0a26  vendor-databases-belong-to-exynos-modem.patch
+a4f2620f60924380576b26c1c704a8896e17d9d939b3baced43d89cae5acfdb05b696b75fa6a9e7cb9cd4b3622f08155eab132298091394032a5b8e7b9f0b341  ims-report-the-isim-to-the-resolver.patch
+5f14ab67af520d970b5eead216d11e3fa19412c9191ab76099bb2ef51173048bdd917be0dc86d6fa37453d2c32c471ca709fd433bd1187209bed3367def38a95  ims-quiet-the-stack-while-it-registers.patch
+d4959210574b5efdab72a0fa86d345b289fcc64af3b419da698204d2947cb316d51553fd2efe6e090692418bc95b9066c3f7faaadabcc69bf309fd4af87b5880  ims-push-the-config-in-three-like-stock.patch
+b718a668f23adfcaaee08e684f8781979643bf50a99e420e57323dc87866ddb80a8b8a2899727d86fc4960415253e42d6fde6f5c0db3e9a6176a9b3f6d53e04a  ims-send-the-emergency-location.patch
 "
