@@ -1,0 +1,325 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Fri, 7 Nov 2026 00:00:00 +0000
+Subject: [PATCH] ims-config: send the identity tags stock sends
+
+Decoding `AIMS_HIDDEN_MENU` out of five same-day Android boots on this
+baseband with these SIMs puts an exact number on what we were missing.
+Stock sends 80 tags on the Telus stack and 81 on the Videotron one; we
+sent 77 on both, and the four it has that we lack are all in the device
+identity block:
+
+    777   int 1       both stacks, both carriers, 5/5 boots
+    778   string      the IMS home domain -- Videotron only
+    782   string ""   both
+    783   string ""   both
+
+778 is conditional on the card, not the carrier: the Videotron card
+carries an ISIM (AID A000000087 1004) and is sent
+ims.mnc500.mcc302.3gppnetwork.org, the Telus card carries none and is
+sent no domain at all. Both cards are in the capture, and the AID is in
+it too, so this is read off the wire rather than guessed. The domain
+itself is 3GPP TS 23.003 13.2, with the MNC padded to three digits --
+which is why it cannot be made by splitting the MCCMNC in half.
+
+The empty strings are sent rather than skipped because a tag absent from
+the menu leaves the CP's slot holding whatever was in it; "" is a value,
+not an omission.
+
+Tag 773 also disagreed. The device tree says "Pixel 9 Pro XL" and stock
+sends "Pixel9ProXL", in tag 773 and inside the User-Agent alike, so the
+model token now drops its spaces instead of hyphenating them. Every other
+User-Agent field still hyphenates: the captures show no model with spaces,
+so there is nothing to copy for the rest.
+
+With this the tag sets match exactly -- 80 for Telus, 81 for Videotron.
+diff -ruN '--exclude=target' '--exclude=.git' em28/crates/samsung-ims-config/examples/dump.rs em/crates/samsung-ims-config/examples/dump.rs
+diff -ruN '--exclude=target' '--exclude=.git' em28/crates/samsung-ims-config/examples/dump.rs em/crates/samsung-ims-config/examples/dump.rs
+--- a/crates/samsung-ims-config/examples/dump.rs	2026-11-06 22:23:26.008009245 -0500
++++ b/crates/samsung-ims-config/examples/dump.rs	2026-11-06 22:23:48.752233200 -0500
+@@ -12,6 +12,7 @@
+         imsi: arg(3),
+         gid1: arg(4),
+         spn: arg(5),
++        has_isim: arg(6) == "isim",
+         ..Default::default()
+     };
+     let dev = DeviceIdentity {
+diff -ruN '--exclude=target' '--exclude=.git' em28/crates/samsung-ims-config/src/lib.rs em/crates/samsung-ims-config/src/lib.rs
+--- a/crates/samsung-ims-config/src/lib.rs	2026-11-06 22:23:26.008076825 -0500
++++ b/crates/samsung-ims-config/src/lib.rs	2026-11-06 22:31:40.839630378 -0500
+@@ -32,6 +32,10 @@
+     pub const UA_SOFTWARE_VERSION: u16 = 774;
+     pub const UA_PRODUCT_LINE: u16 = 775;
+     pub const UA_OS_VERSION: u16 = 776;
++    pub const UA_IMS_CLIENT_VERSION: u16 = 777;
++    pub const IMS_HOME_DOMAIN: u16 = 778;
++    pub const UA_EXTRA_1: u16 = 782;
++    pub const UA_EXTRA_2: u16 = 783;
+     pub const GEOLOCATION_VOWIFI_EMERGENCY: u16 = 1044;
+     pub const GEOLOCATION_VOLTE_EMERGENCY: u16 = 1045;
+ }
+@@ -44,12 +48,33 @@
+     (tag::SIP_TIMER_TK_MS, 30),
+     (tag::GEOLOCATION_VOWIFI_EMERGENCY, 1),
+     (tag::GEOLOCATION_VOLTE_EMERGENCY, 0),
++    // Stock sends this on both stacks, for both carriers, in all five of the
++    // 2026-11-06 boot captures, and never any other value.
++    (tag::UA_IMS_CLIENT_VERSION, 1),
+ ];
+ 
++/// String tags the vendor sends empty and never populated, in the same five
++/// captures. They are not optional -- a tag absent from the menu leaves the
++/// CP's slot at whatever it held -- so they are sent as stock sends them.
++const COMPILED_IN_EMPTY: &[u16] = &[tag::UA_EXTRA_1, tag::UA_EXTRA_2];
++
+ /// The SIM's identity, not the serving network's. The discriminators matter:
+ /// several carriers share an MCCMNC and are told apart only by these.
+ #[derive(Debug, Default, Clone)]
+ pub struct CarrierIdentity {
++    /// Whether the card carries an ISIM application (AID `A000000087 1004`).
++    ///
++    /// It decides one thing here: stock sends the IMS home domain only for a
++    /// card that has one. Confirmed on this pair of SIMs -- the Videotron card
++    /// has an ISIM and is sent `ims.mnc500.mcc302.3gppnetwork.org`, the Telus
++    /// card has none and is sent no domain at all.
++    pub has_isim: bool,
++    /// EF_DOMAIN as the ISIM states it, when the card answered it.
++    ///
++    /// The operator chooses this name; most use the 3GPP default form but
++    /// nothing obliges them to, so a card that states one is believed and
++    /// [`ims_home_domain`] is only the fallback.
++    pub isim_domain: String,
+     pub mccmnc: String,
+     pub spn: String,
+     pub imsi: String,
+@@ -254,6 +279,28 @@
+     value.replace(' ', "-")
+ }
+ 
++/// The model as the vendor names it: no vendor prefix and no spaces.
++///
++/// The device tree says "Pixel 9 Pro XL" where stock sends "Pixel9ProXL", in
++/// tag 773 and inside the User-Agent alike. The spaces are removed rather than
++/// replaced because that is what the captures show, and because tag 773 is not
++/// a User-Agent field -- it has no separator to preserve.
++fn model_token(vendor: &str, model: &str) -> String {
++    let mut model = model;
++    // The device tree names the model with its vendor already in it ("Google
++    // Pixel 9a") while the CP wants them separately, so a repeated vendor is
++    // dropped rather than emitted twice.
++    let vendor_len = vendor.len();
++    if vendor_len != 0
++        && model.len() > vendor_len
++        && model.as_bytes()[..vendor_len].eq_ignore_ascii_case(vendor.as_bytes())
++        && model.as_bytes()[vendor_len] == b' '
++    {
++        model = &model[vendor_len + 1..];
++    }
++    model.replace(' ', "")
++}
++
+ /// Expand the carrier's User-Agent template.
+ ///
+ /// The template is the carrier's, placeholders and all
+@@ -269,28 +316,27 @@
+ /// cannot be corrupted by it.
+ fn expand_user_agent(template: &str, dev: &DeviceIdentity) -> String {
+     let vendor = dev.manufacturer.as_str();
+-    let mut model = dev.model.as_str();
+-
+-    // The device tree names the model with its vendor already in it ("Google
+-    // Pixel 9a") while the template wants them separately, so a repeated
+-    // vendor is dropped rather than emitted twice.
+-    let vendor_len = vendor.len();
+-    if vendor_len != 0
+-        && model.len() > vendor_len
+-        && model.as_bytes()[..vendor_len].eq_ignore_ascii_case(vendor.as_bytes())
+-        && model.as_bytes()[vendor_len] == b' '
+-    {
+-        model = &model[vendor_len + 1..];
+-    }
+ 
+     template
+         .replace("Android", &ua_token(&dev.os_name))
+         .replace("#MANUFACTURE#", vendor)
+-        .replace("#MODEL#", &ua_token(model))
++        .replace("#MODEL#", &model_token(vendor, &dev.model))
+         .replace("#AV#", &dev.os_version)
+         .replace("#BUILD#", &ua_token(&dev.software_version))
+ }
+ 
++/// The IMS home domain for an MCCMNC, as 3GPP TS 23.003 section 13.2 names it.
++///
++/// The MNC is padded to three digits, which is why this cannot simply split
++/// the MCCMNC in half: a two-digit MNC is written `mnc0NN`.
++fn ims_home_domain(mccmnc: &str) -> Option<String> {
++    if mccmnc.len() < 5 || mccmnc.len() > 6 || !mccmnc.bytes().all(|b| b.is_ascii_digit()) {
++        return None;
++    }
++    let (mcc, mnc) = mccmnc.split_at(3);
++    Some(format!("ims.mnc{mnc:0>3}.mcc{mcc}.3gppnetwork.org"))
++}
++
+ /// The template every carrier record falls back to.
+ const DEFAULT_USER_AGENT: &str = "#MANUFACTURE# #MODEL# Android #AV# #BUILD#";
+ 
+@@ -359,11 +405,27 @@
+     // it does not assemble one for itself, which is why an unprovisioned CP
+     // cannot register at all.
+     set(&mut entries, tag::UA_MANUFACTURER, Value::Str(device.manufacturer.clone()));
+-    set(&mut entries, tag::UA_MODEL, Value::Str(device.model.clone()));
++    set(&mut entries, tag::UA_MODEL,
++        Value::Str(model_token(&device.manufacturer, &device.model)));
+     set(&mut entries, tag::UA_SOFTWARE_VERSION, Value::Str(device.software_version.clone()));
+     set(&mut entries, tag::UA_PRODUCT_LINE, Value::Str("SH000000".to_string()));
+     set(&mut entries, tag::UA_OS_VERSION, Value::Str(device.os_version.clone()));
+ 
++    for tag in COMPILED_IN_EMPTY {
++        set(&mut entries, *tag, Value::Str(String::new()));
++    }
++    // Only for a card that has an ISIM; see CarrierIdentity::has_isim.
++    if identity.has_isim {
++        let domain = if identity.isim_domain.is_empty() {
++            ims_home_domain(&identity.mccmnc)
++        } else {
++            Some(identity.isim_domain.clone())
++        };
++        if let Some(domain) = domain {
++            set(&mut entries, tag::IMS_HOME_DOMAIN, Value::Str(domain));
++        }
++    }
++
+     let user_agent = expand_user_agent(
+         template.as_deref().unwrap_or(DEFAULT_USER_AGENT),
+         device,
+@@ -557,8 +619,9 @@
+     }
+ 
+     /// A device value with a space in it would otherwise split the header
+-    /// field in two, and the device tree names the model with its vendor
+-    /// already in it.
++    /// field in two. The model loses its spaces rather than hyphenating them,
++    /// because that is what stock sends ("Pixel9ProXL"); every other field
++    /// hyphenates, because for those the captures show no other guidance.
+     #[test]
+     fn the_user_agent_is_one_token_per_field() {
+         let dev = DeviceIdentity {
+@@ -570,10 +633,67 @@
+         };
+         assert_eq!(
+             expand_user_agent(DEFAULT_USER_AGENT, &dev),
+-            "Google Pixel-9-Pro-XL postmarketOS-Edge 25.12 nura-edge"
++            "Google Pixel9ProXL postmarketOS-Edge 25.12 nura-edge"
++        );
++    }
++
++    /// Stock sends the IMS home domain only for a card that has an ISIM, and
++    /// pads the MNC to three digits (3GPP TS 23.003 13.2).
++    #[test]
++    fn the_home_domain_needs_an_isim() {
++        let (_dir, path) = fixture();
++
++        let plain = CarrierIdentity { mccmnc: "26203".into(), ..Default::default() };
++        let cfg = resolve(&path, &DEVICE(), &plain).expect("resolve");
++        assert!(all(&cfg, tag::IMS_HOME_DOMAIN).is_empty());
++
++        let isim = CarrierIdentity { has_isim: true, ..plain.clone() };
++        let cfg = resolve(&path, &DEVICE(), &isim).expect("resolve");
++        assert_eq!(
++            all(&cfg, tag::IMS_HOME_DOMAIN),
++            // A two-digit MNC is written mnc0NN, so the domain cannot be
++            // made by splitting the MCCMNC in half.
++            vec![&Value::Str("ims.mnc003.mcc262.3gppnetwork.org".into())]
++        );
++
++        // A three-digit MNC keeps all three, as the Videotron card does.
++        let three = CarrierIdentity { has_isim: true, mccmnc: "302500".into(), ..Default::default() };
++        let cfg = resolve(&path, &DEVICE(), &three).expect("resolve");
++        assert_eq!(
++            all(&cfg, tag::IMS_HOME_DOMAIN),
++            vec![&Value::Str("ims.mnc500.mcc302.3gppnetwork.org".into())]
++        );
++        let short = CarrierIdentity { has_isim: true, mccmnc: "2620".into(), ..Default::default() };
++        assert!(all(&resolve(&path, &DEVICE(), &short).expect("resolve"),
++                    tag::IMS_HOME_DOMAIN).is_empty());
++
++        // A card that states its own domain is believed over the derived one,
++        // because the operator chooses the name and need not use that form.
++        let stated = CarrierIdentity {
++            has_isim: true,
++            isim_domain: "ims.example-operator.net".into(),
++            mccmnc: "26203".into(),
++            ..Default::default()
++        };
++        assert_eq!(
++            all(&resolve(&path, &DEVICE(), &stated).expect("resolve"), tag::IMS_HOME_DOMAIN),
++            vec![&Value::Str("ims.example-operator.net".into())]
+         );
+     }
+ 
++    /// A tag absent from the menu leaves the CP's slot at whatever it held, so
++    /// the ones stock sends empty are sent empty rather than skipped.
++    #[test]
++    fn the_tags_stock_sends_empty_are_sent() {
++        let (_dir, path) = fixture();
++        let cfg = resolve(&path, &DEVICE(), &sim("26203")).expect("resolve");
++        for tag in (tag::UA_EXTRA_1, tag::UA_EXTRA_2).0..=tag::UA_EXTRA_2 {
++            if tag != tag::UA_EXTRA_1 && tag != tag::UA_EXTRA_2 { continue; }
++            assert_eq!(all(&cfg, tag), vec![&Value::Str(String::new())], "tag {tag}");
++        }
++        assert_eq!(int(&cfg, tag::UA_IMS_CLIENT_VERSION), 1);
++    }
++
+     /// Carriers that ship no APNs are a normal outcome; another carrier's
+     /// APNs would be worse than none, so there is no default to fall back on.
+     #[test]
+diff -ruN '--exclude=target' '--exclude=.git' em28/crates/samsung-sit-ffi/include/samsung_sit_ffi.h em/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-06 22:23:26.008149896 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-06 22:31:41.486033399 -0500
+@@ -438,6 +438,17 @@
+     const char *gid1;
+     const char *gid2;
+     const char *privilege_access_rule;
++    /*
++     Non-zero when the card carries an ISIM application
++     (AID `A000000087 1004`). Only the IMS resolver reads it: stock sends
++     the IMS home domain for a card that has one and not otherwise.
++     */
++    uint8_t has_isim;
++    /*
++     EF_DOMAIN as the ISIM states it, or null when the card did not answer
++     it; the resolver then derives the 3GPP default form.
++     */
++    const char *isim_domain;
+ } SamsungCarrierIdentity;
+ 
+ /*
+diff -ruN '--exclude=target' '--exclude=.git' em28/crates/samsung-sit-ffi/src/carrier_db.rs em/crates/samsung-sit-ffi/src/carrier_db.rs
+--- a/crates/samsung-sit-ffi/src/carrier_db.rs	2026-11-06 22:23:26.008234257 -0500
++++ b/crates/samsung-sit-ffi/src/carrier_db.rs	2026-11-06 22:31:40.839656008 -0500
+@@ -31,6 +31,13 @@
+     pub gid1: *const c_char,
+     pub gid2: *const c_char,
+     pub privilege_access_rule: *const c_char,
++    /// Non-zero when the card carries an ISIM application
++    /// (AID `A000000087 1004`). Only the IMS resolver reads it: stock sends
++    /// the IMS home domain for a card that has one and not otherwise.
++    pub has_isim: u8,
++    /// EF_DOMAIN as the ISIM states it, or null when the card did not answer
++    /// it; the resolver then derives the 3GPP default form.
++    pub isim_domain: *const c_char,
+ }
+ 
+ /// The manifest a SIM resolved to. Opaque: it owns its strings. Freed with
+diff -ruN '--exclude=target' '--exclude=.git' em28/crates/samsung-sit-ffi/src/ims_config.rs em/crates/samsung-sit-ffi/src/ims_config.rs
+--- a/crates/samsung-sit-ffi/src/ims_config.rs	2026-11-06 22:23:26.008244837 -0500
++++ b/crates/samsung-sit-ffi/src/ims_config.rs	2026-11-06 22:31:40.839673299 -0500
+@@ -124,6 +124,8 @@
+         gid1: opt(i.gid1)?,
+         gid2: opt(i.gid2)?,
+         iccid: opt(i.iccid)?,
++        has_isim: i.has_isim != 0,
++        isim_domain: opt(i.isim_domain)?,
+         // The privilege access rule picks a carrier *manifest*; the IMS
+         // settings are not keyed on it.
+     })
