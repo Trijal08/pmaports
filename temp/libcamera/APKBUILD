@@ -3,7 +3,7 @@ maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.8.0
 pkgver=9999$_pkgver
-pkgrel=0
+pkgrel=1
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -39,6 +39,7 @@ subpackages="
 	$pkgname-dbg
 	$pkgname-dev
 	$pkgname-gstreamer
+	$pkgname-ipa
 	$pkgname-tools
 	$pkgname-v4l2
 	py3-$pkgname-pyc:pyc
@@ -70,7 +71,8 @@ options="!strip !check"
 
 case "$CARCH" in
 arm*|aarch64)
-	subpackages="$subpackages $pkgname-raspberrypi"
+	# must be ordered before the ipa subpackage
+	subpackages="$pkgname-raspberrypi $subpackages"
 	;;
 esac
 
@@ -100,10 +102,18 @@ package() {
 		| while read -r file; do
 			strip "$file"
 	done
+}
+
+ipa() {
+	depends="$pkgname=$pkgver-r$pkgrel"
+	install_if="$pkgname=$pkgver-r$pkgrel"
+
+	amove usr/lib/libcamera/ipa
+	amove usr/share/libcamera/ipa
 
 	# then sign ipa's
 	local ipa
-	for ipa in "$pkgdir"/usr/lib/libcamera/ipa/ipa*.so; do
+	for ipa in "$subpkgdir"/usr/lib/libcamera/ipa/ipa*.so; do
 		msg "signing $ipa"
 		"$builddir"/src/ipa/ipa-sign.sh \
 			"$(find "$builddir"/output -type f -iname "*ipa-priv-key.pem")" \
@@ -112,7 +122,7 @@ package() {
 	done
 
 	for _tuning_file in $_tuning_files; do
-		install -Dm644 -t "$pkgdir"/usr/share/libcamera/ipa/softisp \
+		install -Dm644 -t "$subpkgdir"/usr/share/libcamera/ipa/softisp \
 			"$srcdir"/"$_tuning_file"
 	done
 }
