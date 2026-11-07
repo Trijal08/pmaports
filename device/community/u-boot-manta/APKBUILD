@@ -1,7 +1,7 @@
 maintainer="Lukas Timmermann <linux@timmermann.space>"
 pkgname=u-boot-manta
 pkgver=2026.01
-pkgrel=1
+pkgrel=2
 pkgdesc="U-Boot bootloader for the Samsung Manta (Google Nexus 10) Tablet"
 url="https://gitlab.com/LaT3St/u-boot"
 arch="armv7"
@@ -45,7 +45,7 @@ package() {
 	install -D -m644 "build/u-boot.bin.sha512" \
 		"$pkgdir/usr/share/u-boot/samsung-manta/u-boot.bin.sha512"
 
-	install -D -m 755 "$srcdir"/update-u-boot "$pkgdir"/usr/sbin/update-u-boot
+	install -D -m 755 "$srcdir"/update-u-boot "$pkgdir"/usr/bin/update-u-boot
 }
 
 sha512sums="
