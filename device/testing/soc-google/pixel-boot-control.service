@@ -2,7 +2,6 @@
 Description=Mark the current Google Pixel A/B boot successful
 Documentation=https://github.com/Trijal08/pixel-boot-control
 After=multi-user.target
-ConditionPathExists=/proc/bootconfig
 ConditionPathExists=/dev/disk/by-partlabel/devinfo
 
 [Service]

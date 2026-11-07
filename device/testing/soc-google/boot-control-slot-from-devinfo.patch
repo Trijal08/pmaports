@@ -1,0 +1,84 @@
+diff --git a/src/main.rs b/src/main.rs
+index 5be89ee..c17bbbf 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -74,7 +74,6 @@ fn main() -> ExitCode {
+ 
+ fn run() -> Result<(), String> {
+     let command = parse_command()?;
+-    let current_slot = read_current_slot()?;
+     let compatible = check_compatible()?;
+ 
+     let (file, devinfo_path) = open_devinfo(command.writes())?;
+@@ -87,11 +86,13 @@ fn run() -> Result<(), String> {
+     }
+ 
+     let bytes = read_record(&file)?;
++    let record = DevInfo::parse(bytes)?;
++    let current_slot = read_current_slot(&record)?;
+     let mut context = Context {
+         current_slot,
+         compatible,
+         devinfo_path,
+-        record: DevInfo::parse(bytes)?,
++        record,
+     };
+ 
+     match command {
+@@ -198,10 +199,43 @@ fn usage(program: &str) -> String {
+     )
+ }
+ 
+-fn read_current_slot() -> Result<Slot, String> {
+-    let contents = fs::read_to_string(BOOTCONFIG_PATH)
+-        .map_err(|error| format!("failed to read {BOOTCONFIG_PATH}: {error}"))?;
+-    bootconfig::parse_current_slot(&contents)
++/// The slot the bootloader booted.
++///
++/// androidboot.slot_suffix is the primary source, but it is unavailable
++/// whenever the kernel rejects the bootloader's bootconfig: the bootloader
++/// puts its whole 32 KiB buffer size in the trailer's size field, so the
++/// declared data spans the 20-byte trailer itself, and since the upstream
++/// commit "bootconfig: Reject unexpected data after null character" the kernel
++/// discards the entire blob rather than parsing what precedes the padding.
++/// /proc/bootconfig is then present but empty, on every boot.
++///
++/// Fall back to the devinfo record, where the bootloader sets exactly one
++/// slot's active bit to the slot it chose. This introduces no new trust:
++/// validate_current_slot() already refuses to act unless the current slot is
++/// the active one, so the two can never legitimately disagree.
++fn read_current_slot(record: &DevInfo) -> Result<Slot, String> {
++    let from_bootconfig = fs::read_to_string(BOOTCONFIG_PATH)
++        .map_err(|error| format!("failed to read {BOOTCONFIG_PATH}: {error}"))
++        .and_then(|contents| bootconfig::parse_current_slot(&contents));
++
++    let error = match from_bootconfig {
++        Ok(slot) => return Ok(slot),
++        Err(error) => error,
++    };
++
++    match record.active_bits() {
++        (true, false) => {
++            eprintln!("pixel-boot-control: {error}; using the devinfo active slot a");
++            Ok(Slot::A)
++        }
++        (false, true) => {
++            eprintln!("pixel-boot-control: {error}; using the devinfo active slot b");
++            Ok(Slot::B)
++        }
++        (a, b) => Err(format!(
++            "{error}, and devinfo cannot break the tie (active bits a={a} b={b})"
++        )),
++    }
+ }
+ 
+ fn check_compatible() -> Result<String, String> {
+@@ -364,7 +398,7 @@ fn changed_offsets(before: &[u8; RECORD_SIZE], after: &[u8; RECORD_SIZE]) -> Vec
+ fn print_status(context: &Context) {
+     let (major, minor) = context.record.version();
+     println!("device:            {}", context.compatible);
+-    println!("bootconfig slot:   {}", context.current_slot);
++    println!("current slot:      {}", context.current_slot);
+     println!("devinfo device:    {}", context.devinfo_path.display());
+     println!("devinfo version:   {major}.{minor}");
+ 
