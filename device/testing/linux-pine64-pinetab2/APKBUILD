@@ -3,7 +3,7 @@
 # Co-Maintainer: Stefan Hansson <newbyte@postmarketos.org>
 maintainer="Dang Huynh <dang.huynh@mainlining.org>"
 pkgname=linux-pine64-pinetab2
-pkgver=7.2.12
+pkgver=7.3.1
 pkgrel=0
 _danctnix_kernel_rel=1
 pkgdesc="Pine64 PineTab 2 mainline"
@@ -74,7 +74,7 @@ package() {
 }
 
 sha512sums="
-1b469e3eeeebc9ac4a2214d5da21b2519a882be9ba1e151647cbf546ff3db664ed3358688a8e4a3cea7372d2131f5558e202ff4465b2613d5c96d5745c5b5c84  linux-7.2.12.tar.xz
-fdbc51cfd974f692d568a8388f1a1eb2dc4c3fba78d0c70cd75da5a69700414e49873732a5177176af2f566745caec5bfbb35962dfe632274179488dad02666f  v7.2.12-danctnix1.patch.zst
-b9c7a195d0f90b9f8e90d788fcf2b5219e93246a6419b7d8b71762f40320a309684597cf5734ae416a07d425a571ddd908ebbf20433cec109203d28b96dbe518  config-pine64-pinetab2.aarch64
+eac8912be329999150a71257adc513e6a52891d122641943c3a440f775267705eff0b275b4d90d5298518ca638ab48fc2b7c3ee109d82f0bb34a1ac081e9c3a2  linux-7.3.1.tar.xz
+cafe6e7d82e5f4ca1bcbad4c3e4f563abfd5492c156cf77d0efd55bc1fd09553a51be58371ae9a232d9201ae5d6c87658b758de5a3ac86aedf937827499b22a9  v7.3.1-danctnix1.patch.zst
+f51599c263644d96eb481462179e2870814d5b391b34ed401055c074068d81d9e95d97859e2f79036834c6727eadaf9698b9edc15dbb1e3686b952ee6c0eede5  config-pine64-pinetab2.aarch64
 "
