@@ -1,9 +1,9 @@
 # Co-Maintainer: Alicja Michalska <ellyqw@mainlining.org>
 # Co-Maintainer: Ingo Reitz <9l@9lo.re>
 maintainer="Adam Thiede <me@adamthiede.com>"
-pkgname=linux-postmarketos-mediatek-mt8173
-pkgver=7.3
-pkgrel=1
+pkgname=linux-nura-mediatek-mt8173
+pkgver=7.3.3
+pkgrel=0
 pkgdesc="Mainline kernel fork for Mediatek MT8173 devices"
 arch="aarch64"
 _carch="arm64"
@@ -32,6 +32,7 @@ makedepends="
 	xz
 	zstd
 "
+replaces="linux-postmarketos-mediatek-mt8173"
 
 # Source
 _config="config-$_flavor.$arch"
@@ -57,7 +58,7 @@ prepare() {
 build() {
 	unset LDFLAGS
 	make ARCH="$_carch" LLVM=1 \
-		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-postmarketOS"
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-nura"
 }
 
 package() {
@@ -76,7 +77,7 @@ package() {
 }
 
 sha512sums="
-14b99ea7cc2adc0798a183ac5f3e184587f2496c3b2d1d53b625574389891c69e8be375b5d03875fe859b09ac9314aa15da604087274ba815671135bd6a0e590  linux-7.3.tar.xz
-74de0f5f8e44925378b768cb3fcbc19a2a929fbe14af971e1ef1475246b3a460823014ae494b60bcfaae26b65c87335a9bef5b1a434135a9282e6e9c0c9930a1  config-postmarketos-mediatek-mt8173.aarch64
+6308b031942c3c147d6ff0d81611800078eb1de3383206e745b5c3e6a2f3b3cf812c4e7697017bfdb7c5b3dcd96cc15e0e082123b6130fc736a74cf38c81e672  linux-7.3.3.tar.xz
+85d97f819fa8632afd9e824b93a068d5b3b0e58d642e8b70532c06e12331bef87d27fdd5d0696554605dc996223247fe257da9f214e5cc1c1e91f519cc9a8737  config-nura-mediatek-mt8173.aarch64
 901780c4c468ebf8b6af7c27530fafb0439dfae889208c35f22aa7447902078d147db69a1c8e2115cd13f51c641eef878d9335b7527dc7fa2240cd617e045aab  0001-resolve_btfids-preserve-parameter-names-when-process.patch
 "
