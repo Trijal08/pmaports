@@ -18,13 +18,23 @@ is the vendor's flag, byte 1 the 1-based stack index:
     ->  STACK_STOP 00  ->  XCAPM_STOP 00  ->  XCAPM_START 01  ->  STACK_START 01
 
 So it tears the stack down, brings it up, then repeats the pair with the
-flag clear. We were configuring a stack the CP still held state for, which
-is the one thing in that block we were not doing at all.
+flag clear -- and ends on a START. We were configuring a stack the CP still
+held state for, which is the one thing in that block we were not doing at
+all.
 
-The stops go in the PRE_PDN table beside the starts they belong with;
+The whole sequence goes in the PRE_PDN table, trailing START included.
+An earlier version of this patch left that last START out, on the theory
+that mm-sit-ims.c's own AIMS_STACK_START would serve as stock's second one.
+It does not: on the wire ims.c's START arrives *before* this table, not
+after it, so the block ended on the flag-clear STOP and the CP was left
+holding an IMS stack that was down. It then accepted every later request
+-- hidden menu, geo location, ADD_PDN_INFO, all status 0 -- brought the IMS
+PDN up, and never emitted AIMS_REGISTRATION (0x0d05). Provisioning
+completed, registration never arrived, and the 180s watchdog recycled the
+context in a loop. Both stacks, every boot.
+
 mm-sit-client.c already rewrites payload byte 1 for all four of these ids,
-so they are correct on both stacks without further work. The second
-STACK_START in stock's sequence is the one mm-sit-ims.c already sends.
+so they are correct on both stacks without further work.
 
 AIMS_SET_CALL_WAITING (0x0d17) is still missing -- stock sends it 2-3 times
 per stack -- but its 18-byte payload carries a live timestamp, and replaying
@@ -37,9 +47,9 @@ two per attempt, so its wait returned after the second attempt instead of
 the fifth. Both carry flag 1 and the stack index and are otherwise
 identical, so the peer now arms the counter on AIMS_DEREGISTRATION (0x0d06),
 which the teardown always sends first and the replay never sends.
-diff -ruN base77/src/plugins/samsung-sit/mm-sit-boot-config.c t77/src/plugins/samsung-sit/mm-sit-boot-config.c
---- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-07 09:28:41.930518833 -0500
-+++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-07 09:23:38.553956706 -0500
+diff --color -ruN base/src/plugins/samsung-sit/mm-sit-boot-config.c t/src/plugins/samsung-sit/mm-sit-boot-config.c
+--- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 09:02:12.660431615 -0500
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 09:02:26.661334639 -0500
 @@ -116,7 +116,22 @@
  static const guint8 cfg_set_allowed_network_type_bitmap[4] = { 0xf8, 0x01, 0x04, 0x00 };
  static const guint8 cfg_sit_set_gps_supl_ni_ready[2] = { 0x6b, 0x1c };
@@ -63,7 +73,7 @@ diff -ruN base77/src/plugins/samsung-sit/mm-sit-boot-config.c t77/src/plugins/sa
  static const guint8 pre_aims_set_frame_time[10] = { 0x00, 0x02, 0x20, 0x04, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
  static const guint8 pre_aims_xcapm_start_req[2] = { 0x01, 0x01 };
  static const guint8 pre_set_voice_operation[4] = { 0x03, 0x00, 0x00, 0x00 };
-@@ -342,12 +357,27 @@
+@@ -342,12 +357,37 @@
       * Since r60 the first ask is granted 6 times out of 6, so that experiment
       * is now cheap and worth running.
       */
@@ -88,12 +98,22 @@ diff -ruN base77/src/plugins/samsung-sit/mm-sit-boot-config.c t77/src/plugins/sa
 +      { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_xcapm_stop_off },
 +    { 0x0d3b, "aims xcapm start req", MM_SIT_BOOT_PHASE_PRE_PDN,
 +      { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_xcapm_start_req },
++    /*
++     * And the stack comes back up.  Stock's block ends on a START, not on the
++     * flag-clear STOP above it: leave it off and the CP holds an IMS stack that
++     * is down, accepts every later request, and never emits AIMS_REGISTRATION
++     * (0x0d05) -- provisioning completes, registration never arrives, and the
++     * watchdog recycles the context forever.  mm-sit-ims.c's own START cannot
++     * stand in for this one; it runs before this table, not after it.
++     */
++    { 0x0d39, "aims stack start req", MM_SIT_BOOT_PHASE_PRE_PDN,
++      { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_stack_start_req },
      { 0x091a, "set voice operation", MM_SIT_BOOT_PHASE_PRE_PDN,
        { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, pre_set_voice_operation },
      { 0x0d0b, "aims set frame time", MM_SIT_BOOT_PHASE_PRE_PDN,
-diff -ruN base77/src/plugins/samsung-sit/tests/test-sit-protocol.c t77/src/plugins/samsung-sit/tests/test-sit-protocol.c
---- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-07 09:28:41.937687173 -0500
-+++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-07 09:25:48.495767060 -0500
+diff --color -ruN base/src/plugins/samsung-sit/tests/test-sit-protocol.c t/src/plugins/samsung-sit/tests/test-sit-protocol.c
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 09:02:12.668462857 -0500
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 09:02:12.676367659 -0500
 @@ -2951,6 +2951,7 @@
  typedef struct {
      guint setups;
