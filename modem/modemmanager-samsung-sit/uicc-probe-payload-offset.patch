@@ -1,0 +1,154 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: build the UICC probe frames at the right offset
+
+The three frames of the access-control probe were all built four bytes
+early, and on one of the two cards that silently cost us the whole block.
+
+samsung_sit_build_request() lays the body down at frame+8, but a request's
+payload starts at frame+12 -- body[0..3] is the frame's reserved field.
+Every other request in the plugin gets this right; these three passed the
+payload from body[0]. Measured against the capture, ours were the only
+AP->CP requests in a whole boot with a non-zero reserved field:
+
+    0x0247  6/8 frames    0x020f  3/3    0x020e  1/1
+    Android: none, ever
+
+What each one became on the wire:
+
+  0x0247  aid_len was read from the AID's fourth byte, which is zero in
+          every AID here, so all three named opens degenerated into no-AID
+          opens. Invisible on a card that answers a no-AID open -- Telus
+          hands back a channel and the EF_DIR read proceeds -- and fatal on
+          one that does not: Fizz answers 6b00, so we got no channel and
+          the three 0x020f reads and the 0x020e close never happened. That
+          is the f6 gap in the parity report: 0x020e x4 and 0x020f x4 that
+          Android sends and we sent none of.
+  0x020f  the channel went into the reserved field and everything shifted,
+          so the CP read the channel from our class byte.
+  0x020e  the channel was *entirely* in the reserved field, leaving an
+          empty payload: the CP was asked to close nothing.
+
+Two sizes were wrong too, both measured:
+
+  - the GSMA ARA-M AID is nine bytes, A000000151 + 41434C00. Stock sends
+    aid_len 9 including that trailing zero; we declared eight and asked for
+    a different applet.
+  - stock's payloads are a fixed 24 bytes for 0x0247, 32 for 0x020f
+    whatever the APDU, and 8 for 0x020e. We sent 18, 26-or-28 and 4.
+
+Verified: both builders compile clean standalone under
+-Wall -Wextra -Werror, and the close keeps its unconditional
+ctx->channel reset.
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 10:33:20.987000030 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 10:32:47.625572061 -0500
+@@ -4483,7 +4483,11 @@
+  */
+ #define UICC_NO_CHANNEL 0xffffffffu
+ 
+-static const guint8 uicc_aid_ara_m[]  = { 0xa0, 0x00, 0x00, 0x01, 0x51, 0x41, 0x43, 0x4c };
++/* The GSMA ARA-M AID is nine bytes: A000000151 + 41434C00. Stock sends
++ * aid_len 9 with that trailing zero; dropping it asks for a different
++ * applet. */
++static const guint8 uicc_aid_ara_m[]  = { 0xa0, 0x00, 0x00, 0x01, 0x51, 0x41, 0x43, 0x4c,
++                                          0x00 };
+ static const guint8 uicc_aid_pkcs15[] = { 0xa0, 0x00, 0x00, 0x00, 0x63, 0x50, 0x4b, 0x43,
+                                           0x53, 0x2d, 0x31, 0x35 };
+ static const guint8 uicc_aid_gpac[]   = { 0xa0, 0x00, 0x00, 0x00, 0x18, 0x47, 0x50, 0x41,
+@@ -4511,11 +4515,24 @@
+ static GByteArray *
+ uicc_build_open (MMSitClient *self, const guint8 *aid, gsize aid_len, GError **error)
+ {
+-    guint8 body[18] = { 0 };
++    /*
++     * body[0..3] is the frame's reserved field and the payload starts at
++     * body[4] -- samsung_sit_build_request() lays the body down at frame+8,
++     * while a request's payload begins at frame+12. Writing from body[0] put
++     * the whole payload four bytes early: the CP then read aid_len from what
++     * we meant as the AID's fourth byte, which is zero in every AID here, so
++     * all three named opens degenerated into no-AID opens. That is invisible
++     * on a card that answers a no-AID open (Telus) and fatal on one that does
++     * not (Fizz answers 6b00, we got no channel, and the EF_DIR read and its
++     * close never happened at all).
++     *
++     * 24-byte payload, as stock sends: [u8 aid_len][aid, 16][7 pad].
++     */
++    guint8 body[4 + 24] = { 0 };
+ 
+     if (aid && aid_len) {
+-        body[0] = (guint8) aid_len;
+-        memcpy (&body[1], aid, MIN (aid_len, 16));
++        body[4] = (guint8) aid_len;
++        memcpy (&body[4 + 1], aid, MIN (aid_len, 16));
+     }
+     return mm_sit_request_new (MM_SIT_MESSAGE_OPEN_LOGICAL_CHANNEL,
+                                mm_sit_client_next_token (self), body, sizeof (body), error);
+@@ -4525,22 +4542,28 @@
+ uicc_build_apdu (MMSitClient *self, guint32 channel, guint8 ins, guint8 p1, guint8 p2,
+                  guint8 p3, const guint8 *data, gsize data_len, GError **error)
+ {
+-    guint8 body[32] = { 0 };
+-    gsize  len = 26;
+-
+-    memcpy (&body[0],  &channel, 4);
+-    body[4]  = 1;      /* the class byte stock uses on this channel */
+-    body[8]  = ins;
+-    body[12] = p1;
+-    body[16] = p2;
+-    body[20] = p3;
+-    body[24] = (guint8) data_len;
+-    if (data && data_len) {
+-        memcpy (&body[26], data, MIN (data_len, 4));
+-        len = 26 + MIN (data_len, 4);
+-    }
++    /*
++     * Reserved field first, payload from body[4] -- see uicc_build_open().
++     * Writing from body[0] sent the channel in the reserved field and shifted
++     * everything else, so the CP read the channel from our class byte.
++     *
++     * Stock's payload is 32 bytes whatever the APDU: the six u32 parameters,
++     * a u16 data length, then the data padded out. Sending a short frame for
++     * a short APDU is a divergence with nothing to gain.
++     */
++    guint8 body[4 + 32] = { 0 };
++
++    memcpy (&body[4],  &channel, 4);
++    body[4 + 4]  = 1;  /* the class byte stock uses on this channel */
++    body[4 + 8]  = ins;
++    body[4 + 12] = p1;
++    body[4 + 16] = p2;
++    body[4 + 20] = p3;
++    body[4 + 24] = (guint8) data_len;
++    if (data && data_len)
++        memcpy (&body[4 + 26], data, MIN (data_len, 4));
+     return mm_sit_request_new (MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL,
+-                               mm_sit_client_next_token (self), body, len, error);
++                               mm_sit_client_next_token (self), body, sizeof (body), error);
+ }
+ 
+ static void
+@@ -4636,9 +4659,20 @@
+     case UICC_STEP_CLOSE:
+         if (ctx->channel == UICC_NO_CHANNEL)
+             break;
+-        request = mm_sit_request_new (MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL,
+-                                      mm_sit_client_next_token (self),
+-                                      (const guint8 *) &ctx->channel, 4, &error);
++        {
++            /*
++             * Reserved field, then stock's 8-byte payload: the channel and
++             * four bytes of padding. Passing the bare channel put it in the
++             * reserved field and left the payload empty, so the CP was told
++             * to close nothing.
++             */
++            guint8 close_body[4 + 8] = { 0 };
++
++            memcpy (&close_body[4], &ctx->channel, 4);
++            request = mm_sit_request_new (MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL,
++                                          mm_sit_client_next_token (self),
++                                          close_body, sizeof (close_body), &error);
++        }
+         ctx->channel = UICC_NO_CHANNEL;
+         break;
+     case UICC_STEP_DONE:
