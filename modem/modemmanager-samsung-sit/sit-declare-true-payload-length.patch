@@ -2,12 +2,8 @@ From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
 Date: Sun, 8 Nov 2026 00:00:00 +0000
 Subject: [PATCH] samsung-sit: declare the true payload length
 
-**Needs exynos-modem with "sit: pad request payloads to a multiple of 8".**
-
-That change makes the builder pad a request's payload the way the vendor
-RIL does, while the header's `length` keeps declaring the true size. Four
-payloads here were pre-padded to the size stock puts on the wire, so they
-declared the padding as payload and the length field came out too big:
+Four payloads here were pre-padded to the size stock puts on the wire, so
+they declared the padding as payload and the length field came out too big:
 
     0x0247  24 -> 18    [u8 aid_len][aid, 16][u8 p2]
     0x020f  32 -> 26 + data
@@ -19,12 +15,15 @@ stock -- A=1e/P=24 for 0x0247, A=28/P=2c for 0x020f, A=10/P=14 for 0x020e,
 A=1f/P=24 for 0x0d17 -- and the declared sizes are the layouts already
 documented in the comments beside them.
 
-The test peers have to drain the padding or they desync. They read exactly
-`length` bytes off the socketpair and then take the next header, so once
-frames are padded the leftover bytes get read as a header and the id
-assertion fires. A read_padding() helper beside read_all() drains it, and
-all six body-reading peers call it. This is needed for the padding change
-alone, independent of the four payload sizes.
+Nothing else needs to change for this. An earlier version of this patch
+also taught the test peers to drain a payload padded out to a multiple of
+8, to pair with an exynos-modem change that padded every frame it built.
+That change is reverted and the padding was never needed: the driver
+already does `flen = ALIGN(S5XXX_SIT_HDR + len, 8)`, so the ring message is
+8-aligned however long the payload is, and the CP reads the container's
+declared length and never sees the gap. Stock's frames look padded in a
+capture only because its RIL hands the driver a pre-padded buffer, and
+`s5xxx_cap_tx()` records what it was handed.
 diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-sit/mm-sit-boot-config.c
 --- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 12:51:04.488794659 -0500
 +++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 12:51:29.306419908 -0500
@@ -119,232 +118,3 @@ diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm
  
              memcpy (&close_body[4], &ctx->channel, 4);
              request = mm_sit_request_new (MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL,
-diff -ruN a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
---- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 12:51:04.481011744 -0500
-+++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 12:51:29.315650245 -0500
-@@ -18,14 +18,45 @@
- #include "mm-sit-ims.h"
- #include "mm-sit-protocol.h"
- 
-+/*
-+ * Compare a built frame against the bytes a capture shows, which stop at the
-+ * length the header declares. The builder then pads the payload out to a
-+ * multiple of 8 with zeros, exactly as the vendor RIL does -- every one of the
-+ * 1611 AP->CP frames in the reference capture is padded that way -- so the
-+ * expectation here is the declared prefix plus a check that the tail is the
-+ * padding and nothing else.
-+ */
- static void
- assert_bytes (GByteArray  *actual,
-               const guint8 *expected,
-               gsize         expected_len)
- {
-+    gsize pad = 0;
-+
-     g_assert_nonnull (actual);
--    g_assert_cmpuint (actual->len, ==, expected_len);
--    g_assert_cmpmem (actual->data, actual->len, expected, expected_len);
-+    if (expected_len > 12)
-+        pad = (8 - (expected_len - 12) % 8) % 8;
-+    g_assert_cmpuint (actual->len, ==, expected_len + pad);
-+    g_assert_cmpmem (actual->data, expected_len, expected, expected_len);
-+    while (pad--)
-+        g_assert_cmpuint (actual->data[expected_len + pad], ==, 0);
-+}
-+
-+/*
-+ * A frame's declared length, plus the zero padding that rounds its payload up
-+ * to a multiple of 8. See assert_bytes() for why the two differ.
-+ */
-+static void
-+assert_frame_len (GByteArray *frame,
-+                  gsize       declared)
-+{
-+    gsize pad = 0;
-+
-+    g_assert_nonnull (frame);
-+    if (declared > 12)
-+        pad = (8 - (declared - 12) % 8) % 8;
-+    g_assert_cmpuint (frame->data[4] | (((guint16) frame->data[5]) << 8), ==, declared);
-+    g_assert_cmpuint (frame->len, ==, declared + pad);
- }
- 
- static void
-@@ -297,7 +328,7 @@
- 
-     profile = mm_sit_request_new_set_data_profile (1, "internet", MM_SIT_PDP_TYPE_IPV4, MM_SIT_APN_TYPE_DEFAULT, 0x14CE08, NULL, &error);
-     g_assert_no_error (error);
--    g_assert_cmpuint (profile->len, ==, 246);
-+    assert_frame_len (profile, 246);
-     g_assert_cmpmem (&profile->data[16], 8, "internet", 8);
-     g_assert_cmphex (profile->data[12], ==, 0xff);
-     g_assert_cmpuint (profile->data[0x75], ==, 1);
-@@ -305,14 +336,14 @@
- 
-     attach = mm_sit_request_new_set_initial_attach_apn (2, "internet", MM_SIT_PDP_TYPE_IPV4, NULL, &error);
-     g_assert_no_error (error);
--    g_assert_cmpuint (attach->len, ==, 251);
-+    assert_frame_len (attach, 251);
-     g_assert_cmpmem (&attach->data[16], 8, "internet", 8);
-     g_assert_cmpuint (attach->data[0xda], ==, 1);
-     g_assert_cmpuint (attach->data[0xf8], ==, 1);
- 
-     setup = mm_sit_request_new_setup_data_call (3, MM_SIT_DATA_CALL_CID_DEFAULT, "internet", MM_SIT_PDP_TYPE_IPV4, MM_SIT_APN_TYPE_DEFAULT, NULL, &error);
-     g_assert_no_error (error);
--    g_assert_cmpuint (setup->len, ==, 983);
-+    assert_frame_len (setup, 983);
-     g_assert_cmpmem (&setup->data[16], 8, "internet", 8);
-     /* @0xf1 is a u32 and the caller's to choose: it describes the APN, so only
-      * whoever knows what the context is for can fill it in. */
-@@ -339,14 +370,14 @@
-     g_assert_cmpuint (setup->data[0xda], ==, 2);
- 
-     deactivate = mm_sit_request_new_deactivate_data_call (4, 1, 0);
--    g_assert_cmpuint (deactivate->len, ==, 14);
-+    assert_frame_len (deactivate, 14);
-     g_assert_cmpuint (deactivate->data[12], ==, 1);
- 
-     list = mm_sit_request_new_get_data_call_list (5);
--    g_assert_cmpuint (list->len, ==, 12);
-+    assert_frame_len (list, 12);
- 
-     fast_dormancy = mm_sit_request_new_set_fast_dormancy_info (6);
--    g_assert_cmpuint (fast_dormancy->len, ==, 16);
-+    assert_frame_len (fast_dormancy, 16);
-     g_assert_cmpmem (&fast_dormancy->data[12], 4, "\x0a\x0a\x0a\x0a", 4);
- }
- 
-@@ -365,7 +396,7 @@
- 
-     info = mm_sit_request_new_device_info (2, "Pixel 9a", "TEST.BUILD", "tegu", "17", &error);
-     g_assert_no_error (error);
--    g_assert_cmpuint (info->len, ==, 140);
-+    assert_frame_len (info, 140);
-     g_assert_cmpmem (&info->data[12], 8, "Pixel 9a", 8);
-     /* Field 4 sits at body+100 == frame+108. */
-     g_assert_cmpmem (&info->data[108], 2, "17", 2);
-@@ -373,20 +404,20 @@
- 
-     manifest = mm_sit_request_new_carrier_manifest (3, "/vendor/firmware/carrierconfig", sha1, &error);
-     g_assert_no_error (error);
--    g_assert_cmpuint (manifest->len, ==, 532);
-+    assert_frame_len (manifest, 532);
-     g_assert_cmpuint (manifest->data[12], ==, 30);
-     g_assert_cmpuint (manifest->data[0x110], ==, 20);
-     g_assert_cmpmem (&manifest->data[0x114], 20, sha1, 20);
- 
-     indication_filter = mm_sit_request_new_set_indication_filter (
-         4, MM_SIT_INDICATION_FILTER_REGISTRATION_FAILURE);
--    g_assert_cmpuint (indication_filter->len, ==, 16);
-+    assert_frame_len (indication_filter, 16);
-     g_assert_cmpuint (indication_filter->data[2], ==, 0x28);
-     g_assert_cmpuint (indication_filter->data[3], ==, 0x09);
-     g_assert_cmpmem (&indication_filter->data[12], 4, "\x20\0\0\0", 4);
- 
-     screen_state = mm_sit_request_new_set_screen_state (5, FALSE);
--    g_assert_cmpuint (screen_state->len, ==, 16);
-+    assert_frame_len (screen_state, 16);
-     g_assert_cmpuint (screen_state->data[2], ==, 0x02);
-     g_assert_cmpuint (screen_state->data[3], ==, 0x09);
-     g_assert_cmpmem (&screen_state->data[12], 4, "\0\0\0\0", 4);
-@@ -1102,7 +1133,7 @@
-     dial = mm_sit_request_new_dial (0x1234, "+15550101", &error);
-     g_assert_no_error (error);
-     g_assert_nonnull (dial);
--    g_assert_cmpuint (dial->len, ==, 104);
-+    assert_frame_len (dial, 104);
-     g_assert_cmpuint (dial->data[0], ==, 0);      /* request */
-     g_assert_cmpuint (dial->data[2], ==, 0x01);   /* DIAL */
-     g_assert_cmpuint (dial->data[3], ==, 0x00);
-@@ -1113,12 +1144,12 @@
- 
-     answer = mm_sit_request_new_answer (0x1235);
-     g_assert_nonnull (answer);
--    g_assert_cmpuint (answer->len, ==, 12);
-+    assert_frame_len (answer, 12);
-     g_assert_cmpuint (answer->data[2], ==, 0x04);
- 
-     hangup = mm_sit_request_new_hangup (0x1236, 7);
-     g_assert_nonnull (hangup);
--    g_assert_cmpuint (hangup->len, ==, 20);
-+    assert_frame_len (hangup, 20);
-     g_assert_cmpuint (hangup->data[2], ==, 0x08);
-     g_assert_cmpuint (hangup->data[12], ==, 7);
- }
-@@ -1829,6 +1860,28 @@
-     return TRUE;
- }
- 
-+/*
-+ * Drain a request's payload padding.
-+ *
-+ * The builder pads the payload -- everything after the 12-byte request header
-+ * -- out to a multiple of 8, the way the vendor RIL does, while `length` keeps
-+ * declaring the true size. A peer that reads only `length` bytes leaves the
-+ * padding in the socket and then reads it as the next frame's header, so every
-+ * peer in here drains it.
-+ */
-+static gboolean
-+read_padding (int fd, guint16 request_len)
-+{
-+    guint8 pad[8];
-+    gsize  payload, n;
-+
-+    if (request_len <= 12)
-+        return TRUE;
-+    payload = (gsize) request_len - 12;
-+    n = (8 - payload % 8) % 8;
-+    return n ? read_all (fd, pad, n) : TRUE;
-+}
-+
- static void reply_request (gint fd, guint16 expected, guint8 *response, gsize response_len);
- 
- static gpointer
-@@ -1880,6 +1933,7 @@
-             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
- 
-             g_assert_true (read_all (fd, body, request_len - MM_SIT_HEADER_SIZE));
-+            g_assert_true (read_padding (fd, request_len));
-             /* The requested PDP type has to reach the wire: @0xda of the frame,
-              * so 0xda - 8 of the body. */
-             if (ctx->dsds && expected_ids[i] == MM_SIT_MESSAGE_SET_PREFERRED_DATA_MODEM)
-@@ -2232,6 +2286,7 @@
-             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
- 
-             g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
-+            g_assert_true (read_padding (ctx->peer_fd, request_len));
-             /* The requested PDP type has to reach the wire: @0xda of the frame,
-              * so 0xda - 8 of the body. */
-             if (expected_ids[i] == MM_SIT_MESSAGE_SETUP_DATA_CALL)
-@@ -2280,6 +2335,7 @@
-             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
- 
-             g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
-+            g_assert_true (read_padding (ctx->peer_fd, request_len));
-         }
- 
-         response_len = (expected_ids[i] == MM_SIT_MESSAGE_GET_RADIO_POWER) ? 16 : 12;
-@@ -2525,6 +2581,7 @@
-             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
- 
-             g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
-+            g_assert_true (read_padding (ctx->peer_fd, request_len));
-             /* The requested PDP type has to reach the wire: @0xda of the frame,
-              * so 0xda - 8 of the body. */
-             if (expected_ids[i] == MM_SIT_MESSAGE_SETUP_DATA_CALL)
-@@ -2606,6 +2663,7 @@
-     g_assert_cmpuint (request_len, >=, 8);
-     body = g_malloc (request_len);
-     g_assert_true (read_all (fd, body, request_len - 8));
-+    g_assert_true (read_padding (fd, request_len));
-     if (expected == MM_SIT_MESSAGE_SET_RADIO_POWER)
-         g_assert_cmpuint (body[4], ==, MM_SIT_RADIO_STATE_OFF);
-     if (expected == MM_SIT_MESSAGE_DEACTIVATE_DATA_CALL)
-@@ -2978,6 +3036,7 @@
-     g_assert_cmpuint (length, >=, sizeof (header));
-     body = g_malloc (length);
-     g_assert_true (read_all (fd, body, length - sizeof (header)));
-+    g_assert_true (read_padding (fd, length));
- 
-     switch (id) {
-     case MM_SIT_MESSAGE_SETUP_DATA_CALL:

@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=9
+pkgrel=10
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -312,6 +312,6 @@ fc80ecf9a5058d0db381ec82c7202e47a379bbcb4620564433153d94d43f4c09f3201d2fc30bce81
 80273f74cd6ad81667a4a2db0e0b9cad5b86140788a1a42370075382aaafe4b67dee727fd2f99014ed17315e3d23884068acd0bf197330ae99f958e6d85b9e73  uicc-open-isdr-when-plain-refused.patch
 9f566293c45686a6306860946c5853aa4ae4d98fca37a9eab4206050c453dda4b4e6d8e1dbc67a12a63f3a5bbe51fbad529994282d5dbffbc3d1b273a2e851f6  boot-payloads-0d96-0c01-0400.patch
 5e75448148e362998ef3ca624d6c989ea7b432f62b7f2ea3548515433b6084951581eb37b910e628a472def967fb3f458884472c82e73ede31ad458b7092a5a8  voice-no-periodic-call-list-poll.patch
-e9902d8d764322939086276c6f90706148046538d779ca818e5408bc83dce74f63be70999af651319cbf4f9d5f97aab641fcc2e5176593e3b4fa9ceff8e89940  sit-declare-true-payload-length.patch
+ecb6e034b0c19678b26d4fc4a45c395c4412c9dbe1e101c7c57766456df0e8b1d15e4bac403c0f3fad8749e9b64449b82ccfdc57b0c089b55c244178b571cb5a  sit-declare-true-payload-length.patch
 704e172dd3e040159d3af41fc84454aa4f36179b7a4666156c27a37966b46180664dc0c6aa75f8322aba57efe8239873c99b6e3986a432e81d878c7c2c76c501  sit-ussd-cs-path.patch
 "
