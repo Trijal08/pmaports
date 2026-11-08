@@ -1,0 +1,64 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:00:00 +0000
+Subject: [PATCH] sit: pad request payloads to a multiple of 8
+
+The vendor RIL pads the payload of every request it sends. Across 858
+AP->CP requests in a capture from this baseband, every payload --
+everything after the 12-byte request header -- is a multiple of 8 bytes
+long, with no exceptions, while the header's `length` still declares the
+true size. We sent the frame unpadded.
+
+It is not a corner case: 55 SET_DATA_PROFILE frames per boot were shorter
+than stock's, along with 0x0943, 0x0944 and the four AIMS stack ids. The
+parity report counted SET_DATA_PROFILE as byte-identical only because it
+compares the common prefix.
+
+The CP reads `length` bytes, so the padding is invisible to it either way.
+The point is to stop being the only thing on the bus that frames
+differently, since every unexplained difference is one more thing to rule
+out when the CP refuses something.
+
+`length` is untouched: it already matches stock, because 8 + body_len is
+12 + the true payload once the body's four reserved bytes are counted.
+Header-only requests carry no body and are left alone -- stock's are 8
+bytes and ours already match.
+diff -ruN a/crates/samsung-sit-ffi/src/builders.rs b/crates/samsung-sit-ffi/src/builders.rs
+--- a/crates/samsung-sit-ffi/src/builders.rs	2026-11-08 11:50:03.919412681 -0500
++++ b/crates/samsung-sit-ffi/src/builders.rs	2026-11-08 11:50:32.827914779 -0500
+@@ -75,9 +75,36 @@
+         .to_bytes()
+         .expect("SIT header serialization is infallible");
+     frame.extend_from_slice(body);
++    pad_payload(&mut frame, body.len());
+     emit_bytes(frame, out, out_len)
+ }
+ 
++/// The 4 bytes of `body` that land in the frame's reserved field, ahead of the
++/// payload proper.
++const RESERVED_SIZE: usize = 4;
++
++/// Pad the payload out to a multiple of 8, leaving `length` alone.
++///
++/// The vendor RIL does this to every request it sends. Across 858 AP->CP
++/// requests in a capture from this baseband, every payload -- everything after
++/// the 12-byte request header -- is a multiple of 8 bytes long, with no
++/// exceptions, while the header's `length` still declares the true size. We
++/// sent the frame unpadded, which left 55 SET_DATA_PROFILE frames per boot
++/// shorter than stock's, among others.
++///
++/// The CP reads `length` bytes, so the padding is invisible to it either way;
++/// the point is to stop being the only thing on the bus that does it
++/// differently. Header-only requests carry no body and are left alone --
++/// stock's are 8 bytes and ours already match.
++fn pad_payload(frame: &mut Vec<u8>, body_len: usize) {
++    if body_len <= RESERVED_SIZE {
++        return;
++    }
++    let payload = body_len - RESERVED_SIZE;
++    let pad = (8 - payload % 8) % 8;
++    frame.resize(frame.len() + pad, 0);
++}
++
+ /// Build `GET_BASE_BAND_VERSION` (0x0901). The selector is mandatory; pass
+ /// SAMSUNG_SIT_VERSION_ALL_FIELDS unless there is a reason not to.
+ #[no_mangle]

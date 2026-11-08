@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=0
+pkgrel=1
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -58,6 +58,7 @@ source="
 	ims-hidden-menu-identity-parity.patch
 	ims-config-three-pushes-like-stock.patch
 	aims-emergency-location-document.patch
+	sit-pad-request-payloads.patch
 	caimito-modem-setup.sh
 	pixel-modem-stage.service
 	exynos-modem.service
@@ -241,6 +242,7 @@ f996fec23a2875ef031ec623e9c2fb574908967167491520614cbde5188e875533cf2039ff8128e9
 2deeeb290fc4bfba97896a8d6cc4855ed96de55abb637855389ba88ac925441cb137bd123fcdd0f62c1452ae50de8c6ffb025f19ac2c26732fea1095f8b9e98c  ims-hidden-menu-identity-parity.patch
 c275853ce0f5b63edacbeaf598e44f5ad8b96b7842803209b8713812d93ddb061263d9790574684572198475045bc0f55edcfae0925b1df1a4cf3946142053e0  ims-config-three-pushes-like-stock.patch
 b7f86a8b3a1fbeabac4bf095705a928d01e0a26940649e2412608e99cdf292385a5cfeb6b3e744ec305a360745064f9bb2eed57bd529f892f117a1cf524261a5  aims-emergency-location-document.patch
+fcdf7cad555f1678e2f1dddb00f5b03b5c099d0cd8933b2fb30cca1a22dbff7e2f700fc69b6e0ae7df6b19edbdd2120c4cb19d86c9a415827a765a16947a66bb  sit-pad-request-payloads.patch
 f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
 582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
 872284e112edf8f7d834b91e6c82e2bc6bfa04119daf04af568c2aaef7defe17ac2ef92ca075938aa6159115ab709551554136f738b4ad3d6f2a389ec109cbe9  exynos-modem.service
