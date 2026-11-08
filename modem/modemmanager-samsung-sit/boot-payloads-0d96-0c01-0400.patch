@@ -33,8 +33,8 @@ assert are unchanged: 66 rows, all named, still exactly 4 PRIMARY, and the
 boot-config client test does not reach PRE_PDN (no AIMS id appears in its
 expected sequence).
 diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-sit/mm-sit-boot-config.c
---- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 10:33:20.986843229 -0500
-+++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 11:45:24.298934203 -0500
+--- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 12:50:55.711796324 -0500
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 12:51:04.488794659 -0500
 @@ -133,6 +133,13 @@
  static const guint8 pre_aims_xcapm_stop_req[2]  = { 0x01, 0x01 };
  static const guint8 pre_aims_xcapm_stop_off[2]  = { 0x00, 0x01 };
@@ -74,7 +74,7 @@ diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-s
 +        /* Stock sends two bytes here, 02 05, where we sent none. */
      { 0x0c01, "get lpp supl ecid",    MM_SIT_BOOT_PHASE_RADIO,
 -      { 2, 2 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
-+      { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, boot_lpp_supl_ecid },
++      { 2, 2 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, boot_lpp_supl_ecid },
      /*
       * Twice on the primary stack and never on the secondary, in all five
       * captures. We never sent it; it is in no name table.
@@ -88,8 +88,8 @@ diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-s
        { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, pre_set_voice_operation },
      { 0x0d0b, "aims set frame time", MM_SIT_BOOT_PHASE_PRE_PDN,
 diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.h b/src/plugins/samsung-sit/mm-sit-boot-config.h
---- a/src/plugins/samsung-sit/mm-sit-boot-config.h	2026-11-08 10:33:20.986885729 -0500
-+++ b/src/plugins/samsung-sit/mm-sit-boot-config.h	2026-11-08 11:45:24.295481973 -0500
+--- a/src/plugins/samsung-sit/mm-sit-boot-config.h	2026-11-08 12:50:55.711851345 -0500
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.h	2026-11-08 12:51:04.480714472 -0500
 @@ -42,6 +42,12 @@
       * 1000.0. A replayed constant tells the CP the same instant every frame.
       */
@@ -104,8 +104,8 @@ diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.h b/src/plugins/samsung-s
      MM_SIT_BOOT_SUB_BUILD,
  } MMSitBootSub;
 diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
---- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 11:46:25.712047442 -0500
-+++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 11:45:24.299203065 -0500
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 12:50:55.713891642 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 12:51:04.480842353 -0500
 @@ -3989,6 +3989,15 @@
          body[4 + 14] = (guint8) g_date_time_get_second (now);
          break;
@@ -123,8 +123,8 @@ diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm
          /*
           * Two bytes of millisecond clock at payload+2, little-endian, wrapping
 diff -ruN a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
---- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 10:52:41.182495010 -0500
-+++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 11:45:35.191087241 -0500
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 12:50:55.712936904 -0500
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 12:51:04.481011744 -0500
 @@ -3026,6 +3026,7 @@
      case 0x0d17:
      case 0x0d3b:
