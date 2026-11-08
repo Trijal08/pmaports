@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=1
+pkgrel=2
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -124,6 +124,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	ims-send-the-emergency-location.patch
 	ims-do-not-go-silent-while-registering.patch
 	aims-stop-the-stack-before-starting-it.patch
+	aims-call-waiting-and-live-frame-time.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -298,4 +299,5 @@ d4959210574b5efdab72a0fa86d345b289fcc64af3b419da698204d2947cb316d51553fd2efe6e09
 b718a668f23adfcaaee08e684f8781979643bf50a99e420e57323dc87866ddb80a8b8a2899727d86fc4960415253e42d6fde6f5c0db3e9a6176a9b3f6d53e04a  ims-send-the-emergency-location.patch
 83fbf106a02338defff9fad7a57db1d03346a069645fa69fbfc67900e78f512e9498355d55582ab5257ec72036de5b9f1f9d9f75caf14e5f218dd257e7bc6dd9  ims-do-not-go-silent-while-registering.patch
 fc80ecf9a5058d0db381ec82c7202e47a379bbcb4620564433153d94d43f4c09f3201d2fc30bce81f9fe0c3a62225b09c62617c43c20d3e80a256b5ad14dbc58  aims-stop-the-stack-before-starting-it.patch
+10da229ad2a7e605e099b558cd1862795e1c43100b39d4d8dd112938b48e4a4e4481e5828f4c4d5129515f7d66b30cb186693d206c58ee87f7e4b30f22836e0c  aims-call-waiting-and-live-frame-time.patch
 "
