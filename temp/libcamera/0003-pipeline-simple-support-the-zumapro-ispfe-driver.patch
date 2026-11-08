@@ -1,0 +1,11 @@
+diff -ruN a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+--- a/src/libcamera/pipeline/simple/simple.cpp	2026-11-08 09:30:58.276112115 -0500
++++ b/src/libcamera/pipeline/simple/simple.cpp	2026-11-08 09:30:58.281696844 -0500
+@@ -266,6 +266,7 @@
+ 	{ "mxc-isi", {}, false },
+ 	{ "qcom-camss", {}, true },
+ 	{ "sun6i-csi", {}, false },
++	{ "zumapro-ispfe", {}, true },
+ };
+ 
+ bool isRaw(const StreamConfiguration &cfg)
