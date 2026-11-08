@@ -1,0 +1,201 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: declare the true payload length
+
+**Needs exynos-modem with "sit: pad request payloads to a multiple of 8".**
+
+That change makes the builder pad a request's payload the way the vendor
+RIL does, while the header's `length` keeps declaring the true size. Four
+payloads here were pre-padded to the size stock puts on the wire, so they
+declared the padding as payload and the length field came out too big:
+
+    0x0247  24 -> 18    [u8 aid_len][aid, 16][u8 p2]
+    0x020f  32 -> 26 + data
+    0x020e   8 -> 4     [u32 ch]
+    0x0d17  24 -> 19
+
+Those are exactly the `+0x004` divergences the parity report had against
+stock -- A=1e/P=24 for 0x0247, A=28/P=2c for 0x020f, A=10/P=14 for 0x020e,
+A=1f/P=24 for 0x0d17 -- and the declared sizes are the layouts already
+documented in the comments beside them.
+
+The test peers have to drain the padding or they desync. They read exactly
+`length` bytes off the socketpair and then take the next header, so once
+frames are padded the leftover bytes get read as a header and the id
+assertion fires. A read_padding() helper beside read_all() drains it, and
+all six body-reading peers call it. This is needed for the padding change
+alone, independent of the four payload sizes.
+diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-sit/mm-sit-boot-config.c
+--- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 11:47:51.164087486 -0500
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 11:51:36.307095299 -0500
+@@ -147,13 +147,13 @@
+  * replay is obvious if the sub is ever dropped. The 0x03 at +17 is a constant
+  * stock always sends and we sent as zero.
+  */
+-static const guint8 pre_aims_set_call_waiting[24] = {
++static const guint8 pre_aims_set_call_waiting[19] = {
+     0x01, 0x00, 0x00, 0x00,
+     0x01, 0x00, 0x00, 0x00,
+     0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x03,
+-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00,
+ };
+ static const guint8 pre_aims_xcapm_start_req[2] = { 0x01, 0x01 };
+ static const guint8 pre_set_voice_operation[4] = { 0x03, 0x00, 0x00, 0x00 };
+@@ -409,7 +409,7 @@
+      * rule, and the opposite of what made the old replay table go stale.
+      */
+     { 0x0d17, "aims set call waiting", MM_SIT_BOOT_PHASE_PRE_PDN,
+-      { 0, 0 }, MM_SIT_BOOT_SUB_WALLCLOCK, MM_SIT_BOOT_STACKS_ALL, 24, pre_aims_set_call_waiting },
++      { 0, 0 }, MM_SIT_BOOT_SUB_WALLCLOCK, MM_SIT_BOOT_STACKS_ALL, 19, pre_aims_set_call_waiting },
+     { 0x0d3b, "aims xcapm start req", MM_SIT_BOOT_PHASE_PRE_PDN,
+       { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_xcapm_start_req },
+     { 0x0d3a, "aims stack stop req (flag clear)", MM_SIT_BOOT_PHASE_PRE_PDN,
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 11:47:51.164270448 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 11:51:36.306946298 -0500
+@@ -4559,9 +4559,11 @@
+      * not (Fizz answers 6b00, we got no channel, and the EF_DIR read and its
+      * close never happened at all).
+      *
+-     * 24-byte payload, as stock sends: [u8 aid_len][aid, 16][7 pad].
++     * 18-byte payload: [u8 aid_len][aid, 16][u8 p2]. Stock declares 18 and
++     * pads the frame to 24; the padding is the builder's job now, so passing
++     * 24 here would declare six bytes of padding as payload.
+      */
+-    guint8 body[4 + 24] = { 0 };
++    guint8 body[4 + 18] = { 0 };
+ 
+     if (aid && aid_len) {
+         body[4] = (guint8) aid_len;
+@@ -4580,11 +4582,12 @@
+      * Writing from body[0] sent the channel in the reserved field and shifted
+      * everything else, so the CP read the channel from our class byte.
+      *
+-     * Stock's payload is 32 bytes whatever the APDU: the six u32 parameters,
+-     * a u16 data length, then the data padded out. Sending a short frame for
+-     * a short APDU is a divergence with nothing to gain.
++     * Stock declares the six u32 parameters, a u16 data length and the data
++     * itself -- 26 + data -- and pads the frame to 32 from there. The padding
++     * is the builder's job, so only the real length is passed.
+      */
+     guint8 body[4 + 32] = { 0 };
++    gsize  len = 4 + 26;
+ 
+     memcpy (&body[4],  &channel, 4);
+     body[4 + 4]  = 1;  /* the class byte stock uses on this channel */
+@@ -4593,10 +4596,12 @@
+     body[4 + 16] = p2;
+     body[4 + 20] = p3;
+     body[4 + 24] = (guint8) data_len;
+-    if (data && data_len)
++    if (data && data_len) {
+         memcpy (&body[4 + 26], data, MIN (data_len, 4));
++        len += MIN (data_len, 4);
++    }
+     return mm_sit_request_new (MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL,
+-                               mm_sit_client_next_token (self), body, sizeof (body), error);
++                               mm_sit_client_next_token (self), body, len, error);
+ }
+ 
+ static void
+@@ -4710,12 +4715,12 @@
+             break;
+         {
+             /*
+-             * Reserved field, then stock's 8-byte payload: the channel and
+-             * four bytes of padding. Passing the bare channel put it in the
+-             * reserved field and left the payload empty, so the CP was told
+-             * to close nothing.
++             * Reserved field, then the channel. Stock declares 4 and pads
++             * the frame to 8, which the builder now does. Passing the bare
++             * channel put it in the reserved field and left the payload
++             * empty, so the CP was told to close nothing.
+              */
+-            guint8 close_body[4 + 8] = { 0 };
++            guint8 close_body[4 + 4] = { 0 };
+ 
+             memcpy (&close_body[4], &ctx->channel, 4);
+             request = mm_sit_request_new (MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL,
+diff -ruN a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 11:47:51.164442050 -0500
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 11:52:30.466540480 -0500
+@@ -1829,6 +1829,28 @@
+     return TRUE;
+ }
+ 
++/*
++ * Drain a request's payload padding.
++ *
++ * The builder pads the payload -- everything after the 12-byte request header
++ * -- out to a multiple of 8, the way the vendor RIL does, while `length` keeps
++ * declaring the true size. A peer that reads only `length` bytes leaves the
++ * padding in the socket and then reads it as the next frame's header, so every
++ * peer in here drains it.
++ */
++static gboolean
++read_padding (int fd, guint16 request_len)
++{
++    guint8 pad[8];
++    gsize  payload, n;
++
++    if (request_len <= 12)
++        return TRUE;
++    payload = (gsize) request_len - 12;
++    n = (8 - payload % 8) % 8;
++    return n ? read_all (fd, pad, n) : TRUE;
++}
++
+ static void reply_request (gint fd, guint16 expected, guint8 *response, gsize response_len);
+ 
+ static gpointer
+@@ -1880,6 +1902,7 @@
+             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
+ 
+             g_assert_true (read_all (fd, body, request_len - MM_SIT_HEADER_SIZE));
++            g_assert_true (read_padding (fd, request_len));
+             /* The requested PDP type has to reach the wire: @0xda of the frame,
+              * so 0xda - 8 of the body. */
+             if (ctx->dsds && expected_ids[i] == MM_SIT_MESSAGE_SET_PREFERRED_DATA_MODEM)
+@@ -2232,6 +2255,7 @@
+             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
+ 
+             g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
++            g_assert_true (read_padding (ctx->peer_fd, request_len));
+             /* The requested PDP type has to reach the wire: @0xda of the frame,
+              * so 0xda - 8 of the body. */
+             if (expected_ids[i] == MM_SIT_MESSAGE_SETUP_DATA_CALL)
+@@ -2280,6 +2304,7 @@
+             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
+ 
+             g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
++            g_assert_true (read_padding (ctx->peer_fd, request_len));
+         }
+ 
+         response_len = (expected_ids[i] == MM_SIT_MESSAGE_GET_RADIO_POWER) ? 16 : 12;
+@@ -2525,6 +2550,7 @@
+             g_autofree guint8 *body = g_malloc (request_len - MM_SIT_HEADER_SIZE);
+ 
+             g_assert_true (read_all (ctx->peer_fd, body, request_len - MM_SIT_HEADER_SIZE));
++            g_assert_true (read_padding (ctx->peer_fd, request_len));
+             /* The requested PDP type has to reach the wire: @0xda of the frame,
+              * so 0xda - 8 of the body. */
+             if (expected_ids[i] == MM_SIT_MESSAGE_SETUP_DATA_CALL)
+@@ -2606,6 +2632,7 @@
+     g_assert_cmpuint (request_len, >=, 8);
+     body = g_malloc (request_len);
+     g_assert_true (read_all (fd, body, request_len - 8));
++    g_assert_true (read_padding (fd, request_len));
+     if (expected == MM_SIT_MESSAGE_SET_RADIO_POWER)
+         g_assert_cmpuint (body[4], ==, MM_SIT_RADIO_STATE_OFF);
+     if (expected == MM_SIT_MESSAGE_DEACTIVATE_DATA_CALL)
+@@ -2978,6 +3005,7 @@
+     g_assert_cmpuint (length, >=, sizeof (header));
+     body = g_malloc (length);
+     g_assert_true (read_all (fd, body, length - sizeof (header)));
++    g_assert_true (read_padding (fd, length));
+ 
+     switch (id) {
+     case MM_SIT_MESSAGE_SETUP_DATA_CALL:
