@@ -1,0 +1,135 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: three message payloads stock sends and we did not
+
+All three decoded off the capture, with the length field confirming each
+one's true payload size (stock declares 12 + the real payload and pads the
+payload itself to a multiple of 8):
+
+  0x0d96  payload 01, declared 13, so one flag byte. We never sent it at
+          all. Stock sends it once per stack at the tail of the AIMS block,
+          after the hidden-menu pushes -- +14.56s against +12.93s on ch
+          0xf5 -- so the row goes at the end of PRE_PDN.
+  0x0c01  "get lpp supl ecid": payload 02 05, declared 14. We sent none.
+  0x0400  "get imsi": payload [u8 aid_len][aid, 16], declared 29, carrying
+          this card's **USIM AID** -- measured a0 00 00 00 87 10 02 ff 33
+          ff ff 89 01 01 01 00 on one stack and a different tail on the
+          other, so it is the card's, not a constant. We sent an empty
+          payload, i.e. asked for the IMSI without naming the application.
+
+The AID comes from the client's cached sim_aid through a new
+MM_SIT_BOOT_SUB_SIM_AID, which skips the row while the AID is unknown the
+way MM_SIT_BOOT_SUB_MCCMNC does. 0x0400 appears nowhere else in the
+plugin -- the IMSI the code actually uses is read elsewhere -- so the row
+is advisory and a skip costs nothing.
+
+0x0615 is deliberately left alone: stock declares length **0** there with
+no payload, which breaks its own rule, and our 12 is the more sensible of
+the two. Matching it would be bug-compatibility.
+
+The test peer takes 0x0d96 beside the other PRE_PDN ids, since its switch
+ends in g_assert_not_reached(). The table invariants the other tests
+assert are unchanged: 66 rows, all named, still exactly 4 PRIMARY, and the
+boot-config client test does not reach PRE_PDN (no AIMS id appears in its
+expected sequence).
+diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.c b/src/plugins/samsung-sit/mm-sit-boot-config.c
+--- a/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 10:33:20.986843229 -0500
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.c	2026-11-08 11:45:24.298934203 -0500
+@@ -133,6 +133,13 @@
+ static const guint8 pre_aims_xcapm_stop_req[2]  = { 0x01, 0x01 };
+ static const guint8 pre_aims_xcapm_stop_off[2]  = { 0x00, 0x01 };
+ static const guint8 pre_aims_set_frame_time[10] = { 0x00, 0x02, 0x20, 0x04, 0xa9, 0xa8, 0xa1, 0x01, 0x00, 0x00 };
++/* 0x0400: filled in by MM_SIT_BOOT_SUB_SIM_AID, zero here so a stale replay
++ * would be obvious. */
++static const guint8 boot_sim_aid[17] = { 0 };
++static const guint8 boot_lpp_supl_ecid[2] = { 0x02, 0x05 };
++/* 0x0d96: one flag byte. Stock sends it once per stack at the tail of the
++ * AIMS block, after the hidden-menu pushes (+14.56s against +12.93s). */
++static const guint8 pre_aims_0d96[1] = { 0x01 };
+ /*
+  * AIMS_SET_CALL_WAITING. Two u32 ones, a zero, then six bytes of wall clock
+  * at +9 (yy mm dd HH MM SS, yy = year - 2000, plain bytes not BCD) which
+@@ -161,8 +168,16 @@
+      * three boot captures, and leaving them out was seven frames of divergence
+      * per stack for no gain. The responses are still discarded.
+      */
++        /*
++     * Stock names the application it wants the IMSI of: 17 bytes of
++     * [u8 aid_len][aid, 16], carrying this card's USIM AID (measured
++     * a0 00 00 00 87 10 02 ... , which differs per card). We sent an
++     * empty payload. The row is advisory -- the IMSI the plugin uses is
++     * read elsewhere -- so a card whose AID is not cached yet just
++     * skips it.
++     */
+     { 0x0400, "get imsi",             MM_SIT_BOOT_PHASE_RADIO,
+-      { 1, 1 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++      { 0, 0 }, MM_SIT_BOOT_SUB_SIM_AID, MM_SIT_BOOT_STACKS_ALL, 17, boot_sim_aid },
+     { 0x0403, "get device id",        MM_SIT_BOOT_PHASE_RADIO,
+       { 1, 1 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
+     { 0x070c, "get cell info list",   MM_SIT_BOOT_PHASE_RADIO,
+@@ -177,8 +192,9 @@
+       { 1, 1 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
+     { 0x0957, "get device service",   MM_SIT_BOOT_PHASE_RADIO,
+       { 1, 1 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++        /* Stock sends two bytes here, 02 05, where we sent none. */
+     { 0x0c01, "get lpp supl ecid",    MM_SIT_BOOT_PHASE_RADIO,
+-      { 2, 2 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 0, NULL },
++      { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, boot_lpp_supl_ecid },
+     /*
+      * Twice on the primary stack and never on the secondary, in all five
+      * captures. We never sent it; it is in no name table.
+@@ -412,6 +428,8 @@
+      */
+     { 0x0d39, "aims stack start req", MM_SIT_BOOT_PHASE_PRE_PDN,
+       { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 2, pre_aims_stack_start_req },
++    { 0x0d96, "aims unnamed 0d96",    MM_SIT_BOOT_PHASE_PRE_PDN,
++      { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 1, pre_aims_0d96 },
+     { 0x091a, "set voice operation", MM_SIT_BOOT_PHASE_PRE_PDN,
+       { 0, 0 }, MM_SIT_BOOT_SUB_NONE, MM_SIT_BOOT_STACKS_ALL, 4, pre_set_voice_operation },
+     { 0x0d0b, "aims set frame time", MM_SIT_BOOT_PHASE_PRE_PDN,
+diff -ruN a/src/plugins/samsung-sit/mm-sit-boot-config.h b/src/plugins/samsung-sit/mm-sit-boot-config.h
+--- a/src/plugins/samsung-sit/mm-sit-boot-config.h	2026-11-08 10:33:20.986885729 -0500
++++ b/src/plugins/samsung-sit/mm-sit-boot-config.h	2026-11-08 11:45:24.295481973 -0500
+@@ -42,6 +42,12 @@
+      * 1000.0. A replayed constant tells the CP the same instant every frame.
+      */
+     MM_SIT_BOOT_SUB_FRAMETIME,
++    /*
++     * The card's own USIM AID, length-prefixed at payload+0:
++     * [u8 aid_len][aid, 16 zero-padded]. Skipped while the AID is unknown,
++     * the way MM_SIT_BOOT_SUB_MCCMNC is.
++     */
++    MM_SIT_BOOT_SUB_SIM_AID,
+     /* The whole payload is built at run time; see mm_sit_boot_build_payload(). */
+     MM_SIT_BOOT_SUB_BUILD,
+ } MMSitBootSub;
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 11:46:25.712047442 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 11:45:24.299203065 -0500
+@@ -3989,6 +3989,15 @@
+         body[4 + 14] = (guint8) g_date_time_get_second (now);
+         break;
+     }
++    case MM_SIT_BOOT_SUB_SIM_AID:
++        /* Nothing to name the application with yet; stock asks after the SIM
++         * status, and a skipped advisory row costs nothing. */
++        if (!self->priv->sim_aid_len || req->len < 17)
++            return NULL;
++        body[4] = (guint8) self->priv->sim_aid_len;
++        memcpy (&body[4 + 1], self->priv->sim_aid,
++                MIN (self->priv->sim_aid_len, 16));
++        break;
+     case MM_SIT_BOOT_SUB_FRAMETIME: {
+         /*
+          * Two bytes of millisecond clock at payload+2, little-endian, wrapping
+diff -ruN a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 10:52:41.182495010 -0500
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 11:45:35.191087241 -0500
+@@ -3026,6 +3026,7 @@
+     case 0x0d17:
+     case 0x0d3b:
+     case 0x0d3c:
++    case 0x0d96:
+     case 0x091a:
+     case MM_SIT_MESSAGE_QUERY_NETWORK_SELECTION_MODE:
+     case MM_SIT_MESSAGE_GET_VOICE_REGISTRATION:

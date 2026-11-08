@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=5
+pkgrel=6
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -128,6 +128,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	uicc-probe-payload-offset.patch
 	carrier-config-directory-from-udev.patch
 	uicc-open-isdr-when-plain-refused.patch
+	boot-payloads-0d96-0c01-0400.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -306,4 +307,5 @@ fc80ecf9a5058d0db381ec82c7202e47a379bbcb4620564433153d94d43f4c09f3201d2fc30bce81
 416b700b39ecb263840d015640064d292361db92b539bf7fd2c09bd6eb1f25910383aab43b58ecbf8a97d6f5f064d6c06ec81531800856230fa12c59c55059d4  uicc-probe-payload-offset.patch
 472297bb44b986aa026fd6d5c9267bb0e62162e25990a518f97286c18b7663607e12e8fa7c17fc3ed6809a6fd9532c7eb8f68490d703f0f6c64a198ed736266c  carrier-config-directory-from-udev.patch
 80273f74cd6ad81667a4a2db0e0b9cad5b86140788a1a42370075382aaafe4b67dee727fd2f99014ed17315e3d23884068acd0bf197330ae99f958e6d85b9e73  uicc-open-isdr-when-plain-refused.patch
+04f8bc331ceeb3ae6b4e6dbb0d3f4b593b70cad0b4b4b1e192de32a65edb97d673f7b7317bd7ef747bcf35be5f65ec1ed45567cc8c6eff861d3d53e8d3fe0329  boot-payloads-0d96-0c01-0400.patch
 "
