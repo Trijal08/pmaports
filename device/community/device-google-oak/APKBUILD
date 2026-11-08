@@ -4,7 +4,7 @@
 maintainer="Adam Thiede <me@adamthiede.com>"
 pkgname=device-google-oak
 pkgdesc="Google Oak Chromebooks"
-pkgver=12
+pkgver=13
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
@@ -16,7 +16,7 @@ depends="
 	firmware-powervr-gx6250
 	linux-firmware-mediatek
 	linux-firmware-mrvl
-	linux-postmarketos-mediatek-mt8173
+	linux-nura-mediatek-mt8173
 	mesa-vulkan-imagination
 	postmarketos-base
 	postmarketos-cros-common
