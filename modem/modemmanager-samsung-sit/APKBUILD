@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=2
+pkgrel=3
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -125,6 +125,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	ims-do-not-go-silent-while-registering.patch
 	aims-stop-the-stack-before-starting-it.patch
 	aims-call-waiting-and-live-frame-time.patch
+	uicc-probe-payload-offset.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -300,4 +301,5 @@ b718a668f23adfcaaee08e684f8781979643bf50a99e420e57323dc87866ddb80a8b8a2899727d86
 83fbf106a02338defff9fad7a57db1d03346a069645fa69fbfc67900e78f512e9498355d55582ab5257ec72036de5b9f1f9d9f75caf14e5f218dd257e7bc6dd9  ims-do-not-go-silent-while-registering.patch
 fc80ecf9a5058d0db381ec82c7202e47a379bbcb4620564433153d94d43f4c09f3201d2fc30bce81f9fe0c3a62225b09c62617c43c20d3e80a256b5ad14dbc58  aims-stop-the-stack-before-starting-it.patch
 10da229ad2a7e605e099b558cd1862795e1c43100b39d4d8dd112938b48e4a4e4481e5828f4c4d5129515f7d66b30cb186693d206c58ee87f7e4b30f22836e0c  aims-call-waiting-and-live-frame-time.patch
+cf690fcc38ac83ea8feff2f5f8039a1871bcc2bf6ffe3bcf052bc6a7b5b76a42b03001bcb08f97ac0605af875a83c599309a1bd0bce69e5bed3198a7caa2f3c4  uicc-probe-payload-offset.patch
 "
