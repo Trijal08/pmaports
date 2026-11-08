@@ -1,45 +1,10 @@
-From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
-Date: Sun, 8 Nov 2026 00:00:00 +0000
-Subject: [PATCH] samsung-sit: build the UICC probe frames at the right offset
-
-The three frames of the access-control probe were all built four bytes
-early, and on one of the two cards that silently cost us the whole block.
-
-samsung_sit_build_request() lays the body down at frame+8, but a request's
-payload starts at frame+12 -- body[0..3] is the frame's reserved field.
-Every other request in the plugin gets this right; these three passed the
-payload from body[0]. Measured against the capture, ours were the only
-AP->CP requests in a whole boot with a non-zero reserved field:
-
-    0x0247  6/8 frames    0x020f  3/3    0x020e  1/1
-    Android: none, ever
-
-What each one became on the wire:
-
-  0x0247  aid_len was read from the AID's fourth byte, which is zero in
-          every AID here, so all three named opens degenerated into no-AID
-          opens. Invisible on a card that answers a no-AID open -- Telus
-          hands back a channel and the EF_DIR read proceeds -- and fatal on
-          one that does not: Fizz answers 6b00, so we got no channel and
-          the three 0x020f reads and the 0x020e close never happened. That
-          is the f6 gap in the parity report: 0x020e x4 and 0x020f x4 that
-          Android sends and we sent none of.
-  0x020f  the channel went into the reserved field and everything shifted,
-          so the CP read the channel from our class byte.
-  0x020e  the channel was *entirely* in the reserved field, leaving an
-          empty payload: the CP was asked to close nothing.
-
-Two sizes were wrong too, both measured:
-
-  - the GSMA ARA-M AID is nine bytes, A000000151 + 41434C00. Stock sends
-    aid_len 9 including that trailing zero; we declared eight and asked for
-    a different applet.
-  - stock's payloads are a fixed 24 bytes for 0x0247, 32 for 0x020f
-    whatever the APDU, and 8 for 0x020e. We sent 18, 26-or-28 and 4.
-
-Verified: both builders compile clean standalone under
 -Wall -Wextra -Werror, and the close keeps its unconditional
 ctx->channel reset.
+
+The boot-config client test read the channel from body[0] -- frame+8, the
+reserved field -- which is exactly why it passed while these frames were
+built four bytes early. It now reads frame+12 like the rest of that peer
+does, so it guards the offset instead of enshrining it.
 diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
 --- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 10:33:20.987000030 -0500
 +++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 10:32:47.625572061 -0500
@@ -152,3 +117,21 @@ diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm
          ctx->channel = UICC_NO_CHANNEL;
          break;
      case UICC_STEP_DONE:
+diff -ruN a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 10:33:20.987163152 -0500
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-08 10:42:16.716686041 -0500
+@@ -2531,9 +2531,13 @@
+                 g_assert_cmpuint (body[0xda - MM_SIT_HEADER_SIZE], ==, MM_SIT_PDP_TYPE_IPV4V6);
+             if (expected_ids[i] == MM_SIT_MESSAGE_SET_MODEM_CONFIG)
+                 g_assert_cmpuint (body[4], ==, ctx->dsds ? 1 : 0);
++            /* The channel is the first u32 of the *payload*, which is
++             * frame+12 -- body[0] is frame+8, the reserved field. Reading it
++             * from body[0] is what let the four-byte-early build of these
++             * frames pass this test. */
+             if (expected_ids[i] == MM_SIT_MESSAGE_TRANSMIT_APDU_CHANNEL ||
+                 expected_ids[i] == MM_SIT_MESSAGE_CLOSE_LOGICAL_CHANNEL)
+-                memcpy (&body_channel, body, 4);
++                memcpy (&body_channel, body + (12 - MM_SIT_HEADER_SIZE), 4);
+             /* And the software version has to be the one the CP just gave,
+              * not a constant: @12 of the frame, ASCII. */
+             if (expected_ids[i] == MM_SIT_MESSAGE_OEM_CONFIG) {
