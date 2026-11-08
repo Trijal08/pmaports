@@ -1,7 +1,7 @@
 maintainer="Clayton Craft <clayton@craftyguy.net>"
 pkgname=linux-postmarketos-asahi
-pkgver=7.2.14_p1
-pkgrel=1
+pkgver=7.3.3_p2
+pkgrel=0
 _rel=${pkgver#*_p}
 _kver=${pkgver%_p*}
 _kver=${_kver//_/-}
@@ -55,8 +55,6 @@ _repository="linux"
 source="
 	$pkgname-$_asahiver.tar.gz::https://github.com/AsahiLinux/linux/archive/refs/tags/asahi-$_asahiver.tar.gz
 	config-postmarketos-asahi.aarch64
-
-	enable-dynamic-ftrace.patch
 "
 builddir="$srcdir/linux-asahi-$_asahiver"
 
@@ -90,7 +88,6 @@ package() {
 }
 
 sha512sums="
-1e00030f28856f59b3c77981992a04388d6393ce658c01049cbaa0dbc6bb527dc4f6219beaee867e705b13f7fa8f0ab6fa54a0276c69919a6d0d522059320bef  linux-postmarketos-asahi-7.2.14-1.tar.gz
-e8452355911724b7d671a36c0a9cb5526b2f022bc57c59dc1584e3807b1fe1ddd13140214e73bf27258503099ce102c32d793474a1c1dab9f06e9f0148812c0d  config-postmarketos-asahi.aarch64
-e8b595f3e076896dc38f249c8908d58e2e6a858eaa77fe1e680f27db0e76d3d74c0b5dfebb7a4c57d546fee0b0f6eb81a38b20dfd72f985c9d02f28d79a5eceb  enable-dynamic-ftrace.patch
+bc25dcf650023f29dcfc656bae21561f314fd2b15a3186270ef3087a2c14a06a2d52db1736bd054b1cdb57f000be954d295a99406d85b0f838277700f7e80ddf  linux-postmarketos-asahi-7.3.3-2.tar.gz
+e67504e43441a0b4a208c9f1ad8630d6bb077ce8951ac7f5007c464d8136d099d62e9c4a3e1efc91f15b0ea0b112d4d4f7ef58592ff27e401399fe19a6197639  config-postmarketos-asahi.aarch64
 "
