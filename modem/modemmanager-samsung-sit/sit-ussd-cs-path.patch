@@ -1,0 +1,663 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: implement 3GPP USSD over the CS path
+
+The plugin had no org.freedesktop.ModemManager1.Modem.Modem3gpp.Ussd
+interface at all, so a `mmcli --3gpp-ussd-initiate` was refused and a
+network-initiated notification was dropped on the floor.
+
+The CP's three messages are SEND_USSD (0x0505), CANCEL_USSD (0x0506) and the
+ON_USSD (0x0510) indication. A request is `[u8 flag][u8 dcs][packed GSM
+septets]` in a fixed 185-byte field, which is how the vendor library builds
+it; a cancel is the header alone. The indication's first word is the RIL
+mode -- 0 NOTIFY, 1 REQUEST, 2 NW_RELEASE, 3 LOCAL_CLIENT, 4 NOT_SUPPORTED,
+5 NW_TIMEOUT -- in the u32 slot a response would use for its status.
+
+This goes over CS even with IMS up. Stock's logcat for a dialled code says
+`isUt=true useImsForUt=false` and then "Sending ussd string over CS pipe",
+and the AIMS USSD request never appears in a capture on this carrier
+config, so Ut/XCAP is not in the path here. `*#21#` and friends are MMI
+codes the dialer turns into a call-forwarding interrogation (0x0d14), not
+USSD, which is why they answer while a real code does not.
+
+The interface's unsolicited-event vfuncs are set to no-ops rather than left
+alone: ON_USSD arrives on the control port that is already dispatched, and
+mm-iface-modem-3gpp-ussd.c calls those four without a NULL guard, so what
+we would otherwise inherit from MMBroadbandModem is the AT `+CUSD` path on
+a modem with no AT port.
+
+The reply text layout is inferred and marked as such in the code. Every
+code tried against both SIMs on this account answered mode 4 with the whole
+field zeroed, so only the mode has been seen for real; the text is read as
+`[u8 dcs][packed septets]` to mirror the request, which is what the vendor
+library's DecodingUssd(dcs, ...) pairing implies, and the raw bytes are
+logged so the first network that answers settles it.
+diff -ruN a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-08 12:51:29.296240054 -0500
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-08 12:38:25.645654719 -0500
+@@ -14,6 +14,8 @@
+ #include "mm-broadband-modem-samsung-sit.h"
+ #include "mm-iface-modem.h"
+ #include "mm-iface-modem-3gpp.h"
++#include "mm-iface-modem-3gpp-ussd.h"
++#include "mm-charsets.h"
+ #include "mm-iface-modem-signal.h"
+ #include "mm-iface-modem-time.h"
+ #include "mm-log-object.h"
+@@ -37,6 +39,10 @@
+ static void iface_modem_signal_init (MMIfaceModemSignalInterface *iface);
+ static void iface_modem_time_init (MMIfaceModemTimeInterface *iface);
+ static void iface_modem_voice_init (MMIfaceModemVoiceInterface *iface);
++static void iface_modem_3gpp_ussd_init (MMIfaceModem3gppUssdInterface *iface);
++
++static void handle_on_ussd (MMBroadbandModemSamsungSit *self,
++                            const MMSitMessage         *message);
+ 
+ /*
+  * Delivered-SMS duplicate suppression.
+@@ -67,6 +73,13 @@
+ } SmsDedupSlot;
+ 
+ struct _MMBroadbandModemSamsungSitPrivate {
++    /*
++     * The USSD request in flight. SEND_USSD's own response only says the CP
++     * took it; the network's answer arrives later as an ON_USSD indication, so
++     * the task waits here in between.
++     */
++    GTask *ussd_task;
++    guint  ussd_timeout_id;
+     MMSitCp     *cp;
+     SmsDedupSlot sms_seen[SMS_DEDUP_SLOTS];
+     guint        sms_seen_next;
+@@ -161,6 +174,7 @@
+                         0,
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_USSD, iface_modem_3gpp_ussd_init)
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
+                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_TIME, iface_modem_time_init)
+@@ -1851,6 +1865,9 @@
+     if (message->id == MM_SIT_MESSAGE_REGISTRATION_FAILED)
+         handle_registration_failed (self, message);
+ 
++    if (message->id == MM_SIT_MESSAGE_ON_USSD)
++        handle_on_ussd (self, message);
++
+     if (message->id == MM_SIT_MESSAGE_DATA_CALL_LIST_CHANGED)
+         handle_data_call_list_changed (self, message);
+ 
+@@ -6593,6 +6610,353 @@
+                                  task);
+ }
+ 
++/*****************************************************************************/
++/* USSD (3GPP USSD interface) */
++
++/*
++ * Stock runs USSD over CS even with IMS registered -- the 2026-11-08 capture's
++ * logcat says `isUt=true useImsForUt=false` and "Sending ussd string over CS
++ * pipe" -- so SEND_USSD/CANCEL_USSD are the whole story and the AIMS USSD
++ * request is not used on this carrier config.
++ */
++
++#define USSD_REPLY_TIMEOUT_SECS 30
++
++static void
++ussd_task_complete (MMBroadbandModemSamsungSit *self,
++                    gchar                      *reply,
++                    GError                     *error)
++{
++    g_autoptr(GTask) task = g_steal_pointer (&self->priv->ussd_task);
++
++    if (self->priv->ussd_timeout_id) {
++        g_source_remove (self->priv->ussd_timeout_id);
++        self->priv->ussd_timeout_id = 0;
++    }
++    if (!task) {
++        /* A network-initiated notification, or one that arrived after we gave
++         * up. Nothing is waiting, so the interface's own state is the report. */
++        g_free (reply);
++        g_clear_error (&error);
++        return;
++    }
++    if (error) {
++        g_free (reply);
++        g_task_return_error (task, error);
++    } else {
++        g_task_return_pointer (task, reply, g_free);
++    }
++}
++
++static gboolean
++ussd_timed_out (MMBroadbandModemSamsungSit *self)
++{
++    self->priv->ussd_timeout_id = 0;
++    mm_obj_dbg (self, "no ON_USSD indication within %us; giving up on the session",
++                (guint) USSD_REPLY_TIMEOUT_SECS);
++    mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                           MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
++    ussd_task_complete (self, NULL,
++                        g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_TIMEOUT,
++                                     "Timed out waiting for the network's USSD response"));
++    return G_SOURCE_REMOVE;
++}
++
++/*
++ * ON_USSD: the mode is the u32 at frame+8, which is where
++ * mm_sit_message_get_payload() starts, so the text follows at payload+4.
++ *
++ * ponytail: the text layout is inferred. Every capture so far answered
++ * NOT_SUPPORTED with the whole 181-byte field zeroed, so only the mode has
++ * been seen for real. It is read as [u8 dcs][packed septets] to mirror
++ * SEND_USSD, which is also what ProtocolUssdIndAdapter::GetDecodedUssd pairing
++ * with DecodingUssd(dcs, ...) implies. The raw bytes are logged so the first
++ * network that actually answers settles it.
++ */
++static void
++handle_on_ussd (MMBroadbandModemSamsungSit *self,
++                const MMSitMessage         *message)
++{
++    const guint8 *payload;
++    gsize         payload_len = 0;
++    guint32       mode;
++    g_autofree gchar *text = NULL;
++
++    payload = mm_sit_message_get_payload (message, &payload_len);
++    if (!payload || payload_len < 4) {
++        mm_obj_dbg (self, "ON_USSD with no mode; ignoring");
++        return;
++    }
++    memcpy (&mode, payload, 4);
++
++    if (payload_len > 5) {
++        const guint8 *packed = payload + 5;
++        gsize         n = payload_len - 5;
++        guint8        dcs = payload[4];
++
++        /* Trailing padding is zero, and a packed run that ends in a zero
++         * septet decodes to a trailing '@' at worst. */
++        while (n && !packed[n - 1])
++            n--;
++        if (n) {
++            g_autofree guint8 *unpacked = NULL;
++            guint32            unpacked_len = 0;
++
++            mm_obj_dbg (self, "ON_USSD mode %u, dcs 0x%02x, %" G_GSIZE_FORMAT " packed bytes",
++                        mode, dcs, n);
++            unpacked = mm_charset_gsm_unpack (packed, (n * 8) / 7, 0, &unpacked_len);
++            if (unpacked) {
++                g_autoptr(GByteArray) ba = g_byte_array_new ();
++
++                g_byte_array_append (ba, unpacked, unpacked_len);
++                text = mm_modem_charset_bytearray_to_utf8 (ba, MM_MODEM_CHARSET_GSM, FALSE, NULL);
++            }
++        }
++    }
++
++    switch (mode) {
++    case MM_SIT_USSD_MODE_NOTIFY:
++        mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                               MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
++        if (self->priv->ussd_task)
++            ussd_task_complete (self, g_steal_pointer (&text), NULL);
++        else if (text)
++            mm_iface_modem_3gpp_ussd_update_network_notification (MM_IFACE_MODEM_3GPP_USSD (self),
++                                                                  text);
++        break;
++    case MM_SIT_USSD_MODE_REQUEST:
++        /* The network wants an answer, so the session stays up. */
++        mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                               MM_MODEM_3GPP_USSD_SESSION_STATE_USER_RESPONSE);
++        if (self->priv->ussd_task)
++            ussd_task_complete (self, g_steal_pointer (&text), NULL);
++        else if (text)
++            mm_iface_modem_3gpp_ussd_update_network_request (MM_IFACE_MODEM_3GPP_USSD (self),
++                                                             text);
++        break;
++    case MM_SIT_USSD_MODE_NW_RELEASE:
++    case MM_SIT_USSD_MODE_LOCAL_CLIENT:
++    case MM_SIT_USSD_MODE_NOT_SUPPORTED:
++    case MM_SIT_USSD_MODE_NW_TIMEOUT:
++    default:
++        mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                               MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
++        ussd_task_complete (self, NULL,
++                            g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                         "The network ended the USSD session (mode %u)", mode));
++        break;
++    }
++}
++
++static void
++modem_3gpp_ussd_unsolicited_events_noop (MMIfaceModem3gppUssd *self,
++                                         GAsyncReadyCallback   callback,
++                                         gpointer              user_data)
++{
++    GTask *task = g_task_new (self, NULL, callback, user_data);
++
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static gboolean
++modem_3gpp_ussd_unsolicited_events_noop_finish (MMIfaceModem3gppUssd  *self,
++                                                GAsyncResult          *res,
++                                                GError               **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++modem_3gpp_ussd_check_support (MMIfaceModem3gppUssd *self,
++                               GAsyncReadyCallback   callback,
++                               gpointer              user_data)
++{
++    GTask *task;
++
++    /* Every SIT CP carries the supplementary-service group; there is no
++     * capability query for it. */
++    task = g_task_new (self, NULL, callback, user_data);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static gboolean
++modem_3gpp_ussd_check_support_finish (MMIfaceModem3gppUssd *self,
++                                      GAsyncResult         *res,
++                                      GError              **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++/*
++ * The charset work happens where the wire format is, in mm-sit-client.c, so
++ * there is nothing to translate on the way in or out.
++ */
++static gchar *
++modem_3gpp_ussd_encode (MMIfaceModem3gppUssd *self,
++                        const gchar          *command,
++                        guint                *scheme,
++                        GError              **error)
++{
++    *scheme = MM_MODEM_GSM_USSD_SCHEME_7BIT;
++    return g_strdup (command);
++}
++
++static gchar *
++modem_3gpp_ussd_decode (MMIfaceModem3gppUssd *self,
++                        const gchar          *reply,
++                        GError              **error)
++{
++    return g_strdup (reply);
++}
++
++static void
++send_ussd_ready (MMSitClient                *client,
++                 GAsyncResult               *res,
++                 MMBroadbandModemSamsungSit *self)
++{
++    GError *error = NULL;
++
++    if (!mm_sit_client_send_ussd_finish (client, res, &error)) {
++        /* The CP refused to send it at all -- Telus answered status 2 on the
++         * capture and no indication followed, so fail now rather than wait. */
++        mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                               MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
++        ussd_task_complete (self, NULL, error);
++        g_object_unref (self);
++        return;
++    }
++    /* Taken. The answer comes as an ON_USSD indication. */
++    mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                           MM_MODEM_3GPP_USSD_SESSION_STATE_ACTIVE);
++    if (self->priv->ussd_task && !self->priv->ussd_timeout_id)
++        self->priv->ussd_timeout_id = g_timeout_add_seconds (USSD_REPLY_TIMEOUT_SECS,
++                                                             (GSourceFunc) ussd_timed_out,
++                                                             self);
++    g_object_unref (self);
++}
++
++static void
++modem_3gpp_ussd_send (MMIfaceModem3gppUssd *_self,
++                      const gchar          *command,
++                      GAsyncReadyCallback   callback,
++                      gpointer              user_data)
++{
++    MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (_self);
++    MMSitClient                *client;
++    GTask                      *task;
++    g_autoptr(GError)           error = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++
++    if (self->priv->ussd_task) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_IN_PROGRESS,
++                                 "A USSD session is already waiting for the network");
++        g_object_unref (task);
++        return;
++    }
++    client = mm_broadband_modem_samsung_sit_peek_client (self, &error);
++    if (!client) {
++        g_task_return_error (task, g_steal_pointer (&error));
++        g_object_unref (task);
++        return;
++    }
++
++    self->priv->ussd_task = task;
++    mm_sit_client_send_ussd (client, command, NULL,
++                             (GAsyncReadyCallback) send_ussd_ready, g_object_ref (self));
++}
++
++static gchar *
++modem_3gpp_ussd_send_finish (MMIfaceModem3gppUssd *self,
++                             GAsyncResult         *res,
++                             GError              **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++cancel_ussd_ready (MMSitClient  *client,
++                   GAsyncResult *res,
++                   GTask        *task)
++{
++    MMBroadbandModemSamsungSit *self = g_task_get_source_object (task);
++    GError                     *error = NULL;
++
++    mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
++                                           MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
++    /* Whatever the CP says, nothing is waiting on the network any more. */
++    ussd_task_complete (self, NULL,
++                        g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
++                                     "The USSD session was cancelled"));
++
++    if (!mm_sit_client_cancel_ussd_finish (client, res, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++modem_3gpp_ussd_cancel (MMIfaceModem3gppUssd *_self,
++                        GAsyncReadyCallback   callback,
++                        gpointer              user_data)
++{
++    MMBroadbandModemSamsungSit *self = MM_BROADBAND_MODEM_SAMSUNG_SIT (_self);
++    MMSitClient                *client;
++    GTask                      *task;
++    g_autoptr(GError)           error = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++
++    client = mm_broadband_modem_samsung_sit_peek_client (self, &error);
++    if (!client) {
++        g_task_return_error (task, g_steal_pointer (&error));
++        g_object_unref (task);
++        return;
++    }
++
++    mm_sit_client_cancel_ussd (client, NULL,
++                               (GAsyncReadyCallback) cancel_ussd_ready, task);
++}
++
++static gboolean
++modem_3gpp_ussd_cancel_finish (MMIfaceModem3gppUssd *self,
++                               GAsyncResult         *res,
++                               GError              **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++iface_modem_3gpp_ussd_init (MMIfaceModem3gppUssdInterface *iface)
++{
++    iface->check_support        = modem_3gpp_ussd_check_support;
++    iface->check_support_finish = modem_3gpp_ussd_check_support_finish;
++    /*
++     * ON_USSD arrives on the same control port as everything else and
++     * sit_indication() already dispatches it, so there is nothing to set up,
++     * enable, disable or tear down. These cannot be left NULL: unlike most
++     * interfaces, mm-iface-modem-3gpp-ussd.c calls them without a guard, and
++     * what we would inherit is the AT +CUSD path.
++     */
++    iface->setup_unsolicited_events          = modem_3gpp_ussd_unsolicited_events_noop;
++    iface->setup_unsolicited_events_finish   = modem_3gpp_ussd_unsolicited_events_noop_finish;
++    iface->enable_unsolicited_events         = modem_3gpp_ussd_unsolicited_events_noop;
++    iface->enable_unsolicited_events_finish  = modem_3gpp_ussd_unsolicited_events_noop_finish;
++    iface->disable_unsolicited_events        = modem_3gpp_ussd_unsolicited_events_noop;
++    iface->disable_unsolicited_events_finish = modem_3gpp_ussd_unsolicited_events_noop_finish;
++    iface->cleanup_unsolicited_events        = modem_3gpp_ussd_unsolicited_events_noop;
++    iface->cleanup_unsolicited_events_finish = modem_3gpp_ussd_unsolicited_events_noop_finish;
++    iface->encode               = modem_3gpp_ussd_encode;
++    iface->decode               = modem_3gpp_ussd_decode;
++    iface->send                 = modem_3gpp_ussd_send;
++    iface->send_finish          = modem_3gpp_ussd_send_finish;
++    iface->cancel               = modem_3gpp_ussd_cancel;
++    iface->cancel_finish        = modem_3gpp_ussd_cancel_finish;
++}
++
+ static void
+ iface_modem_voice_init (MMIfaceModemVoiceInterface *iface)
+ {
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 12:51:29.306620880 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-08 12:38:25.645404207 -0500
+@@ -4,6 +4,7 @@
+ #include <string.h>
+ #include <sys/utsname.h>
+ 
++#include "mm-charsets.h"
+ #include "mm-log-object.h"
+ #include "mm-sit-client.h"
+ #include "mm-sit-boot-config.h"
+@@ -4919,6 +4920,139 @@
+                            (GAsyncReadyCallback) get_facility_lock_ready, task);
+ }
+ 
++/*
++ * USSD, the CS way.
++ *
++ * Stock sends it over CS even with IMS registered on both stacks -- logcat
++ * from the 2026-11-08 capture says so outright, `isUt=true useImsForUt=false`
++ * and "ImsPhoneMmiCode: Sending ussd string over CS pipe" -- so there is no
++ * AIMS path to prefer here even though XCAPM is running.
++ *
++ * SEND_USSD declares 185 bytes of payload:
++ *
++ *   +0  u8  flag   -- the bool BuildSendUssd takes; 0 in the capture
++ *   +1  u8  DCS    -- 0x0f, GSM 7-bit
++ *   +2  ..  the string, GSM 7-bit packed, LSB-first septets
++ *
++ * "*123#" packed to aa 98 6c 36 02 on the wire, which is exactly what
++ * mm_charset_gsm_pack() produces for it.
++ */
++#define SIT_USSD_DCS_GSM7  0x0f
++#define SIT_USSD_BODY_LEN  185
++#define SIT_USSD_TEXT_MAX  (SIT_USSD_BODY_LEN - 2)
++
++static void
++send_ussd_ready (MMSitClient  *self,
++                 GAsyncResult *res,
++                 GTask        *task)
++{
++    g_autoptr(MMSitMessage) response = NULL;
++    GError                 *error = NULL;
++
++    /*
++     * The response is only the CP taking the request; the network's answer
++     * arrives later as an ON_USSD indication. A refusal here is a real
++     * outcome, not a bug: on the capture Telus's CP answered status 2 and the
++     * vendor RIL reported MODEM_ERR with no indication to follow, while Fizz's
++     * accepted the same frame.
++     */
++    response = mm_sit_client_command_finish (self, res, &error);
++    if (!response)
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++void
++mm_sit_client_send_ussd (MMSitClient        *self,
++                         const gchar        *ussd,
++                         GCancellable       *cancellable,
++                         GAsyncReadyCallback callback,
++                         gpointer            user_data)
++{
++    g_autoptr(GByteArray) septets = NULL;
++    g_autoptr(GByteArray) request = NULL;
++    g_autofree guint8    *packed = NULL;
++    guint8                body[4 + SIT_USSD_BODY_LEN] = { 0 };
++    guint32               packed_len = 0;
++    GError               *error = NULL;
++    GTask                *task;
++
++    task = g_task_new (self, cancellable, callback, user_data);
++
++    septets = mm_modem_charset_bytearray_from_utf8 (ussd, MM_MODEM_CHARSET_GSM, FALSE, &error);
++    if (!septets) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    packed = mm_charset_gsm_pack (septets->data, septets->len, 0, &packed_len);
++    if (!packed || packed_len > SIT_USSD_TEXT_MAX) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                                 "USSD string is too long for one request (%u > %u packed bytes)",
++                                 packed_len, (guint) SIT_USSD_TEXT_MAX);
++        g_object_unref (task);
++        return;
++    }
++
++    body[4 + 1] = SIT_USSD_DCS_GSM7;
++    memcpy (&body[4 + 2], packed, packed_len);
++
++    request = mm_sit_request_new (MM_SIT_MESSAGE_SEND_USSD, mm_sit_client_next_token (self),
++                                  body, sizeof (body), &error);
++    if (!request) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++    mm_obj_dbg (self->priv->port, "sending USSD (%u septets, %u packed bytes)",
++                septets->len, packed_len);
++    mm_sit_client_command (self, request, 30, cancellable,
++                           (GAsyncReadyCallback) send_ussd_ready, task);
++}
++
++gboolean
++mm_sit_client_send_ussd_finish (MMSitClient  *self,
++                                GAsyncResult *res,
++                                GError      **error)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), FALSE);
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++void
++mm_sit_client_cancel_ussd (MMSitClient        *self,
++                           GCancellable       *cancellable,
++                           GAsyncReadyCallback callback,
++                           gpointer            user_data)
++{
++    g_autoptr(GByteArray) request = NULL;
++    GTask                *task;
++
++    task = g_task_new (self, cancellable, callback, user_data);
++    /* Header only -- BuildCancelUssd's frame is 12 bytes. */
++    request = mm_sit_request_new_query (MM_SIT_MESSAGE_CANCEL_USSD,
++                                        mm_sit_client_next_token (self));
++    if (!request) {
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                 "Couldn't build the USSD cancel request");
++        g_object_unref (task);
++        return;
++    }
++    mm_sit_client_command (self, request, 10, cancellable,
++                           (GAsyncReadyCallback) send_ussd_ready, task);
++}
++
++gboolean
++mm_sit_client_cancel_ussd_finish (MMSitClient  *self,
++                                  GAsyncResult *res,
++                                  GError      **error)
++{
++    g_return_val_if_fail (MM_IS_SIT_CLIENT (self), FALSE);
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
+ gboolean
+ mm_sit_client_get_facility_lock_finish (MMSitClient  *self,
+                                         GAsyncResult *res,
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.h b/src/plugins/samsung-sit/mm-sit-client.h
+--- a/src/plugins/samsung-sit/mm-sit-client.h	2026-11-08 12:50:55.706612231 -0500
++++ b/src/plugins/samsung-sit/mm-sit-client.h	2026-11-08 12:30:07.640986279 -0500
+@@ -649,6 +649,23 @@
+                                                GAsyncResult       *res,
+                                                GError            **error);
+ 
++void     mm_sit_client_send_ussd               (MMSitClient        *self,
++                                               const gchar        *ussd,
++                                               GCancellable       *cancellable,
++                                               GAsyncReadyCallback callback,
++                                               gpointer            user_data);
++gboolean mm_sit_client_send_ussd_finish        (MMSitClient        *self,
++                                               GAsyncResult       *res,
++                                               GError            **error);
++
++void     mm_sit_client_cancel_ussd             (MMSitClient        *self,
++                                               GCancellable       *cancellable,
++                                               GAsyncReadyCallback callback,
++                                               gpointer            user_data);
++gboolean mm_sit_client_cancel_ussd_finish      (MMSitClient        *self,
++                                               GAsyncResult       *res,
++                                               GError            **error);
++
+ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMSitClient, g_object_unref)
+ 
+ #endif /* MM_SIT_CLIENT_H */
+diff -ruN a/src/plugins/samsung-sit/mm-sit-protocol.h b/src/plugins/samsung-sit/mm-sit-protocol.h
+--- a/src/plugins/samsung-sit/mm-sit-protocol.h	2026-11-08 12:50:55.685160404 -0500
++++ b/src/plugins/samsung-sit/mm-sit-protocol.h	2026-11-08 12:29:12.789697502 -0500
+@@ -33,6 +33,21 @@
+ #define MM_SIT_IPV4_STRLEN          16
+ #define MM_SIT_IPV6_STRLEN          46
+ 
++/*
++ * The mode an ON_USSD indication reports, as the u32 at frame+8 -- the slot a
++ * response uses for its status. Values are RIL's: logcat printed
++ * "UNSOL_ON_USSD 4" for the capture where the network rejected the code, and
++ * the dialler turned that into onUssdFinishedError.
++ */
++typedef enum {
++    MM_SIT_USSD_MODE_NOTIFY        = 0,
++    MM_SIT_USSD_MODE_REQUEST       = 1,
++    MM_SIT_USSD_MODE_NW_RELEASE    = 2,
++    MM_SIT_USSD_MODE_LOCAL_CLIENT  = 3,
++    MM_SIT_USSD_MODE_NOT_SUPPORTED = 4,
++    MM_SIT_USSD_MODE_NW_TIMEOUT    = 5,
++} MMSitUssdMode;
++
+ typedef enum {
+     MM_SIT_MESSAGE_TYPE_REQUEST    = 0,
+     MM_SIT_MESSAGE_TYPE_RESPONSE   = 1,
+@@ -86,6 +101,16 @@
+     MM_SIT_MESSAGE_GET_MANUAL_BAND_MODE        = 0x0730,
+     MM_SIT_MESSAGE_SET_MANUAL_BAND_MODE        = 0x0731,
+     MM_SIT_MESSAGE_GET_BASE_BAND_VERSION       = 0x0901,
++    /*
++     * Supplementary services. Ids read off ProtocolCallBuilder in
++     * vendor.radio.protocol.sit.stream.so, each of which loads its own as an
++     * inline immediate: BuildSendUssd and BuildSendEncodedUssd both use
++     * 0x0505, BuildCancelUssd 0x0506. ON_USSD is the matching indication,
++     * captured 2026-11-08.
++     */
++    MM_SIT_MESSAGE_SEND_USSD                   = 0x0505,
++    MM_SIT_MESSAGE_CANCEL_USSD                 = 0x0506,
++    MM_SIT_MESSAGE_ON_USSD                     = 0x0510,
+     MM_SIT_MESSAGE_SETUP_DATA_CALL             = 0x0600,
+     MM_SIT_MESSAGE_DEACTIVATE_DATA_CALL        = 0x0601,
+     MM_SIT_MESSAGE_SET_INITIAL_ATTACH_APN      = 0x0603,
