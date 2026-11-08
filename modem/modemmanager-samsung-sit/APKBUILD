@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=3
+pkgrel=4
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://git.deusch.me/api/v1/repos/pixel-mainline/ModemManager"
 arch="all"
@@ -126,6 +126,7 @@ source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	aims-stop-the-stack-before-starting-it.patch
 	aims-call-waiting-and-live-frame-time.patch
 	uicc-probe-payload-offset.patch
+	carrier-config-directory-from-udev.patch
 "
 builddir="$srcdir/modemmanager"
 
@@ -302,4 +303,5 @@ b718a668f23adfcaaee08e684f8781979643bf50a99e420e57323dc87866ddb80a8b8a2899727d86
 fc80ecf9a5058d0db381ec82c7202e47a379bbcb4620564433153d94d43f4c09f3201d2fc30bce81f9fe0c3a62225b09c62617c43c20d3e80a256b5ad14dbc58  aims-stop-the-stack-before-starting-it.patch
 10da229ad2a7e605e099b558cd1862795e1c43100b39d4d8dd112938b48e4a4e4481e5828f4c4d5129515f7d66b30cb186693d206c58ee87f7e4b30f22836e0c  aims-call-waiting-and-live-frame-time.patch
 416b700b39ecb263840d015640064d292361db92b539bf7fd2c09bd6eb1f25910383aab43b58ecbf8a97d6f5f064d6c06ec81531800856230fa12c59c55059d4  uicc-probe-payload-offset.patch
+472297bb44b986aa026fd6d5c9267bb0e62162e25990a518f97286c18b7663607e12e8fa7c17fc3ed6809a6fd9532c7eb8f68490d703f0f6c64a198ed736266c  carrier-config-directory-from-udev.patch
 "
