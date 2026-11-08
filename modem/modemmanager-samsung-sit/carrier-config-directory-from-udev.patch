@@ -1,0 +1,80 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 00:00:00 +0000
+Subject: [PATCH] samsung-sit: take the carrier-config directory from udev only
+
+The plugin compiled in /lib/firmware/google/s5400/carrierconfig as the
+fallback for where it opens cfg.db. Where a device's vendor blobs land is a
+packaging decision, not something a protocol plugin should know: the aport
+that ships them is the one that knows where they went, and exynos-modem's
+udev rule already sets ID_MM_SIT_CARRIER_CONFIG_DIRECTORY to exactly that
+path. The compiled-in copy was a second, silently diverging source of truth.
+
+So the property becomes the only source. With no property there is no
+database path, which the modem already handles: carrier configuration
+returns MM_CORE_ERROR_NOT_FOUND, "requires a database", and everything
+else about the modem still comes up.
+
+MM_SIT_ANNOUNCED_CARRIER_CONFIG_DIRECTORY stays. It is not a path anything
+reads -- it is the value that goes on the wire in CARRIER_CONFIG_MANIFEST,
+and the frame has to match the vendor RIL byte for byte. There is no
+/vendor on this rootfs at all; exynos-modem's RFS server re-roots whatever
+the CP opens under it onto the real files.
+
+After this the plugin holds no device-specific path: a grep for quoted
+absolute paths finds only that wire constant and /etc/os-release, and
+"komodo" survives only in comments recording where a capture came from.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XzdpD3EoDuxNrEps73GD56
+diff -ruN a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h	2026-11-08 09:02:12.627942591 -0500
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h	2026-11-08 10:52:12.318930475 -0500
+@@ -17,11 +17,14 @@
+  * exynos-modem's RFS server re-roots whatever the CP opens onto the real
+  * files, so nothing has to exist at this path.
+  *
+- * LOCAL is where the plugin itself opens cfg.db, which it has to be able to
+- * read directly. A udev rule may override it for a different layout.
++ * Where the plugin opens cfg.db is deliberately not here. That is a property
++ * of how a particular device packages its vendor blobs, so it comes from the
++ * port's ID_MM_SIT_CARRIER_CONFIG_DIRECTORY and nowhere else; the aport that
++ * ships the blobs is the one that knows where they landed. Without it the
++ * modem still comes up, and the carrier configuration reports that it needs a
++ * database.
+  */
+ #define MM_SIT_ANNOUNCED_CARRIER_CONFIG_DIRECTORY "/vendor/firmware/carrierconfig"
+-#define MM_SIT_DEFAULT_CARRIER_CONFIG_DIRECTORY   "/lib/firmware/google/s5400/carrierconfig"
+ 
+ #define MM_TYPE_BROADBAND_MODEM_SAMSUNG_SIT            (mm_broadband_modem_samsung_sit_get_type ())
+ #define MM_BROADBAND_MODEM_SAMSUNG_SIT(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_MODEM_SAMSUNG_SIT, MMBroadbandModemSamsungSit))
+diff -ruN a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
+--- a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c	2026-11-08 09:02:12.614621885 -0500
++++ b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c	2026-11-08 10:52:12.318957495 -0500
+@@ -25,7 +25,7 @@
+               GError       **error)
+ {
+     g_autofree gchar *database = NULL;
+-    const gchar      *directory = MM_SIT_DEFAULT_CARRIER_CONFIG_DIRECTORY;
++    const gchar      *directory = NULL;
+     gboolean          use_proxy = FALSE;
+     gint              logical_stack = -1;
+     GList            *l;
+@@ -44,6 +44,8 @@
+         if (!mm_port_probe_is_sit (probe))
+             continue;
+         port = mm_port_probe_peek_port (probe);
++        /* The only source for this: no path to a device's vendor blobs is
++         * compiled in. */
+         configured_directory = mm_kernel_device_get_property (
+             port, "ID_MM_SIT_CARRIER_CONFIG_DIRECTORY");
+         if (configured_directory && configured_directory[0])
+@@ -67,7 +69,8 @@
+         break;
+     }
+ 
+-    database = g_build_filename (directory, "cfg.db", NULL);
++    if (directory)
++        database = g_build_filename (directory, "cfg.db", NULL);
+     return MM_BASE_MODEM (mm_broadband_modem_samsung_sit_new (
+         uid, physdev, drivers, mm_plugin_get_name (self), vendor, product, database,
+         use_proxy, logical_stack));
