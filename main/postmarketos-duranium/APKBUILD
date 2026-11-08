@@ -160,7 +160,7 @@ initramfs() {
 }
 
 sysext_dev_tools() {
-	description="meta package for Duranium Developer Tools system extension"
+	pkgdesc="meta package for Duranium Developer Tools system extension"
 	depends=""
 
 	# android development
@@ -234,7 +234,7 @@ sysext_dev_tools() {
 }
 
 sysext_waydroid() {
-	description="meta package for Duranium waydroid system extension"
+	pkgdesc="meta package for Duranium waydroid system extension"
 	depends="
 		waydroid
 		waydroid-nftrules
