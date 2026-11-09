@@ -347,6 +347,7 @@ RTW89_8852CU = "m"
 ["category:nfc".">=0.0.0"."all"]
 NFC = "m"
 NFC_HCI = "m"
+NFC_PN532_UART = "m"
 NFC_PN533_I2C = "m"
 NFC_PN533_USB = "m"
 NFC_PN544_I2C = "m"
