@@ -47,10 +47,15 @@ choose to block the merge request to wait for co-maintainer review beyond the
 
 #### Package with idle maintainer(s)
 
-If no package maintainer replies within two weeks from the time the MR was
-opened, then any two approvals are required. When you merge a MR with no
-maintainer response, open a
-[maintainership status issue](https://gitlab.nura.eco/nura/pmaports/-/issues/new?description_template=Maintainership_status_of_package).
+Wait two weeks for the maintainer(s) to respond to the MR, unless they are on
+hiatus, which is defined as either:
+* They are known to be gone without saying when they will come back.
+* They are on a planned leave for a month or longer.
+
+If there is no maintainer reponse:
+* Require two approvals by any team members.
+* If maintainer(s) are not on a planned leave, open a [maintainership status
+  issue](https://gitlab.nura.eco/nura/pmaports/-/issues/new?description_template=Maintainership_status_of_package).
 
 ### Move device from category
 
