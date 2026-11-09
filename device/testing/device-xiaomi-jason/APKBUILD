@@ -1,0 +1,38 @@
+maintainer="Zunway Liang <zunway@outlook.com>"
+pkgname=device-xiaomi-jason
+pkgdesc="Xiaomi Mi Note 3"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools-mkbootimg
+	firmware-qcom-adreno-a530
+	firmware-xiaomi-jason
+	linux-postmarketos-qcom-sdm660
+	msm-firmware-loader
+	postmarketos-base
+	soc-qcom-sdm660
+	soc-qcom-sdm660-rproc
+	systemd-boot
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	modules-initfs
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+55e706b288fcc1e43648e4dfad11657a9f7d913e8ea9b30399a2371dbdeccf4622bd043cd48f45c9bb6d5f5407dd8bc273a317353d57a9a49a620d837270ece2  deviceinfo
+8c0b249c31bce8b7099544bdbedf90560990b8b1b7fd39b3919c2a86ae2b45f80586ffa8a9ddab16872575c8625789d02ea0a68d844dd5e953c92fd364422a42  modules-initfs
+"
