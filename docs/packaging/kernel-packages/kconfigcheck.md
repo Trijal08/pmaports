@@ -86,4 +86,4 @@ members of the kconfigcheck team in GitLab. The team can be pinged on merge
 requests via `@teams/kconfigcheck`. Trivial changes that are not expected to
 break any usecases and don't conflict with our policies can be merged with
 approval of one team member. Any other, nontrivial changes require approval of
-all team members.
+all team members, except for members on an indefinite hiatus.
