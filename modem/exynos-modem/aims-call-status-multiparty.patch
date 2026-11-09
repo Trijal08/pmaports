@@ -1,0 +1,90 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 00:00:00 +0000
+Subject: [PATCH] aims: report multiparty and the party count from CALL_STATUS
+
+parse_call_status() already read both -- it has to, to skip the variable
+member list that precedes the fixed tail -- and then dropped them on the
+floor. Without them the plugin cannot tell a conference from an ordinary
+call, which is what it needs in order to report either correctly.
+
+Measured on hardware. After a merge the CP makes a pseudo-call of its own
+for the conference and marks it multiparty with a party count, while the legs
+it swallowed are reported multiparty too but with a count of zero:
+
+    id=1 state=1 mp=0 users=0   leg, held by our own op 1
+    id=2 state=0 mp=1 users=2   the conference: new id, ACTIVE
+    id=1 state=6 mp=1 users=0   that leg released
+    id=2 state=0 mp=1 users=2   conference still up
+
+So the count is what tells a conference from a member, and nothing else in
+the frame does.
+
+Both fields are appended after connected_number rather than placed beside
+state, so every existing field keeps its offset and a plugin built against
+the older header still reads the struct correctly.
+diff -ruN a/crates/samsung-aims/src/call.rs b/crates/samsung-aims/src/call.rs
+--- a/crates/samsung-aims/src/call.rs	2026-11-09 17:23:49.966211928 -0500
++++ b/crates/samsung-aims/src/call.rs	2026-11-09 18:16:01.582334571 -0500
+@@ -269,6 +269,12 @@
+     /// The far end as finally connected, when the CP reports it separately from
+     /// the dialled number.
+     pub connected_number: String,
++    /// Set once this call is a conference, or a leg merged into one. The CP
++    /// makes a pseudo-call of its own for the conference and reports the legs
++    /// as held; see the plugin's call-list reporting.
++    pub multiparty: bool,
++    /// How many parties the conference has. Zero unless `multiparty`.
++    pub user_count: u8,
+ }
+ 
+ /// Parse `CALL_STATUS` (0x0d04).
+@@ -298,6 +304,8 @@
+         call_type,
+         call_id,
+         state,
++        multiparty,
++        user_count,
+         state_reason,
+         end_cause,
+         media_direction,
+diff -ruN a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 17:23:49.966299478 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 18:16:27.055004897 -0500
+@@ -386,6 +386,14 @@
+     uint8_t end_cause;
+     uint16_t media_direction;
+     char connected_number[AIMS_MAX_NUMBER];
++    /*
++     Non-zero once this call is a conference, or a leg merged into one.
++     */
++    uint8_t multiparty;
++    /*
++     Parties in the conference; zero unless `multiparty`.
++     */
++    uint8_t user_count;
+ } SamsungAimsCallStatus;
+ 
+ /*
+diff -ruN a/crates/samsung-sit-ffi/src/aims.rs b/crates/samsung-sit-ffi/src/aims.rs
+--- a/crates/samsung-sit-ffi/src/aims.rs	2026-11-09 17:23:49.966350688 -0500
++++ b/crates/samsung-sit-ffi/src/aims.rs	2026-11-09 18:16:26.744294424 -0500
+@@ -120,6 +120,10 @@
+     pub end_cause: u8,
+     pub media_direction: u16,
+     pub connected_number: [c_char; AIMS_MAX_NUMBER],
++    /// Non-zero once this call is a conference, or a leg merged into one.
++    pub multiparty: u8,
++    /// Parties in the conference; zero unless `multiparty`.
++    pub user_count: u8,
+ }
+ 
+ /// A set of frames a single logical request became. Freed with
+@@ -624,6 +628,8 @@
+             o.end_cause = s.end_cause;
+             o.media_direction = s.media_direction;
+             copy_cstr(&mut o.connected_number, &s.connected_number);
++            o.multiparty = u8::from(s.multiparty);
++            o.user_count = s.user_count;
+             SamsungSitStatus::Ok
+         }
+         Err(e) => status_from_err(&e),

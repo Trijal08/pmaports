@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=4
+pkgrel=5
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -59,6 +59,7 @@ source="
 	ims-config-three-pushes-like-stock.patch
 	aims-emergency-location-document.patch
 	aims-call-manage.patch
+	aims-call-status-multiparty.patch
 	caimito-modem-setup.sh
 	pixel-modem-stage.service
 	exynos-modem.service
@@ -243,6 +244,7 @@ f996fec23a2875ef031ec623e9c2fb574908967167491520614cbde5188e875533cf2039ff8128e9
 c275853ce0f5b63edacbeaf598e44f5ad8b96b7842803209b8713812d93ddb061263d9790574684572198475045bc0f55edcfae0925b1df1a4cf3946142053e0  ims-config-three-pushes-like-stock.patch
 b7f86a8b3a1fbeabac4bf095705a928d01e0a26940649e2412608e99cdf292385a5cfeb6b3e744ec305a360745064f9bb2eed57bd529f892f117a1cf524261a5  aims-emergency-location-document.patch
 b09b3aba27e6f36da52d5c03ad1185b7af77a46409b3bd6592310bf19086aca311b1c336861661550ffd2a566a7bb2813b85d9d64bdefc9c361a35121084f149  aims-call-manage.patch
+238c267e88747235d0650c45385c45ee7289823f686cc282dfc03e6bc3a38b57c385245e68bb3538da939cb9182814fa7eac8975e7f93a062b1cf890af6e98d2  aims-call-status-multiparty.patch
 f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
 582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
 872284e112edf8f7d834b91e6c82e2bc6bfa04119daf04af568c2aaef7defe17ac2ef92ca075938aa6159115ab709551554136f738b4ad3d6f2a389ec109cbe9  exynos-modem.service
