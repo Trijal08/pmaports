@@ -1,0 +1,170 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Date: Sun, 9 Nov 2026 00:00:00 +0000
+Subject: [PATCH] aims: build CALL_MANAGE, for hold, resume and conference
+
+CALL_MANAGE (0x0d09) was named in the id table and nothing built it, so hold,
+resume and merging into a conference had no wire at all.
+
+Decoded from a capture of this device's own Android rather than from
+ShannonIms: the capture was taken one pressed button at a time against a
+baseline containing no 0x0d09 whatsoever, so every frame is attributable to
+one action. Two payload bytes, the operation then the call it applies to:
+
+    op 01 call 0   hold
+    op 02 call 0   resume
+    op 01 call 0   auto-hold when a second call was added
+    op 01 call 1   hold the active second call...
+    op 06 call ff  ...then merge, 0.38 s later
+    op 01 call 2   hold the surviving call after the other leg hung up
+    op 02 call 2   resume it
+
+So op 1 is hold, op 2 resume, op 6 conference, and a conference is addressed
+to call id 0xff -- every call -- rather than to a particular one.
+
+**A merge is two frames.** The dialler holds the active call and only then
+sends the conference; a bare op 6 never appears on the wire. That is written
+on the builder because it is the kind of thing a caller gets wrong, and
+reading the APK would not have revealed it.
+
+The FFI rejects any other operation rather than passing it through, since the
+remaining ones -- split, swap of two established calls, hangup-all, UDUB,
+transfer -- are not captured yet and their numbering is unknown.
+
+A test pins all four frames byte for byte against the capture.
+diff -ruN a/crates/samsung-aims/src/call.rs b/crates/samsung-aims/src/call.rs
+--- a/crates/samsung-aims/src/call.rs	2026-11-09 17:22:50.252444443 -0500
++++ b/crates/samsung-aims/src/call.rs	2026-11-09 17:23:09.874158804 -0500
+@@ -140,6 +140,35 @@
+     )
+ }
+ 
++/// What `CALL_MANAGE` (0x0d09) is being asked to do, in the CP's numbering.
++///
++/// Decoded from a capture of this device's own Android, one pressed button at
++/// a time against a baseline with no `CALL_MANAGE` in it at all, so each value
++/// is attributable to one action rather than inferred from the APK.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum CallManageOp {
++    /// Put the named call on hold.
++    Hold = 1,
++    /// Take the named call off hold.
++    Resume = 2,
++    /// Merge everything into a multiparty call. Takes [`CALL_ID_ALL`].
++    Conference = 6,
++}
++
++/// The call id `Conference` is addressed to: every call, not a particular one.
++pub const CALL_ID_ALL: u8 = 0xff;
++
++/// `CALL_MANAGE` (0x0d09) -- hold, resume, or merge into a conference.
++///
++/// Two bytes: the operation, then the call it applies to.
++///
++/// **A merge is two frames, not one.** The captured dialler holds the active
++/// call and only then sends `Conference`, 0.38 s later; a bare `Conference`
++/// was never seen on the wire. Callers should reproduce the pair.
++pub fn build_call_manage(token: u16, op: CallManageOp, call_id: u8) -> Vec<u8> {
++    frame(msg_id::CALL_MANAGE, token, &[op as u8, call_id])
++}
++
+ /// Which half of a key press `SEND_DTMF` carries, in the CP's own numbering.
+ ///
+ /// `ImsCall` picks between them: `sendDtmf` sends [`DtmfType::Burst`] and lets
+@@ -341,6 +370,27 @@
+ 
+ #[cfg(test)]
+ mod tests {
++
++    /// The frames the captured Android dialler sent, byte for byte. Hold and
++    /// resume name a call; a conference is addressed to every call.
++    #[test]
++    fn call_manage_matches_the_capture() {
++        let hold = build_call_manage(0x0001, CallManageOp::Hold, 0);
++        assert_eq!(u16::from_le_bytes([hold[4], hold[5]]), 14);
++        assert_eq!(&hold[2..4], &msg_id::CALL_MANAGE.to_le_bytes());
++        assert_eq!(&hold[12..14], &[0x01, 0x00]);
++
++        let resume = build_call_manage(0x0002, CallManageOp::Resume, 0);
++        assert_eq!(&resume[12..14], &[0x02, 0x00]);
++
++        // The second leg was held by id before the merge.
++        let hold1 = build_call_manage(0x0003, CallManageOp::Hold, 1);
++        assert_eq!(&hold1[12..14], &[0x01, 0x01]);
++
++        let conf = build_call_manage(0x0004, CallManageOp::Conference, CALL_ID_ALL);
++        assert_eq!(&conf[12..14], &[0x06, 0xff]);
++    }
++
+     use super::*;
+ 
+     /// The captured dial is 691 bytes with the number in the clear at a fixed
+diff -ruN a/crates/samsung-aims/src/lib.rs b/crates/samsung-aims/src/lib.rs
+--- a/crates/samsung-aims/src/lib.rs	2026-11-09 17:22:50.267858386 -0500
++++ b/crates/samsung-aims/src/lib.rs	2026-11-09 17:23:09.874193624 -0500
+@@ -31,6 +31,7 @@
+ pub mod registration;
+ 
+ pub use call::{
++    build_call_manage, CallManageOp, CALL_ID_ALL,
+     build_answer, build_dial, build_hangup, parse_call_ring, parse_call_status, CallRing,
+     CallState, CallStatus, Clir,
+ };
+diff -ruN a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 17:22:50.267986606 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 17:23:17.449692656 -0500
+@@ -965,6 +965,19 @@
+                                            size_t *out_len);
+ 
+ /*
++ `CALL_MANAGE` (0x0d09) -- hold, resume, or merge into a conference.
++
++ `op` is 1 hold, 2 resume, 6 conference. A conference is addressed to call
++ id 0xff, every call. The captured dialler holds the active call and only
++ then sends the conference, so send the pair rather than the merge alone.
++ */
++SamsungSitStatus samsung_aims_build_call_manage(uint16_t token,
++                                                uint8_t op,
++                                                uint8_t call_id,
++                                                uint8_t **out,
++                                                size_t *out_len);
++
++/*
+  `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
+ 
+  `kind` is 0 for one self-timed tone, 1 for key down and 2 for key up.
+diff -ruN a/crates/samsung-sit-ffi/src/aims.rs b/crates/samsung-sit-ffi/src/aims.rs
+--- a/crates/samsung-sit-ffi/src/aims.rs	2026-11-09 17:22:50.268046486 -0500
++++ b/crates/samsung-sit-ffi/src/aims.rs	2026-11-09 17:23:09.874220864 -0500
+@@ -427,6 +427,32 @@
+     )
+ }
+ 
++/// `CALL_MANAGE` (0x0d09) -- hold, resume, or merge into a conference.
++///
++/// `op` is 1 hold, 2 resume, 6 conference. A conference is addressed to call
++/// id 0xff, every call. The captured dialler holds the active call and only
++/// then sends the conference, so send the pair rather than the merge alone.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_call_manage(
++    token: u16,
++    op: u8,
++    call_id: u8,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let op = match op {
++        1 => aims::CallManageOp::Hold,
++        2 => aims::CallManageOp::Resume,
++        6 => aims::CallManageOp::Conference,
++        _ => return SamsungSitStatus::ArgOutOfRange,
++    };
++    emit_result(
++        Ok(aims::build_call_manage(token, op, call_id)),
++        out,
++        out_len,
++    )
++}
++
+ /// `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
+ ///
+ /// `kind` is 0 for one self-timed tone, 1 for key down and 2 for key up.
