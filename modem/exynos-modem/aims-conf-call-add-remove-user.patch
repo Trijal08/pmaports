@@ -1,0 +1,261 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Subject: [PATCH] samsung-aims: drop one conference member at a time
+
+A HANGUP aimed at a leg the CP has swallowed into a conference is
+dropped without an answer, and one aimed at the conference ends the
+whole call -- so neither can hang up a single member. The captured
+Android dialler uses CONF_CALL_ADD_REMOVE_USER (0x0d12) instead: one
+frame, REMOVE, the conference's call id, and the member named by both
+its own call id and its number. The CP answered status 0 and republished
+the conference with its party count down by one.
+
+Layout from RilReqConfCallAddRemoveUser.getBytes() in ShannonIms.apk,
+and the test reproduces the captured 534-byte frame byte for byte.
+
+diff --git a/crates/samsung-aims/src/call.rs b/crates/samsung-aims/src/call.rs
+--- a/crates/samsung-aims/src/call.rs	2026-11-09 18:30:53.954499666 -0500
++++ b/crates/samsung-aims/src/call.rs	2026-11-09 18:32:10.007750761 -0500
+@@ -169,6 +169,75 @@
+     frame(msg_id::CALL_MANAGE, token, &[op as u8, call_id])
+ }
+ 
++/// What `CONF_CALL_ADD_REMOVE_USER` (0x0d12) does to the named participants,
++/// from `RilReqConfCallAddRemoveUser$OperationType` in `ShannonIms.apk`.
++///
++/// The enum has a third value, `NULL_OPERATION` (0xf), which nothing in the
++/// APK ever sets -- so it is not modelled here.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ConfCallOp {
++    /// Invite a participant into an established conference.
++    Add = 0,
++    /// Drop a participant, leaving the conference up for everybody else.
++    Remove = 1,
++}
++
++/// One participant of a `CONF_CALL_ADD_REMOVE_USER`: a call id *and* the
++/// number. The CP is given both; `RilReqConfCallAddRemoveUser$Participant`
++/// has no way to name one without the other.
++#[derive(Debug, Clone, Copy)]
++pub struct ConfParticipant<'a> {
++    pub call_id: u8,
++    pub number: &'a str,
++}
++
++/// `CONF_CALL_ADD_REMOVE_USER` (0x0d12) -- add or drop conference members
++/// without disturbing the rest of the call.
++///
++/// Layout from `RilReqConfCallAddRemoveUser.getBytes()`: the operation and the
++/// *conference's* call id one byte each, then a `u16` count, then one record
++/// per participant of `u32 number_len`, `u8 call_id` and the number in the
++/// same fixed 513-byte field a dial uses.
++///
++/// This is how a member is hung up one at a time. A plain [`build_hangup`]
++/// aimed at a swallowed leg is silently dropped by the CP -- the leg is no
++/// longer a call it will take orders about -- and one aimed at the conference
++/// ends the whole thing. The captured dialler dropped a single member of a
++/// two-party conference with exactly one of these, and the CP answered
++/// `status 0` and then republished the conference with its party count down
++/// by one.
++pub fn build_conf_call_add_remove_user(
++    token: u16,
++    op: ConfCallOp,
++    conf_call_id: u8,
++    participants: &[ConfParticipant<'_>],
++) -> Result<Vec<u8>, SitError> {
++    if participants.is_empty() {
++        return Err(SitError::Malformed("conference change with no participant"));
++    }
++    if participants.len() > u16::MAX as usize {
++        return Err(SitError::ArgTooLong("conference participant list"));
++    }
++    let mut p = Vec::with_capacity(4 + participants.len() * (5 + NUM_FIELD));
++    p.push(op as u8);
++    p.push(conf_call_id);
++    p.extend_from_slice(&(participants.len() as u16).to_le_bytes());
++    for member in participants {
++        if member.number.is_empty() {
++            return Err(SitError::Malformed("conference participant with no number"));
++        }
++        if member.number.len() > NUM_FIELD {
++            return Err(SitError::ArgTooLong("conference participant number"));
++        }
++        p.extend_from_slice(&(member.number.len() as u32).to_le_bytes());
++        p.push(member.call_id);
++        let mut num = [0u8; NUM_FIELD];
++        num[..member.number.len()].copy_from_slice(member.number.as_bytes());
++        p.extend_from_slice(&num);
++    }
++    Ok(frame(msg_id::CONF_CALL_ADD_REMOVE_USER, token, &p))
++}
++
+ /// Which half of a key press `SEND_DTMF` carries, in the CP's own numbering.
+ ///
+ /// `ImsCall` picks between them: `sendDtmf` sends [`DtmfType::Burst`] and lets
+@@ -399,6 +468,50 @@
+         assert_eq!(&conf[12..14], &[0x06, 0xff]);
+     }
+ 
++    #[test]
++    fn conf_call_remove_matches_the_capture() {
++        // The one frame Android sent to drop a member of a two-party
++        // conference, at 407.48 s of the call capture: REMOVE, conference
++        // call id 2, one participant -- leg 1, "18004377950".
++        let f = build_conf_call_add_remove_user(
++            0x03de,
++            ConfCallOp::Remove,
++            2,
++            &[ConfParticipant {
++                call_id: 1,
++                number: "18004377950",
++            }],
++        )
++        .unwrap();
++
++        assert_eq!(&f[2..4], &msg_id::CONF_CALL_ADD_REMOVE_USER.to_le_bytes());
++        assert_eq!(u16::from_le_bytes([f[4], f[5]]), 534);
++        assert_eq!(f.len(), 534);
++        assert_eq!(u16::from_le_bytes([f[6], f[7]]), 0x03de);
++
++        let p = payload_of(&f, false).unwrap();
++        assert_eq!(&p[..4], &[0x01, 0x02, 0x01, 0x00]);
++        assert_eq!(&p[4..8], &11u32.to_le_bytes());
++        assert_eq!(p[8], 1);
++        assert_eq!(&p[9..20], b"18004377950");
++        // The number field is fixed at 513 bytes and zero-padded, so the
++        // record -- and the payload -- end where the capture's did.
++        assert!(p[20..].iter().all(|&b| b == 0));
++        assert_eq!(p.len(), 4 + 4 + 1 + NUM_FIELD);
++    }
++
++    #[test]
++    fn conf_call_change_needs_a_participant() {
++        assert!(build_conf_call_add_remove_user(1, ConfCallOp::Remove, 2, &[]).is_err());
++        assert!(build_conf_call_add_remove_user(
++            1,
++            ConfCallOp::Add,
++            2,
++            &[ConfParticipant { call_id: 1, number: "" }],
++        )
++        .is_err());
++    }
++
+     use super::*;
+ 
+     /// The captured dial is 691 bytes with the number in the clear at a fixed
+diff --git a/crates/samsung-aims/src/lib.rs b/crates/samsung-aims/src/lib.rs
+--- a/crates/samsung-aims/src/lib.rs	2026-11-09 18:30:53.954059281 -0500
++++ b/crates/samsung-aims/src/lib.rs	2026-11-09 18:31:50.751803069 -0500
+@@ -32,6 +32,7 @@
+ 
+ pub use call::{
+     build_call_manage, CallManageOp, CALL_ID_ALL,
++    build_conf_call_add_remove_user, ConfCallOp, ConfParticipant,
+     build_answer, build_dial, build_hangup, parse_call_ring, parse_call_status, CallRing,
+     CallState, CallStatus, Clir,
+ };
+@@ -56,6 +57,7 @@
+     pub const SEND_DTMF: u16 = 0x0d0a;
+     pub const SET_FRAME_TIME: u16 = 0x0d0b;
+     pub const GET_FRAME_TIME: u16 = 0x0d0c;
++    pub const CONF_CALL_ADD_REMOVE_USER: u16 = 0x0d12;
+     pub const SET_CALL_WAITING: u16 = 0x0d17;
+     pub const MEDIA_STATE_IND: u16 = 0x0d30;
+     pub const SET_HIDDEN_MENU_ITEM: u16 = 0x0d36;
+@@ -110,6 +112,7 @@
+         m::SEND_DTMF => "AIMS_SEND_DTMF",
+         m::SET_FRAME_TIME => "AIMS_SET_FRAME_TIME",
+         m::GET_FRAME_TIME => "AIMS_GET_FRAME_TIME",
++        m::CONF_CALL_ADD_REMOVE_USER => "AIMS_CONF_CALL_ADD_REMOVE_USER",
+         m::SET_CALL_WAITING => "AIMS_SET_CALL_WAITING",
+         m::MEDIA_STATE_IND => "AIMS_MEDIA_STATE_IND",
+         m::SET_HIDDEN_MENU_ITEM => "AIMS_SET_HIDDEN_MENU_ITEM",
+diff --git a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 18:30:53.954563666 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 18:32:48.162528899 -0500
+@@ -986,6 +986,29 @@
+                                                 size_t *out_len);
+ 
+ /*
++ `CONF_CALL_ADD_REMOVE_USER` (0x0d12) -- add or drop one conference member
++ while leaving the conference up for everybody else.
++
++ `op` is 0 add, 1 remove. `conf_call_id` is the *conference's* call id, and
++ the member is named by both its own call id and its number, because the
++ vendor layout carries both.
++
++ This is how a member is hung up one at a time. `samsung_aims_build_hangup`
++ aimed at a swallowed leg is dropped by the CP without an answer, and aimed
++ at the conference it ends the whole call.
++
++ Only one participant per frame: that is all the captured dialler ever sent,
++ and the count field is written accordingly.
++ */
++SamsungSitStatus samsung_aims_build_conf_call_add_remove_user(uint16_t token,
++                                                              uint8_t op,
++                                                              uint8_t conf_call_id,
++                                                              uint8_t member_call_id,
++                                                              const char *member_number,
++                                                              uint8_t **out,
++                                                              size_t *out_len);
++
++/*
+  `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
+ 
+  `kind` is 0 for one self-timed tone, 1 for key down and 2 for key up.
+diff --git a/crates/samsung-sit-ffi/src/aims.rs b/crates/samsung-sit-ffi/src/aims.rs
+--- a/crates/samsung-sit-ffi/src/aims.rs	2026-11-09 18:30:53.954619447 -0500
++++ b/crates/samsung-sit-ffi/src/aims.rs	2026-11-09 18:32:44.764092062 -0500
+@@ -457,6 +457,53 @@
+     )
+ }
+ 
++/// `CONF_CALL_ADD_REMOVE_USER` (0x0d12) -- add or drop one conference member
++/// while leaving the conference up for everybody else.
++///
++/// `op` is 0 add, 1 remove. `conf_call_id` is the *conference's* call id, and
++/// the member is named by both its own call id and its number, because the
++/// vendor layout carries both.
++///
++/// This is how a member is hung up one at a time. `samsung_aims_build_hangup`
++/// aimed at a swallowed leg is dropped by the CP without an answer, and aimed
++/// at the conference it ends the whole call.
++///
++/// Only one participant per frame: that is all the captured dialler ever sent,
++/// and the count field is written accordingly.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_aims_build_conf_call_add_remove_user(
++    token: u16,
++    op: u8,
++    conf_call_id: u8,
++    member_call_id: u8,
++    member_number: *const c_char,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let op = match op {
++        0 => aims::ConfCallOp::Add,
++        1 => aims::ConfCallOp::Remove,
++        _ => return SamsungSitStatus::ArgOutOfRange,
++    };
++    let number = match crate::cstr(member_number) {
++        Ok(n) => n,
++        Err(s) => return s,
++    };
++    emit_result(
++        aims::build_conf_call_add_remove_user(
++            token,
++            op,
++            conf_call_id,
++            &[aims::ConfParticipant {
++                call_id: member_call_id,
++                number,
++            }],
++        ),
++        out,
++        out_len,
++    )
++}
++
+ /// `SEND_DTMF` (0x0d0a) -- press or release a DTMF key on an established call.
+ ///
+ /// `kind` is 0 for one self-timed tone, 1 for key down and 2 for key up.
