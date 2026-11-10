@@ -2,7 +2,7 @@
 maintainer="Steffen Deusch <steffen@deusch.me>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260829
-pkgrel=25
+pkgrel=26
 pkgdesc="ModemManager with Samsung SIT modem support"
 url="https://github.com/Trijal08/ModemManager"
 arch="all"
@@ -44,7 +44,7 @@ subpackages="
 	$pkgname-udev
 "
 
-_commit="d845cfdacc0f22036cb9117f1e66fbd394d0eef9"
+_commit="3ce3414964cd047f3d1e322acb411316e673cf66"
 source="modemmanager-$_commit.tar.gz::$url/archive/$_commit.tar.gz
 	modemmanager.rules
 	modemmanager.initd
@@ -145,7 +145,7 @@ udev() {
 
 
 sha512sums="
-6502cc9034a3ed75ff3c4e73035a53f60a206fa277bd11427b2ee54464d06c97d39b178f50f3ba3f178bd5ef745c728301d4ca7b39fc3ca1c7ac43bc0ab5972b  modemmanager-d845cfdacc0f22036cb9117f1e66fbd394d0eef9.tar.gz
+089ed766b3b90e31221689bcc528de7aaebbc1e66ce8d78e98856b9653e2beb1d9ddcdb9a68688390a218663f6ad5965870b5ca2c7bd97445f25dfac12735057  modemmanager-3ce3414964cd047f3d1e322acb411316e673cf66.tar.gz
 f3d8fb295532fee246a8e56ceaee896216796777358cfdc12f195fea7e3690253849fb7ba7587985474c47dbc23ddcadff99af5ca7fa4b06895343df2056fc61  modemmanager.rules
 6e234cebcdec6d1afbca164ee5c13c96f7132ef31231d5c043cc5750ebe99e362a384d0463874b3c1c30799b433e0d3286add03af13c97fa406b4b5d2b78880c  modemmanager.initd
 2aa8283c545504be77a64085045717d706549f3971dd5170a6cc5b441c34cd899e84aff31201cd7afbfcdf093e6971e70af724b3e9792f8e24ec8b1f1b408a0a  zz-debug.conf
