@@ -1,0 +1,23 @@
+{
+  "name": "google,tokay",
+  "parent-name": "default",
+  "profiles": [
+    {
+      "name": "quiet",
+      "feedbacks": [
+        {
+          "event-name": "button-pressed",
+          "type": "VibraPattern",
+          "magnitudes": [0.15],
+          "durations": [2]
+        },
+        {
+          "event-name": "key-pressed",
+          "type": "VibraPattern",
+          "magnitudes": [0.15],
+          "durations": [2]
+        }
+      ]
+    }
+  ]
+}

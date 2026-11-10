@@ -2,7 +2,7 @@ maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=device-google-caiman
 pkgdesc="Google Pixel 9 Pro"
 pkgver=1
-pkgrel=0
+pkgrel=1
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -16,6 +16,7 @@ depends="
 	firmware-google-caiman-modem
 	firmware-google-caiman-aoc
 	firmware-google-caiman-audio
+	firmware-google-caiman-haptics
 	firmware-google-caiman-mfc
 	linux-firmware-arm
 	linux-firmware-cirrus
@@ -50,11 +51,13 @@ depends="$depends
 "
 
 makedepends="devicepkg-dev"
-subpackages="$pkgname-audio $pkgname-cutouts"
+subpackages="$pkgname-audio $pkgname-cutouts $pkgname-haptics"
 source="
 	deviceinfo
 	kernel-cmdline.conf
 	gmobile-cutout.conf
+	feedbackd-cirrus.rules
+	feedbackd-theme.json
 "
 
 build() {
@@ -63,6 +66,13 @@ build() {
 
 package() {
 	devicepkg_package $startdir $pkgname
+
+	# Identify the haptic driver to feedbackd and hand the seat's user access
+	# to it. Unconditional because it names the hardware and sets its
+	# permissions, which anything driving force feedback needs, not only the
+	# shell; the tuning that depends on a shell is in the subpackage below.
+	install -Dm644 "$srcdir"/feedbackd-cirrus.rules \
+		"$pkgdir"/usr/lib/udev/rules.d/72-feedbackd-cirrus.rules
 }
 
 # Audio, the way the PinePhone's device package carries it: only pulled in once
@@ -111,8 +121,28 @@ cutouts() {
 		> "$subpkgdir"/etc/environment.d/90-gmobile-cutouts.conf
 }
 
+# How hard the LRA is driven for UI feedback. feedbackd's stock theme asks for
+# a fifth of full scale for seven milliseconds, which on this actuator is a
+# blunt thud; these are the values the hardware was tuned to in use -- a short,
+# light tick. The override goes in the "quiet" profile because that is where
+# the stock theme puts its vibra feedbacks and the "full" profile inherits
+# them -- overriding "full" instead changes nothing.
+#
+# Named after the first device tree compatible, which is how feedbackd looks a
+# device theme up. That name carries a comma and abuild forbids one in a source
+# file name, so the file is carried under a plain name and renamed on the way in.
+haptics() {
+	install_if="$pkgname=$pkgver-r$pkgrel feedbackd"
+	pkgdesc="$pkgdesc (haptic feedback tuning)"
+
+	install -Dm644 "$srcdir"/feedbackd-theme.json \
+		"$subpkgdir"/usr/share/feedbackd/themes/google,caiman.json
+}
+
 sha512sums="
 229a3aea30ce1f7e59e99eedee6aee0b7685a3a811777040a4b521973b5dcc8361ae7ead8a81fcf4caa6484bcfb1413331e680751c6d5b8411cb4ca1ebae8db4  deviceinfo
 6424780d7eced6f3256f8aa6a27fb217470e08226f15ebb294534477e56572e2b00edff49e66a65bfda13a4aaa204ac407aca71f65a65c23cdeab0f85fddfcc1  kernel-cmdline.conf
 65dfcbed8fa924925b6a88e0f1ebc2025a8d8e3ccc4f7df2098afeab8fda9073ee8f61842b5772b3c03c3022ca1ac7ccf8e06f87e19c2059df33c503468cdb93  gmobile-cutout.conf
+0da8b49e2ea613a926ad372125df22d9658386abe8e5e5f3190567d7747b7e6ed87accfa1e58b8934ad04b823550445ba4bf7445c9e348c5590639eef390d412  feedbackd-cirrus.rules
+56f1b72947df8929afaee6692734575be5de952860a796df9f1220f265a882e331ff1eaedbad30690b76cd71fa434dfb90a20122d65bf1e9716bd13c20c6e88c  feedbackd-theme.json
 "
