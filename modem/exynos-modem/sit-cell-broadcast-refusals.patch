@@ -1,0 +1,182 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Subject: [PATCH] samsung-sit: spell out broadcast refusals like stock does
+
+A config of accepted ranges alone is not the shape stock puts on the
+wire. Across nineteen Android captures every SET_BROADCAST_SMS_CONFIG
+frame also names the ranges the CP must refuse -- 4355, 4380-4382 and
+4393-4395 carry selected = 0 in all of them, without exception -- so
+writing only the accepts made us the one thing on the link shaped
+differently.
+
+ranges_like_stock() takes the ranges a caller wants accepted and adds
+every default range they do not overlap, refused, sorted. Asking for
+exactly stock's accepted set now reproduces stock's own eight entries,
+which is the frame every captured boot ends on; the test asserts that.
+
+Functionally the two are equivalent, since a range the CP was never told
+about is not accepted either. This is for parity, and because the
+negative entries are the only record of what was deliberately turned
+off.
+
+Also worth recording from that survey: stock's frame length does not
+always follow 13 + 7*count. It sends 69 bytes for eight ranges, 76 for
+the same eight with a spare zeroed slot, and 68 for seven with six pad
+bytes. The CP keys off the count byte, not the length, so the exact form
+here is accepted and so was a shorter one.
+
+diff --git a/crates/samsung-sit/src/cell_broadcast.rs b/crates/samsung-sit/src/cell_broadcast.rs
+--- a/crates/samsung-sit/src/cell_broadcast.rs	2026-11-09 19:58:21.957736068 -0500
++++ b/crates/samsung-sit/src/cell_broadcast.rs	2026-11-09 19:56:37.948528985 -0500
+@@ -132,6 +132,40 @@
+     ))
+ }
+ 
++/// The ranges stock would send to accept exactly `accepts`: those ranges
++/// selected, plus every [`ANDROID_BOOT_RANGES`] entry they do not overlap,
++/// left unselected.
++///
++/// Stock never writes a config of accepts alone. All nineteen captured
++/// Android frames spell out the refusals too -- 4355, 4380-4382 and
++/// 4393-4395 carry `selected = 0` in every one -- so a caller asking for a
++/// subset should still describe the rest of the ETWS/CMAS space rather than
++/// leave it unmentioned. Functionally the two are the same, because a range
++/// the CP was not told about is not accepted either; this is for parity with
++/// what the carrier's own stack puts on the wire.
++pub fn ranges_like_stock(accepts: &[BroadcastRange]) -> Vec<BroadcastRange> {
++    let overlaps = |a: &BroadcastRange, b: &BroadcastRange| {
++        a.from_service_id <= b.to_service_id && b.from_service_id <= a.to_service_id
++    };
++    let mut out: Vec<BroadcastRange> = accepts
++        .iter()
++        .map(|r| BroadcastRange {
++            selected: true,
++            ..*r
++        })
++        .collect();
++    for d in ANDROID_BOOT_RANGES {
++        if !accepts.iter().any(|a| overlaps(a, &d)) {
++            out.push(BroadcastRange {
++                selected: false,
++                ..d
++            });
++        }
++    }
++    out.sort_by_key(|r| r.from_service_id);
++    out
++}
++
+ /// `SMS_BROADCAST_ACTIVATION` (0x0107).
+ ///
+ /// **Zero turns reception on.** That is the downstream RIL's polarity for
+@@ -258,6 +292,39 @@
+     }
+ 
+     #[test]
++    fn asking_for_a_subset_still_spells_out_the_refusals() {
++        // Just the presidential and extreme CMAS identifiers.
++        let got = ranges_like_stock(&[BroadcastRange::new(4370, 4379, true)]);
++        // That one accepted, and every stock range it does not cover refused.
++        assert_eq!(
++            got.iter().filter(|r| r.selected).count(),
++            1,
++            "only the asked-for range is accepted"
++        );
++        assert!(got.iter().any(|r| r.from_service_id == 4352 && !r.selected));
++        assert!(got.iter().any(|r| r.from_service_id == 4355 && !r.selected));
++        assert!(got.iter().any(|r| r.from_service_id == 4396 && !r.selected));
++        // 4370-4379 is covered by the request, so it is not also refused.
++        assert_eq!(
++            got.iter().filter(|r| r.from_service_id == 4370).count(),
++            1
++        );
++        assert!(got.windows(2).all(|w| w[0].from_service_id <= w[1].from_service_id));
++
++        // Asking for exactly stock's accepted set reproduces stock's own eight
++        // entries, which is the frame every captured boot ends on.
++        let stock_accepts: Vec<BroadcastRange> = ANDROID_BOOT_RANGES
++            .iter()
++            .copied()
++            .filter(|r| r.selected)
++            .collect();
++        assert_eq!(
++            ranges_like_stock(&stock_accepts).as_slice(),
++            &ANDROID_BOOT_RANGES
++        );
++    }
++
++    #[test]
+     fn limits_are_enforced() {
+         assert!(build_set_broadcast_sms_config(1, &[]).is_err());
+         let many = vec![BroadcastRange::new(4352, 4352, true); MAX_RANGES + 1];
+diff --git a/crates/samsung-sit/src/lib.rs b/crates/samsung-sit/src/lib.rs
+--- a/crates/samsung-sit/src/lib.rs	2026-11-09 19:58:21.957775579 -0500
++++ b/crates/samsung-sit/src/lib.rs	2026-11-09 19:56:37.955241088 -0500
+@@ -91,6 +91,7 @@
+ pub use cell_broadcast::{
+     build_get_broadcast_sms_config, build_set_broadcast_sms_config,
+     build_sms_broadcast_activation, parse_broadcast_sms_config, parse_new_broadcast_sms,
++    ranges_like_stock,
+     BroadcastRange, ANDROID_BOOT_RANGES, MAX_RANGES,
+ };
+ pub use sms::{
+diff --git a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 19:58:21.957854419 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 19:56:59.157889440 -0500
+@@ -1460,12 +1460,18 @@
+                                                             size_t *out_len);
+ 
+ /*
+- Build a `SET_BROADCAST_SMS_CONFIG` (0x0106) from `ranges`, which must hold
+- `count` entries and at most SAMSUNG_SIT_MAX_BROADCAST_RANGES of them.
++ Build a `SET_BROADCAST_SMS_CONFIG` (0x0106) accepting `ranges`, which must
++ hold `count` entries and at most SAMSUNG_SIT_MAX_BROADCAST_RANGES of them.
+ 
+  Pass NULL for `ranges` to send the config this device's own Android writes
+  at boot -- ETWS and CMAS enabled with the test and exercise identifiers
+  left off -- which is what `count == 0` means.
++
++ Any other list is spelled out the way stock spells one out: the given
++ ranges selected, and every default range they do not cover named and
++ refused. All nineteen captured Android frames carry their refusals, so a
++ frame of accepts alone would be the only thing on the link shaped
++ differently. `count` therefore bounds the input, not the frame.
+  */
+ SamsungSitStatus samsung_sit_build_set_broadcast_sms_config(uint16_t token,
+                                                             const SamsungSitBroadcastRange *ranges,
+diff --git a/crates/samsung-sit-ffi/src/builders.rs b/crates/samsung-sit-ffi/src/builders.rs
+--- a/crates/samsung-sit-ffi/src/builders.rs	2026-11-09 19:58:21.957916390 -0500
++++ b/crates/samsung-sit-ffi/src/builders.rs	2026-11-09 19:56:55.705091152 -0500
+@@ -804,12 +804,18 @@
+     emit_bytes(sit::build_get_broadcast_sms_config(token), out, out_len)
+ }
+ 
+-/// Build a `SET_BROADCAST_SMS_CONFIG` (0x0106) from `ranges`, which must hold
+-/// `count` entries and at most SAMSUNG_SIT_MAX_BROADCAST_RANGES of them.
++/// Build a `SET_BROADCAST_SMS_CONFIG` (0x0106) accepting `ranges`, which must
++/// hold `count` entries and at most SAMSUNG_SIT_MAX_BROADCAST_RANGES of them.
+ ///
+ /// Pass NULL for `ranges` to send the config this device's own Android writes
+ /// at boot -- ETWS and CMAS enabled with the test and exercise identifiers
+ /// left off -- which is what `count == 0` means.
++///
++/// Any other list is spelled out the way stock spells one out: the given
++/// ranges selected, and every default range they do not cover named and
++/// refused. All nineteen captured Android frames carry their refusals, so a
++/// frame of accepts alone would be the only thing on the link shaped
++/// differently. `count` therefore bounds the input, not the frame.
+ #[no_mangle]
+ pub unsafe extern "C" fn samsung_sit_build_set_broadcast_sms_config(
+     token: u16,
+@@ -825,10 +831,11 @@
+         if count > crate::MAX_BROADCAST_RANGES {
+             return SamsungSitStatus::ArgTooLong;
+         }
+-        owned = core::slice::from_raw_parts(ranges, count)
++        let asked: Vec<sit::BroadcastRange> = core::slice::from_raw_parts(ranges, count)
+             .iter()
+             .map(|&r| r.into())
+             .collect();
++        owned = sit::ranges_like_stock(&asked);
+         &owned
+     };
+     match sit::build_set_broadcast_sms_config(token, list) {
