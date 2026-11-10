@@ -1,9 +1,8 @@
 # Reference: <https://postmarketos.org/devicepkg>
-# Co-Maintainer: DrRac27 <drrac27@riseup.net>
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+maintainer="DrRac27 <drrac27@riseup.net>"
 pkgname=device-oneplus-enchilada
 pkgdesc="OnePlus 6"
-pkgver=31
+pkgver=32
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
