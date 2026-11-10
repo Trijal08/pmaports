@@ -1,5 +1,5 @@
-# Co-Maintainer: Joel Selvaraj <foss@joelselvaraj.com>
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+# Co-Maintainer: Aster Boese <asterboese@mailbox.org>
+maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
 pkgname=alsa-ucm-conf-sdm845
 pkgver=3
 pkgrel=0
