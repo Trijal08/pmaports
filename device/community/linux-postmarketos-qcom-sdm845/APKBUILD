@@ -1,7 +1,7 @@
-# Co-Maintainer: Joel Selvaraj <foss@joelselvaraj.com>
+# Co-Maintainer: Aster Boese <asterboese@mailbox.org>
 # Stable Linux kernel with patches for SDM845 devices
 # Kernel config based on: arch/arm64/configs/defconfig and sdm845.config
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
 _flavor="postmarketos-qcom-sdm845"
 pkgname=linux-$_flavor
 pkgver=7.1_rc1
