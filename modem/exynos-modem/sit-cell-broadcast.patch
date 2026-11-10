@@ -1,0 +1,682 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Subject: [PATCH] samsung-sit: cell broadcast -- the emergency alert channels
+
+Four messages in the SMS group, none of which the codec had:
+GET_BROADCAST_SMS_CONFIG (0x0105) and SET_BROADCAST_SMS_CONFIG (0x0106)
+read and write which CBS message identifiers the CP accepts,
+SMS_BROADCAST_ACTIVATION (0x0107) turns reception on, and
+NEW_BROADCAST_SMS (0x0110) delivers a page.
+
+Ids and layouts from ProtocolSmsBuilder::Build{Get,Set}BroadcastSmsConfig,
+BuildSmsBroadcastActivation, ProtocolGetBcstSmsConfRespAdapter and
+ProtocolNewBcstSmsAdapter in vendor.radio.protocol.sit.stream.so, then
+checked against this device's own Android: stock sends the config and the
+activation 5.77 s into every boot, once per stack, and the test
+reproduces both frames byte for byte.
+
+Two things the capture settled that the disassembly alone could not.
+Zero activates -- the legacy RIL polarity -- and stock's own range set is
+ETWS and CMAS enabled with the test and exercise identifiers left off,
+which is kept here as ANDROID_BOOT_RANGES so we can ask for exactly what
+the carrier's own stack asks for.
+
+The page is a TS 23.041 CBS message, passed through untouched;
+ModemManager decodes those already.
+
+diff --git a/crates/samsung-sit/src/cell_broadcast.rs b/crates/samsung-sit/src/cell_broadcast.rs
+--- a/crates/samsung-sit/src/cell_broadcast.rs	1969-12-31 19:00:00.000000000 -0500
++++ b/crates/samsung-sit/src/cell_broadcast.rs	2026-11-09 19:27:22.500239459 -0500
+@@ -0,0 +1,266 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//
++//! Cell broadcast -- the emergency alert channels (ETWS and CMAS) and the
++//! pages the network pushes onto them.
++//!
++//! Four messages, all in the SMS group: `GET_BROADCAST_SMS_CONFIG` (0x0105)
++//! and `SET_BROADCAST_SMS_CONFIG` (0x0106) read and write which message
++//! identifiers the CP will accept, `SMS_BROADCAST_ACTIVATION` (0x0107) turns
++//! reception on, and `NEW_BROADCAST_SMS` (0x0110) delivers a page.
++//!
++//! Ids and layouts from `ProtocolSmsBuilder::Build{Get,Set}BroadcastSmsConfig`,
++//! `BuildSmsBroadcastActivation`, `ProtocolGetBcstSmsConfRespAdapter` and
++//! `ProtocolNewBcstSmsAdapter` in `vendor.radio.protocol.sit.stream.so`, each
++//! checked against this device's own Android: stock sends the config and the
++//! activation 5.77 s into every boot, once per stack, and the captured frames
++//! match byte for byte.
++//!
++//! The page itself is a TS 23.041 CBS message, passed through untouched --
++//! ModemManager decodes those already and none of it is Samsung-specific.
++
++use crate::{expect_message, expect_ok_response, msg_id, msg_type, SitError};
++
++/// Longest config the CP accepts. Both the setter and the response parser
++/// clamp to this, so a longer list is rejected rather than silently cut.
++pub const MAX_RANGES: usize = 50;
++
++/// Bytes each range occupies on the wire. The downstream RIL's
++/// `RIL_GSM_BroadcastSmsConfigInfo` is 20 bytes of `int`s; the builder packs
++/// it down to this.
++const RANGE_LEN: usize = 7;
++
++/// One inclusive range of CBS message identifiers, and whether the CP should
++/// accept it.
++///
++/// A message identifier names what the page is for: 4352-4356 are ETWS
++/// (earthquake and tsunami), 4370 onwards are CMAS (presidential, extreme,
++/// severe, AMBER and their test and language variants).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct BroadcastRange {
++    pub from_service_id: u16,
++    pub to_service_id: u16,
++    /// Data-coding-scheme range, 0x00-0xff in every captured entry: the CP is
++    /// not asked to filter on the encoding.
++    pub from_code_scheme: u8,
++    pub to_code_scheme: u8,
++    /// Whether to accept this range. Stock leaves the test and exercise
++    /// identifiers unselected while enabling the live ones.
++    pub selected: bool,
++}
++
++/// The config this device's own Android writes at boot, in its order.
++///
++/// Worth sending as-is rather than deriving: it is what the carrier's own
++/// stack asks for, test and exercise identifiers deliberately off, and
++/// reproducing it keeps us from being the only thing on the link that asks
++/// for something different.
++pub const ANDROID_BOOT_RANGES: [BroadcastRange; 8] = [
++    // ETWS earthquake, tsunami, and both.
++    BroadcastRange::new(4352, 4354, true),
++    // ETWS test.
++    BroadcastRange::new(4355, 4355, false),
++    // ETWS other.
++    BroadcastRange::new(4356, 4356, true),
++    // CMAS presidential and extreme.
++    BroadcastRange::new(4370, 4379, true),
++    // CMAS severe -- the first three only, which are the test variants.
++    BroadcastRange::new(4380, 4382, false),
++    BroadcastRange::new(4383, 4392, true),
++    BroadcastRange::new(4393, 4395, false),
++    BroadcastRange::new(4396, 4399, true),
++];
++
++impl BroadcastRange {
++    /// A range over the whole coding-scheme span, which is the only form any
++    /// captured frame uses.
++    pub const fn new(from_service_id: u16, to_service_id: u16, selected: bool) -> Self {
++        Self {
++            from_service_id,
++            to_service_id,
++            from_code_scheme: 0x00,
++            to_code_scheme: 0xff,
++            selected,
++        }
++    }
++
++    fn write(&self, out: &mut Vec<u8>) {
++        out.extend_from_slice(&self.from_service_id.to_le_bytes());
++        out.extend_from_slice(&self.to_service_id.to_le_bytes());
++        out.push(self.from_code_scheme);
++        out.push(self.to_code_scheme);
++        out.push(self.selected as u8);
++    }
++
++    fn read(b: &[u8]) -> Self {
++        Self {
++            from_service_id: u16::from_le_bytes([b[0], b[1]]),
++            to_service_id: u16::from_le_bytes([b[2], b[3]]),
++            from_code_scheme: b[4],
++            to_code_scheme: b[5],
++            selected: b[6] != 0,
++        }
++    }
++}
++
++/// `GET_BROADCAST_SMS_CONFIG` (0x0105) -- header only.
++pub fn build_get_broadcast_sms_config(token: u16) -> Vec<u8> {
++    crate::frame_header(msg_id::GET_BROADCAST_SMS_CONFIG, token, &[0u8; 4])
++}
++
++/// `SET_BROADCAST_SMS_CONFIG` (0x0106) -- a count byte then one record per
++/// range, so the frame is `13 + 7 * ranges`.
++pub fn build_set_broadcast_sms_config(
++    token: u16,
++    ranges: &[BroadcastRange],
++) -> Result<Vec<u8>, SitError> {
++    if ranges.is_empty() {
++        return Err(SitError::Malformed("broadcast config with no ranges"));
++    }
++    if ranges.len() > MAX_RANGES {
++        return Err(SitError::ArgTooLong("broadcast config range list"));
++    }
++    let mut body = Vec::with_capacity(5 + ranges.len() * RANGE_LEN);
++    body.extend_from_slice(&[0u8; 4]);
++    body.push(ranges.len() as u8);
++    for range in ranges {
++        range.write(&mut body);
++    }
++    Ok(crate::frame_header(
++        msg_id::SET_BROADCAST_SMS_CONFIG,
++        token,
++        &body,
++    ))
++}
++
++/// `SMS_BROADCAST_ACTIVATION` (0x0107).
++///
++/// **Zero turns reception on.** That is the downstream RIL's polarity for
++/// `RIL_REQUEST_GSM_SMS_BROADCAST_ACTIVATION` and it is what the captured
++/// Android sends -- a payload of four zero bytes, right after writing its
++/// config, on a boot where alerts then worked.
++pub fn build_sms_broadcast_activation(token: u16, activate: bool) -> Vec<u8> {
++    let mut body = vec![0u8; 8];
++    body[4..8].copy_from_slice(&(!activate as u32).to_le_bytes());
++    crate::frame_header(msg_id::SMS_BROADCAST_ACTIVATION, token, &body)
++}
++
++/// The ranges from a `GET_BROADCAST_SMS_CONFIG` response. Same records as the
++/// setter writes, after the status word.
++pub fn parse_broadcast_sms_config(frame: &[u8]) -> Result<Vec<BroadcastRange>, SitError> {
++    expect_ok_response(frame, msg_id::GET_BROADCAST_SMS_CONFIG)?;
++    let count = *frame.get(12).ok_or(SitError::Truncated)? as usize;
++    if count > MAX_RANGES {
++        return Err(SitError::Malformed("broadcast config range count too high"));
++    }
++    let mut out = Vec::with_capacity(count);
++    for i in 0..count {
++        let at = 13 + i * RANGE_LEN;
++        let record = frame
++            .get(at..at + RANGE_LEN)
++            .ok_or(SitError::Truncated)?;
++        out.push(BroadcastRange::read(record));
++    }
++    Ok(out)
++}
++
++/// The page from a `NEW_BROADCAST_SMS` (0x0110) indication: a TS 23.041 CBS
++/// message, 88 bytes on GSM and UMTS.
++///
++/// An indication carries no reserved word, so the length is at `@8` and the
++/// page follows it -- `ProtocolNewBcstSmsAdapter` reads exactly that, and
++/// returns the length as a *signed* short, which is why a zero length is an
++/// error here rather than an empty page.
++pub fn parse_new_broadcast_sms(frame: &[u8]) -> Result<Vec<u8>, SitError> {
++    expect_message(
++        frame,
++        &[(msg_id::NEW_BROADCAST_SMS, msg_type::INDICATION)],
++    )?;
++    let len = u16::from_le_bytes([
++        *frame.get(8).ok_or(SitError::Truncated)?,
++        *frame.get(9).ok_or(SitError::Truncated)?,
++    ]) as usize;
++    if len == 0 {
++        return Err(SitError::Malformed("empty cell broadcast page"));
++    }
++    Ok(frame
++        .get(10..10 + len)
++        .ok_or(SitError::Truncated)?
++        .to_vec())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// The two frames this device's own Android sends 5.77 s into every boot,
++    /// byte for byte.
++    #[test]
++    fn the_boot_config_matches_the_capture() {
++        let f = build_set_broadcast_sms_config(0x0001, &ANDROID_BOOT_RANGES).unwrap();
++        assert_eq!(f.len(), 13 + 7 * 8);
++        assert_eq!(u16::from_le_bytes([f[4], f[5]]), 69);
++        let want = [
++            0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x11, 0x02, 0x11, 0x00, 0xff, 0x01, 0x03, 0x11,
++            0x03, 0x11, 0x00, 0xff, 0x00, 0x04, 0x11, 0x04, 0x11, 0x00, 0xff, 0x01, 0x12, 0x11,
++            0x1b, 0x11, 0x00, 0xff, 0x01, 0x1c, 0x11, 0x1e, 0x11, 0x00, 0xff, 0x00, 0x1f, 0x11,
++            0x28, 0x11, 0x00, 0xff, 0x01, 0x29, 0x11, 0x2b, 0x11, 0x00, 0xff, 0x00, 0x2c, 0x11,
++            0x2f, 0x11, 0x00, 0xff, 0x01,
++        ];
++        assert_eq!(&f[8..], &want);
++
++        // Activation: four zero bytes, and zero is on.
++        let a = build_sms_broadcast_activation(0x0002, true);
++        assert_eq!(a.len(), 16);
++        assert_eq!(&a[8..], &[0u8; 8]);
++        let off = build_sms_broadcast_activation(0x0003, false);
++        assert_eq!(&off[12..], &1u32.to_le_bytes());
++    }
++
++    #[test]
++    fn a_config_round_trips_through_its_response() {
++        // The response carries the same records the setter writes, after a
++        // status word in place of the reserved one, so the setter's body is
++        // reused here under the response's own id.
++        let req = build_set_broadcast_sms_config(1, &ANDROID_BOOT_RANGES).unwrap();
++        let mut resp = Vec::new();
++        resp.extend_from_slice(&[msg_type::RESPONSE, 0]);
++        resp.extend_from_slice(&msg_id::GET_BROADCAST_SMS_CONFIG.to_le_bytes());
++        resp.extend_from_slice(&(req.len() as u16).to_le_bytes());
++        resp.extend_from_slice(&0u16.to_le_bytes());
++        resp.extend_from_slice(&req[8..]);
++        let got = parse_broadcast_sms_config(&resp).unwrap();
++        assert_eq!(got.as_slice(), &ANDROID_BOOT_RANGES);
++
++        // And a count beyond the CP's own clamp is refused, not trusted.
++        let mut bad = resp.clone();
++        bad[12] = (MAX_RANGES + 1) as u8;
++        assert!(parse_broadcast_sms_config(&bad).is_err());
++    }
++
++    #[test]
++    fn get_config_is_header_only() {
++        let f = build_get_broadcast_sms_config(0x1234);
++        assert_eq!(f.len(), 12);
++        assert_eq!(&f[2..4], &msg_id::GET_BROADCAST_SMS_CONFIG.to_le_bytes());
++        assert_eq!(u16::from_le_bytes([f[6], f[7]]), 0x1234);
++    }
++
++    #[test]
++    fn a_page_is_passed_through() {
++        let page: Vec<u8> = (0u8..88).collect();
++        let mut frame = vec![msg_type::INDICATION, 0];
++        frame.extend_from_slice(&msg_id::NEW_BROADCAST_SMS.to_le_bytes());
++        frame.extend_from_slice(&((10 + page.len()) as u16).to_le_bytes());
++        frame.extend_from_slice(&0u16.to_le_bytes());
++        frame.extend_from_slice(&(page.len() as u16).to_le_bytes());
++        frame.extend_from_slice(&page);
++        assert_eq!(parse_new_broadcast_sms(&frame).unwrap(), page);
++    }
++
++    #[test]
++    fn limits_are_enforced() {
++        assert!(build_set_broadcast_sms_config(1, &[]).is_err());
++        let many = vec![BroadcastRange::new(4352, 4352, true); MAX_RANGES + 1];
++        assert!(build_set_broadcast_sms_config(1, &many).is_err());
++    }
++}
+diff --git a/crates/samsung-sit/src/lib.rs b/crates/samsung-sit/src/lib.rs
+--- a/crates/samsung-sit/src/lib.rs	2026-11-09 18:30:53.950877438 -0500
++++ b/crates/samsung-sit/src/lib.rs	2026-11-09 19:27:07.328896814 -0500
+@@ -28,6 +28,7 @@
+ mod sim;
+ mod sim_apdu;
+ mod slot_status;
++mod cell_broadcast;
+ mod sms;
+ mod time;
+ mod uicc;
+@@ -87,6 +88,11 @@
+     parse_sim_open_channel, parse_sim_close_channel, parse_sim_transmit_apdu,
+     SimApduRequest, SimApduResponse, SimOpenChannelResponse,
+ };
++pub use cell_broadcast::{
++    build_get_broadcast_sms_config, build_set_broadcast_sms_config,
++    build_sms_broadcast_activation, parse_broadcast_sms_config, parse_new_broadcast_sms,
++    BroadcastRange, ANDROID_BOOT_RANGES, MAX_RANGES,
++};
+ pub use sms::{
+     build_get_smsc_address, build_ims_send_sms, build_send_sms, build_sms_ack, parse_new_sms,
+     parse_send_sms_result, parse_smsc_address, SmsDeliver, MAX_SMSC_LEN, MAX_TPDU_LEN,
+@@ -141,9 +147,13 @@
+     pub const SEND_SMS: u16 = 0x0100;
+     pub const SEND_SMS_EXPECT_MORE: u16 = 0x0101;
+     pub const SMS_ACK: u16 = 0x0102;
++    pub const GET_BROADCAST_SMS_CONFIG: u16 = 0x0105;
++    pub const SET_BROADCAST_SMS_CONFIG: u16 = 0x0106;
++    pub const SMS_BROADCAST_ACTIVATION: u16 = 0x0107;
+     pub const GET_SMSC_ADDRESS: u16 = 0x0108;
+     pub const NEW_SMS: u16 = 0x010c;
+     pub const NEW_SMS_STATUS_REPORT: u16 = 0x010d;
++    pub const NEW_BROADCAST_SMS: u16 = 0x0110;
+     pub const GET_SIM_STATUS: u16 = 0x0200;
+     pub const SIM_IO: u16 = 0x0208;
+     pub const GET_FACILITY_LOCK: u16 = 0x0209;
+diff --git a/crates/samsung-sit-ffi/cbindgen.toml b/crates/samsung-sit-ffi/cbindgen.toml
+--- a/crates/samsung-sit-ffi/cbindgen.toml	2026-09-09 04:18:39.000000000 -0400
++++ b/crates/samsung-sit-ffi/cbindgen.toml	2026-11-09 19:29:46.060436397 -0500
+@@ -41,6 +41,8 @@
+ "MAX_SIM_IO_DATA" = "SAMSUNG_SIT_MAX_SIM_IO_DATA"
+ "MAX_SMS_PDU" = "SAMSUNG_SIT_MAX_SMS_PDU"
+ "MAX_SMSC_LEN" = "SAMSUNG_SIT_MAX_SMSC_LEN"
++"MAX_CBS_PAGE" = "SAMSUNG_SIT_MAX_CBS_PAGE"
++"MAX_BROADCAST_RANGES" = "SAMSUNG_SIT_MAX_BROADCAST_RANGES"
+ "MAX_IMEI_LEN" = "SAMSUNG_SIT_MAX_IMEI_LEN"
+ "MAX_BANDS" = "SAMSUNG_SIT_MAX_BANDS"
+ "MAX_BAND_PAYLOAD" = "SAMSUNG_SIT_MAX_BAND_PAYLOAD"
+diff --git a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 19:29:52.687548674 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 19:29:46.257292997 -0500
+@@ -96,6 +96,18 @@
+ #define SAMSUNG_SIT_MAX_SMS_PDU 244
+ 
+ /*
++ Longest cell broadcast page a caller must have room for. A GSM CBS message
++ is 88 bytes; the UMTS and LTE forms carry up to 1252, and the CP reports the
++ length as a signed short, so this is the widest it can legitimately be.
++ */
++#define SAMSUNG_SIT_MAX_CBS_PAGE 1252
++
++/*
++ Most cell broadcast ranges the CP accepts, and so the most it can report.
++ */
++#define SAMSUNG_SIT_MAX_BROADCAST_RANGES 50
++
++/*
+  Data slot of a [`SamsungSitSimIoResponse`]. A literal so it reaches the
+  generated header; the assert keeps it locked to the codec's own maximum.
+  */
+@@ -453,6 +465,21 @@
+ } SamsungSitNetworkGenerations;
+ 
+ /*
++ One inclusive range of cell broadcast message identifiers, and whether the
++ CP should accept it. 4352-4356 are ETWS, 4370 onwards CMAS.
++ */
++typedef struct {
++    uint16_t from_service_id;
++    uint16_t to_service_id;
++    uint8_t from_code_scheme;
++    uint8_t to_code_scheme;
++    /*
++     Non-zero to accept this range.
++     */
++    uint8_t selected;
++} SamsungSitBroadcastRange;
++
++/*
+  The SIM's identity, as the vendor resolvers match on it -- this one and
+  the IMS one next door, which ignores the privilege access rule.
+ 
+@@ -1426,6 +1453,39 @@
+                                            size_t *out_len);
+ 
+ /*
++ Build a `GET_BROADCAST_SMS_CONFIG` (0x0105) query.
++ */
++SamsungSitStatus samsung_sit_build_get_broadcast_sms_config(uint16_t token,
++                                                            uint8_t **out,
++                                                            size_t *out_len);
++
++/*
++ Build a `SET_BROADCAST_SMS_CONFIG` (0x0106) from `ranges`, which must hold
++ `count` entries and at most SAMSUNG_SIT_MAX_BROADCAST_RANGES of them.
++
++ Pass NULL for `ranges` to send the config this device's own Android writes
++ at boot -- ETWS and CMAS enabled with the test and exercise identifiers
++ left off -- which is what `count == 0` means.
++ */
++SamsungSitStatus samsung_sit_build_set_broadcast_sms_config(uint16_t token,
++                                                            const SamsungSitBroadcastRange *ranges,
++                                                            size_t count,
++                                                            uint8_t **out,
++                                                            size_t *out_len);
++
++/*
++ Build an `SMS_BROADCAST_ACTIVATION` (0x0107).
++
++ `activate` non-zero turns reception on. The wire value is inverted -- zero
++ is on -- which is the downstream RIL's polarity and what the captured
++ Android sends; the caller does not see that.
++ */
++SamsungSitStatus samsung_sit_build_sms_broadcast_activation(uint16_t token,
++                                                            uint8_t activate,
++                                                            uint8_t **out,
++                                                            size_t *out_len);
++
++/*
+  Build a `GET_SMSC_ADDRESS` (0x0108) query.
+  */
+ SamsungSitStatus samsung_sit_build_get_smsc_address(uint16_t token, uint8_t **out, size_t *out_len);
+@@ -1698,6 +1758,31 @@
+                                                    uint32_t *out_reference);
+ 
+ /*
++ Parse a `NEW_BROADCAST_SMS` (0x0110) indication into `out`/`out_len`, which
++ must have room for SAMSUNG_SIT_MAX_CBS_PAGE bytes.
++
++ The page is a TS 23.041 CBS message, handed over untouched. A page longer
++ than the buffer is an error rather than a truncation: half an emergency
++ alert is worse than none.
++ */
++SamsungSitStatus samsung_sit_parse_new_broadcast_sms(const uint8_t *data,
++                                                     size_t len,
++                                                     uint8_t *out,
++                                                     size_t *out_len);
++
++/*
++ Parse a `GET_BROADCAST_SMS_CONFIG` (0x0105) reply into `out`/`out_count`,
++ which must have room for SAMSUNG_SIT_MAX_BROADCAST_RANGES entries.
++
++ A CP that has no config yet is not an error: it comes back as
++ `out_count == 0`.
++ */
++SamsungSitStatus samsung_sit_parse_broadcast_sms_config(const uint8_t *data,
++                                                        size_t len,
++                                                        SamsungSitBroadcastRange *out,
++                                                        size_t *out_count);
++
++/*
+  Parse a `GET_SMSC_ADDRESS` reply into `out`/`out_len`, which must have room
+  for SAMSUNG_SIT_MAX_SMSC_LEN bytes.
+  */
+diff --git a/crates/samsung-sit-ffi/src/builders.rs b/crates/samsung-sit-ffi/src/builders.rs
+--- a/crates/samsung-sit-ffi/src/builders.rs	2026-11-09 18:30:53.953654087 -0500
++++ b/crates/samsung-sit-ffi/src/builders.rs	2026-11-09 19:28:54.375934766 -0500
+@@ -794,6 +794,68 @@
+     emit_bytes(sit::build_sms_ack(token, over_ims != 0), out, out_len)
+ }
+ 
++/// Build a `GET_BROADCAST_SMS_CONFIG` (0x0105) query.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_build_get_broadcast_sms_config(
++    token: u16,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    emit_bytes(sit::build_get_broadcast_sms_config(token), out, out_len)
++}
++
++/// Build a `SET_BROADCAST_SMS_CONFIG` (0x0106) from `ranges`, which must hold
++/// `count` entries and at most SAMSUNG_SIT_MAX_BROADCAST_RANGES of them.
++///
++/// Pass NULL for `ranges` to send the config this device's own Android writes
++/// at boot -- ETWS and CMAS enabled with the test and exercise identifiers
++/// left off -- which is what `count == 0` means.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_build_set_broadcast_sms_config(
++    token: u16,
++    ranges: *const crate::SamsungSitBroadcastRange,
++    count: usize,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    let owned: Vec<sit::BroadcastRange>;
++    let list: &[sit::BroadcastRange] = if ranges.is_null() || count == 0 {
++        &sit::ANDROID_BOOT_RANGES
++    } else {
++        if count > crate::MAX_BROADCAST_RANGES {
++            return SamsungSitStatus::ArgTooLong;
++        }
++        owned = core::slice::from_raw_parts(ranges, count)
++            .iter()
++            .map(|&r| r.into())
++            .collect();
++        &owned
++    };
++    match sit::build_set_broadcast_sms_config(token, list) {
++        Ok(f) => emit_bytes(f, out, out_len),
++        Err(e) => crate::status_from_err(&e),
++    }
++}
++
++/// Build an `SMS_BROADCAST_ACTIVATION` (0x0107).
++///
++/// `activate` non-zero turns reception on. The wire value is inverted -- zero
++/// is on -- which is the downstream RIL's polarity and what the captured
++/// Android sends; the caller does not see that.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_build_sms_broadcast_activation(
++    token: u16,
++    activate: u8,
++    out: *mut *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    emit_bytes(
++        sit::build_sms_broadcast_activation(token, activate != 0),
++        out,
++        out_len,
++    )
++}
++
+ /// Build a `GET_SMSC_ADDRESS` (0x0108) query.
+ #[no_mangle]
+ pub unsafe extern "C" fn samsung_sit_build_get_smsc_address(
+diff --git a/crates/samsung-sit-ffi/src/lib.rs b/crates/samsung-sit-ffi/src/lib.rs
+--- a/crates/samsung-sit-ffi/src/lib.rs	2026-11-09 18:30:53.951830398 -0500
++++ b/crates/samsung-sit-ffi/src/lib.rs	2026-11-09 19:28:17.573637183 -0500
+@@ -87,6 +87,14 @@
+ pub const MAX_SMS_PDU: usize = 244;
+ const _: () = assert!(MAX_SMS_PDU == samsung_sit::MAX_TPDU_LEN);
+ 
++/// Longest cell broadcast page a caller must have room for. A GSM CBS message
++/// is 88 bytes; the UMTS and LTE forms carry up to 1252, and the CP reports the
++/// length as a signed short, so this is the widest it can legitimately be.
++pub const MAX_CBS_PAGE: usize = 1252;
++/// Most cell broadcast ranges the CP accepts, and so the most it can report.
++pub const MAX_BROADCAST_RANGES: usize = 50;
++const _: () = assert!(MAX_BROADCAST_RANGES == samsung_sit::MAX_RANGES);
++
+ /// Data slot of a [`SamsungSitSimIoResponse`]. A literal so it reaches the
+ /// generated header; the assert keeps it locked to the codec's own maximum.
+ pub const MAX_SIM_IO_DATA: usize = 512;
+diff --git a/crates/samsung-sit-ffi/src/parsers.rs b/crates/samsung-sit-ffi/src/parsers.rs
+--- a/crates/samsung-sit-ffi/src/parsers.rs	2026-09-09 04:18:39.000000000 -0400
++++ b/crates/samsung-sit-ffi/src/parsers.rs	2026-11-09 19:29:08.263939825 -0500
+@@ -131,6 +131,73 @@
+     fill(data, len, out_reference, sit::parse_send_sms_result)
+ }
+ 
++/// Parse a `NEW_BROADCAST_SMS` (0x0110) indication into `out`/`out_len`, which
++/// must have room for SAMSUNG_SIT_MAX_CBS_PAGE bytes.
++///
++/// The page is a TS 23.041 CBS message, handed over untouched. A page longer
++/// than the buffer is an error rather than a truncation: half an emergency
++/// alert is worse than none.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_parse_new_broadcast_sms(
++    data: *const u8,
++    len: usize,
++    out: *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    if out.is_null() || out_len.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let buf = match in_slice(data, len) {
++        Ok(b) => b,
++        Err(s) => return s,
++    };
++    match sit::parse_new_broadcast_sms(buf) {
++        Ok(page) => {
++            if page.len() > crate::MAX_CBS_PAGE {
++                return SamsungSitStatus::ArgTooLong;
++            }
++            core::ptr::copy_nonoverlapping(page.as_ptr(), out, page.len());
++            out_len.write(page.len());
++            SamsungSitStatus::Ok
++        }
++        Err(e) => status_from_err(&e),
++    }
++}
++
++/// Parse a `GET_BROADCAST_SMS_CONFIG` (0x0105) reply into `out`/`out_count`,
++/// which must have room for SAMSUNG_SIT_MAX_BROADCAST_RANGES entries.
++///
++/// A CP that has no config yet is not an error: it comes back as
++/// `out_count == 0`.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_parse_broadcast_sms_config(
++    data: *const u8,
++    len: usize,
++    out: *mut crate::SamsungSitBroadcastRange,
++    out_count: *mut usize,
++) -> SamsungSitStatus {
++    if out.is_null() || out_count.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let buf = match in_slice(data, len) {
++        Ok(b) => b,
++        Err(s) => return s,
++    };
++    match sit::parse_broadcast_sms_config(buf) {
++        Ok(ranges) => {
++            if ranges.len() > crate::MAX_BROADCAST_RANGES {
++                return SamsungSitStatus::ArgTooLong;
++            }
++            for (i, r) in ranges.iter().enumerate() {
++                out.add(i).write((*r).into());
++            }
++            out_count.write(ranges.len());
++            SamsungSitStatus::Ok
++        }
++        Err(e) => status_from_err(&e),
++    }
++}
++
+ /// Parse a `GET_SMSC_ADDRESS` reply into `out`/`out_len`, which must have room
+ /// for SAMSUNG_SIT_MAX_SMSC_LEN bytes.
+ #[no_mangle]
+diff --git a/crates/samsung-sit-ffi/src/structs.rs b/crates/samsung-sit-ffi/src/structs.rs
+--- a/crates/samsung-sit-ffi/src/structs.rs	2026-09-09 04:18:39.000000000 -0400
++++ b/crates/samsung-sit-ffi/src/structs.rs	2026-11-09 19:28:37.800108210 -0500
+@@ -5,6 +5,7 @@
+ use core::ffi::c_char;
+ 
+ use samsung_sit::{
++    BroadcastRange,
+     Call, CarrierSimInfo, CellInfoLte, CellInfoNr, DataCall, EfStructure, FileControlParameters,
+     BaseBandVersion, IpPair, NetworkGenerations, NetworkSelectionMode, NitzTime, Operator,
+     RadioState,
+@@ -256,6 +257,43 @@
+         }
+     }
+ }
++
++/// One inclusive range of cell broadcast message identifiers, and whether the
++/// CP should accept it. 4352-4356 are ETWS, 4370 onwards CMAS.
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct SamsungSitBroadcastRange {
++    pub from_service_id: u16,
++    pub to_service_id: u16,
++    pub from_code_scheme: u8,
++    pub to_code_scheme: u8,
++    /// Non-zero to accept this range.
++    pub selected: u8,
++}
++
++impl From<BroadcastRange> for SamsungSitBroadcastRange {
++    fn from(r: BroadcastRange) -> Self {
++        Self {
++            from_service_id: r.from_service_id,
++            to_service_id: r.to_service_id,
++            from_code_scheme: r.from_code_scheme,
++            to_code_scheme: r.to_code_scheme,
++            selected: r.selected as u8,
++        }
++    }
++}
++
++impl From<SamsungSitBroadcastRange> for BroadcastRange {
++    fn from(r: SamsungSitBroadcastRange) -> Self {
++        Self {
++            from_service_id: r.from_service_id,
++            to_service_id: r.to_service_id,
++            from_code_scheme: r.from_code_scheme,
++            to_code_scheme: r.to_code_scheme,
++            selected: r.selected != 0,
++        }
++    }
++}
+ 
+ /// A delivered SMS: the TPDU as it arrived, plus which transport carried it.
+ #[repr(C)]
