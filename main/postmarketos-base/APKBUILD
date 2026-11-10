@@ -1,7 +1,7 @@
 # Co-Maintainer: Achill Gilgenast <achill@achill.org>
 maintainer="Clayton Craft <clayton@craftyguy.net>"
 pkgname=postmarketos-base
-pkgver=78
+pkgver=79
 pkgrel=0
 pkgdesc="Meta package for minimal postmarketOS base"
 url="https://postmarketos.org"
@@ -161,10 +161,11 @@ core() {
 
 	mkdir -p "$subpkgdir"
 	cd "$subpkgdir"
-	install -m 0755 -d usr/bin usr/lib usr/sbin
+	install -m 0755 -d usr/bin usr/lib
+	ln -s bin "$subpkgdir"/usr/sbin
 	ln -s usr/bin "$subpkgdir"/bin
+	ln -s usr/bin "$subpkgdir"/sbin
 	ln -s usr/lib "$subpkgdir"/lib
-	ln -s usr/sbin "$subpkgdir"/sbin
 }
 
 doas() {
