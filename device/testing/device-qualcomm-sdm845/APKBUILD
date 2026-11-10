@@ -1,6 +1,6 @@
 # Reference: <https://postmarketos.org/devicepkg>
 # Co-Maintainer: Aster Boese <asterboese@mailbox.org>
-maintainer="Casey Connolly <casey.connolly@linaro.org>"
+maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
 pkgname=device-qualcomm-sdm845
 pkgdesc="Generic device package for Qualcomm SDM845 devices"
 pkgver=9
