@@ -1,7 +1,7 @@
 # Maintainer: Steffen Deusch <steffen@deusch.me>
 pkgname="exynos-modem"
 pkgver=0.1.0_git20260731
-pkgrel=9
+pkgrel=10
 pkgdesc="Userspace daemon for the Exynos S5300/S5400 modem vendor channels"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -64,6 +64,7 @@ source="
 	sit-cell-broadcast.patch
 	sit-cell-broadcast-refusals.patch
 	sit-cell-broadcast-per-country.patch
+	sit-broadcast-config-body.patch
 	caimito-modem-setup.sh
 	pixel-modem-stage.service
 	exynos-modem.service
@@ -253,6 +254,7 @@ ef6de40a23c6a1203ccd58ce34b133df8bcf7f8885273d2b439fcdf56641a21f44012e2b0b79545e
 324ed95554cc88f4ed5aa9320cab3cba5e48ea2a4a60c4424d64f75f51ad0024cb9f96101ef66529081994c6d30fab27dd8a03b9ca9acc66e094bc7f08736651  sit-cell-broadcast.patch
 7d15f8ee971cbffa880b9b6d29d8c14fa4780944394a39f946f88a0d6c2f091d478a8092043eb47e147afc7864c20023bcbd30f69b96174728a65a7b72ae07ce  sit-cell-broadcast-refusals.patch
 d04335a2223a046e76e6ce71a7ddd835d8cb8e7ff6f5f10c8a888d34e6b9d984a528f5cf1a753affa22088215dcce0ec99ed15a7ba86bdb3b8205c3fef50b120  sit-cell-broadcast-per-country.patch
+c02b3116fe74030272693967ea863c0e304cc34bd663251dafd1aa88b7c078cbdff613d50a4b688ff6f8396a29f57782a209e4a1ae8a29e738c280182c524f3b  sit-broadcast-config-body.patch
 f070053787151f1bff4f8b9dc107145b5bba6ba20ad73cb34286219129155cd0c923a1b0ccf2968ad8ddc6848a221fc03f568b43278b262f7cfe57c2558ebc84  caimito-modem-setup.sh
 582179f103fd22da80aa72071f3c8e6936017560f855fedb07b7715aeac9d9accd2c74d80ecbabf17728ca73e5f75fef030e987cc77a922ee4fce759b6c82d97  pixel-modem-stage.service
 872284e112edf8f7d834b91e6c82e2bc6bfa04119daf04af568c2aaef7defe17ac2ef92ca075938aa6159115ab709551554136f738b4ad3d6f2a389ec109cbe9  exynos-modem.service

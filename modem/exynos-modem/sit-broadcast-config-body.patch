@@ -1,0 +1,83 @@
+From: Trijal Saha <97483939+Trijal08@users.noreply.github.com>
+Subject: [PATCH] samsung-sit: expose the broadcast config payload body
+
+ModemManager's boot-parity replay states payload bodies rather than
+frames, and it carried its own copy of the channel table to build the
+cell broadcast row from -- the same eight Canadian ranges, hardcoded a
+second time, and it is the copy that actually runs at boot.
+
+So give it the one table: this returns the body a country accepts by
+default, count byte and records, which is the frame builder's output
+with the header and reserved word dropped. Taking it from that builder
+rather than formatting records again means the two cannot drift.
+
+diff --git a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h
+--- a/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 21:05:27.449018930 -0500
++++ b/crates/samsung-sit-ffi/include/samsung_sit_ffi.h	2026-11-09 21:00:16.385446986 -0500
+@@ -1484,6 +1484,20 @@
+                                                             size_t *out_len);
+ 
+ /*
++ The `SET_BROADCAST_SMS_CONFIG` payload body a country accepts by default:
++ a count byte then seven bytes per range, which is everything after the
++ reserved word.
++
++ For a caller that assembles the frame itself -- the boot-parity replay
++ states payload bodies, not frames -- so that it and the CellBroadcast
++ interface derive their channels from the same table instead of each
++ carrying its own. `out` must have room for
++ `1 + 7 * SAMSUNG_SIT_MAX_BROADCAST_RANGES` bytes. `mcc` of 0 means the
++ country is not known yet and falls back to AOSP's default table.
++ */
++SamsungSitStatus samsung_sit_broadcast_config_body(uint16_t mcc, uint8_t *out, size_t *out_len);
++
++/*
+  Build an `SMS_BROADCAST_ACTIVATION` (0x0107).
+ 
+  `activate` non-zero turns reception on. The wire value is inverted -- zero
+diff --git a/crates/samsung-sit-ffi/src/builders.rs b/crates/samsung-sit-ffi/src/builders.rs
+--- a/crates/samsung-sit-ffi/src/builders.rs	2026-11-09 21:05:27.449074861 -0500
++++ b/crates/samsung-sit-ffi/src/builders.rs	2026-11-09 21:00:11.316293672 -0500
+@@ -847,6 +847,42 @@
+     }
+ }
+ 
++/// The `SET_BROADCAST_SMS_CONFIG` payload body a country accepts by default:
++/// a count byte then seven bytes per range, which is everything after the
++/// reserved word.
++///
++/// For a caller that assembles the frame itself -- the boot-parity replay
++/// states payload bodies, not frames -- so that it and the CellBroadcast
++/// interface derive their channels from the same table instead of each
++/// carrying its own. `out` must have room for
++/// `1 + 7 * SAMSUNG_SIT_MAX_BROADCAST_RANGES` bytes. `mcc` of 0 means the
++/// country is not known yet and falls back to AOSP's default table.
++#[no_mangle]
++pub unsafe extern "C" fn samsung_sit_broadcast_config_body(
++    mcc: u16,
++    out: *mut u8,
++    out_len: *mut usize,
++) -> SamsungSitStatus {
++    if out.is_null() || out_len.is_null() {
++        return SamsungSitStatus::NullPointer;
++    }
++    let mcc = if mcc == 0 { None } else { Some(mcc) };
++    let ranges = sit::default_ranges_for_mcc(mcc);
++    if ranges.is_empty() || ranges.len() > crate::MAX_BROADCAST_RANGES {
++        return SamsungSitStatus::ArgOutOfRange;
++    }
++    // Reuse the one writer, so the body can never drift from the frame
++    // builder's: take the frame and drop its header and reserved word.
++    let frame = match sit::build_set_broadcast_sms_config(0, &ranges) {
++        Ok(f) => f,
++        Err(e) => return crate::status_from_err(&e),
++    };
++    let body = &frame[12..];
++    core::ptr::copy_nonoverlapping(body.as_ptr(), out, body.len());
++    out_len.write(body.len());
++    SamsungSitStatus::Ok
++}
++
+ /// Build an `SMS_BROADCAST_ACTIVATION` (0x0107).
+ ///
+ /// `activate` non-zero turns reception on. The wire value is inverted -- zero
