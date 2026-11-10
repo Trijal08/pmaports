@@ -1,21 +1,21 @@
 {
-  "name" : "google,komodo",
+  "name": "google,komodo",
   "parent-name": "default",
-  "profiles" : [
+  "profiles": [
     {
-      "name" : "quiet",
-      "feedbacks" : [
+      "name": "quiet",
+      "feedbacks": [
         {
-          "event-name" : "button-pressed",
-          "type"       : "VibraPattern",
-          "magnitudes" : [ 1.0 ],
-          "durations"  : [ 20 ]
+          "event-name": "button-pressed",
+          "type": "VibraPattern",
+          "magnitudes": [0.15],
+          "durations": [2]
         },
         {
-          "event-name" : "key-pressed",
-          "type"       : "VibraPattern",
-          "magnitudes" : [ 1.0 ],
-          "durations"  : [ 20 ]
+          "event-name": "key-pressed",
+          "type": "VibraPattern",
+          "magnitudes": [0.15],
+          "durations": [2]
         }
       ]
     }
