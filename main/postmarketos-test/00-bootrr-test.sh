@@ -3,7 +3,7 @@
 
 bootrr | tee bootrr.log
 
-if [ grep -q 'fail' bootrr.log ]; then
+if grep -q 'fail' bootrr.log; then
 	echo "PMOS-CI-TEST: bootrr sanity check failed"
 	exit 1
 fi

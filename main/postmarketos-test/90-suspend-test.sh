@@ -10,11 +10,11 @@ if [ ! -e /sys/class/rtc/rtc0 ]; then
 	exit 0
 fi
 
-time=$(($(cat /sys/class/rtc/rtc0/since_epoch) + $SLEEP_TIME))
+time=$(($(cat /sys/class/rtc/rtc0/since_epoch) + SLEEP_TIME))
 echo $time | tee /sys/class/rtc/rtc0/wakealarm
 echo mem | tee /sys/power/state
 sleep 3 # wait for the system to suspend
-if [ $(cat /sys/class/rtc/rtc0/since_epoch) -lt $time ]; then
+if [ "$(cat /sys/class/rtc/rtc0/since_epoch)" -lt $time ]; then
 	echo "FAIL: System did not suspend"
 	exit 1
 fi

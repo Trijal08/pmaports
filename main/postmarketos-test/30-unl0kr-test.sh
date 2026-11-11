@@ -12,7 +12,7 @@ TIME=$(date +%s)
 timeout $SECS unl0kr -v 2>&1 | tee /tmp/unl0kr.log
 CODE=$?
 EXIT_TIME=$(date +%s)
-ELAPSED=$(($EXIT_TIME - $TIME))
+ELAPSED=$((EXIT_TIME - TIME))
 
 if grep -i "error" /tmp/unl0kr.log; then
 	echo "unl0kr reported an error!"
@@ -24,7 +24,7 @@ if [ $CODE -eq 0 ] && [ $ELAPSED -eq $SECS ]; then
 	exit 0
 fi
 
-ELAPSED=$(($EXIT_TIME - $TIME))
+ELAPSED=$((EXIT_TIME - TIME))
 echo "unl0kr exited with code $? after $ELAPSED seconds (expected timeout after $SECS)"
 echo "SKIP: broken test"
 exit 0
