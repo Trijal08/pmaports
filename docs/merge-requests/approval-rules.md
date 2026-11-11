@@ -38,13 +38,14 @@ approval by any team member.
 
 Require approval by any package maintainer.
 
-If the author of the MR is a package maintainer, co-maintainers must be given a
-48-hour review window (starting when they're notified, typically via the
-automated GitLab ping). After this window expires, the merge request can
+If the author of the MR is a package maintainer, co-maintainers who are not [on
+hiatus](#package-with-idle-maintainers) must be given a 48-hour review
+window[^review-window-start]. After this window expires, the merge request can
 proceed with any two approvals from team members. The submitting maintainer may
 choose to block the merge request to wait for co-maintainer review beyond the
 48-hour window if desired.
 
+(package-with-idle-maintainers)=
 #### Package with idle maintainer(s)
 
 Wait two weeks for the maintainer(s) to respond to the MR, unless they are on
@@ -72,3 +73,6 @@ Changes to `kconfigcheck.toml` are a special operation, see
 * [MRs to stable branches](./stable-branches) follow the same approval rules as
 to the `main` branch. The separate article describes what changes get done in
 MRs to stable branches and the workflow for creating these.
+
+[^review-window-start]: The review window starts when maintainers are notified,
+                        typically via the automated GitLab ping.
