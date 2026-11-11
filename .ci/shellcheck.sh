@@ -22,6 +22,7 @@ sh_files="
 	./main/postmarketos-initramfs/init.sh
 	./main/postmarketos-initramfs/init_functions.sh
 	./main/postmarketos-mkinitfs-hook-netboot/netboot.sh
+	./main/postmarketos-test/*.sh
 	./main/postmarketos-ui-os-installer/rootfs-usr-bin-pmos_setup.sh
 	./main/postmarketos-usb-moded/rootfs-usr-lib-systemd-system-generators-umtprd-config-generator
 	./main/ttyescape/*.post-install
