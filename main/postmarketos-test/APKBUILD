@@ -1,6 +1,6 @@
 maintainer="Pablo Correa Gomez <pabloyoyoista@postmarketos.org>"
 pkgname=postmarketos-test
-pkgver=2
+pkgver=3
 pkgrel=0
 pkgdesc="Common test utilities for postmarketOS"
 url="https://postmarketos.org"
@@ -71,7 +71,7 @@ unl0kr() {
 }
 sha512sums="
 03bea177e69c6f68976aa766918c9b662601671bb4a1336299f9cff7ed0d3e8d1accf8622c4f152aa78c00a97f46cecfa150ca59b633a76d8b25a85cfa87ce68  00-bootrr-files.files
-068608b05b0d9b861f085cd5dbb9b8f4f8102bd45f58c03464ca0032248acb21093ca4824079d884006c93056fe7f1a428b81d7ae6824965f9e4c8e006e42147  00-bootrr-test.sh
+67824bca2c341f2c6e933cd37ce8c57977e1992ab57eb9593dc0e8e1ae453baa786f3574e99f4135c9cdd8d890c3af326e3aecfc86f8f43706f2bd877dfa8bfa  00-bootrr-test.sh
 b02efde0a91c8e035763a8bd6752e178a1f45e062fca7598db88cb0b459ca128e920e4ce75f4ad14e57444fcbc4324ceb48adf146e54bb189a782d7ee7b124ff  30-unl0kr-test.sh
 23b3cbcd7cf6bf9ec7496eaceb0e7198eb96e22a0fe904019fda6b67c951de545e2654b96d8ce7b825c0a5e030be08485a420869868e6780c6a7ae29ca8bc23f  90-suspend-test.sh
 "
