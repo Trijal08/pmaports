@@ -190,6 +190,10 @@ if __name__ == "__main__":
             if apkbuild["pkgname"] in device.dependencies:
                 devices_under_test.add(device)
 
+        # Test all devices when the test package itself is modified
+        if apkbuild["pkgname"] == "postmarketos-test":
+            devices_under_test.update(supported_devices.values())
+
     if common.commit_message_has_string("[ci:skip-build]"):
         print("User requested skipping build, skipping build")
         archs = ArchTagSet()
