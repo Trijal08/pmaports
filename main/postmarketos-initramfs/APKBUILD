@@ -1,8 +1,8 @@
 # Co-Maintainer: Clayton Craft <clayton@craftyguy.net>
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+maintainer="Ferass El Hafidi <funderscore@postmarketos.org>"
 pkgname=postmarketos-initramfs
 pkgver=3.12.6
-pkgrel=0
+pkgrel=1
 pkgdesc="Base files for the postmarketOS initramfs / initramfs-extra"
 url="https://postmarketos.org"
 provides="postmarketos-ramdisk=$pkgver-r$pkgrel"
