@@ -3,7 +3,7 @@
 # Co-Maintainer: exkc <exkc@exkc.moe>
 maintainer="Robert Eckelmann <longnoserob@postmarketos.org>"
 pkgname=linux-nura-marvell
-pkgver=6.18.62
+pkgver=6.18.63
 pkgrel=0
 pkgdesc="mainline (stable) for Marvell SoC"
 arch="armv7"
@@ -84,6 +84,6 @@ sha512sums="
 ac8471bae424aa0e5835f8c6ed04834918ca665941910fe132353bc35735f1e848e3c34b11e3cd50a49487ba8b5e7cd2a22efb678f19aa85a584efa01d8b49b1  0002-dts-marvell-mmp3-dell-ariel-merge-parts-from-linux-m.patch
 107416ff25b85f1ae28cb44bbe859f854f075927437c0e6b1f6fe687baff68410ed7deac7b1d44bfca4f4868964105941800ee3887da8d12efd9d893c43d755d  0003-dts-marvell-mmp-dell-ariel-add-framebuffer.patch
 5ba185f8e3665189da7f06891e3ea99b68a215a6c568901106568f42d5f0decd156981632dc19553cb2c0862bb2f5c82836d6b02a85e246e3bb555a493396683  0004-arm-boot-dts-marvell-mmp3.dtsi-fix-dma-interrupts.patch
-0c3a60bc37e1d076cab7c98c99387c6c2afc898b1880577b6c4969d3e993a1f84788b2686256122db59d92483714eb85bb69f63a566ba22bbd89d1130db688de  linux-nura-marvell-6.18.62.tar.xz
-fb4434f6168ea3bc3bfb579644640ba62537343f61dd9f415a45dabc0a2e47f96d38f2ef3a3a099fd92fa3580656279566547ed00057c7962ae2965fc7eed194  config-nura-marvell.armv7
+5365eddd6b7dcd51553efd3dd2578f845f034f34c7ebdeea6fb7517833f3d26585fd0bd450fe6a7be86f7e9b7852ee7b416dcdc7c18f0e4dd4b0400e6a3e55a9  linux-nura-marvell-6.18.63.tar.xz
+6146ca937874227a155993479bdeaba40fa869c5123ee4ebb7ea074066fd1ec3a3426b336c38d60000f23e0bcac184ed7bac7b019b145018f245e98faf1e4d02  config-nura-marvell.armv7
 "
