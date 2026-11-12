@@ -126,7 +126,7 @@ default_value = false
 
 [variable.metadata.initfs_compression]
 description = "Format and compression level to use when compressing the initramfs. The format for this is: FORMAT:LEVEL, for example zstd:fast. Supported formats are zstd, lz4, lzma, gzip, none. Supported compression levels are: default, fast, best. This option does not impact the initramfs-extra archive, it is generated without any compression"
-default_value = "gzip:default"
+default_value = "zstd"
 
 [variable.metadata.create_initfs_extra]
 description = "Instructs mkinitfs to generate an initramfs archive, and an initramfs-extra archive. The initramfs is a minimal archive designed for devices with small boot partitions."
