@@ -2,7 +2,7 @@
 # group=kde-plasma
 maintainer="team/kde <bribbers@disroot.org>"
 pkgname=plasma-login-manager
-pkgver=6.8.2
+pkgver=6.8.3
 pkgrel=0
 pkgdesc="A display manager for KDE Plasma"
 # armhf blocked by qt6-qtdeclarative
@@ -80,7 +80,7 @@ package() {
 
 
 sha512sums="
-2b90695add2c46a8b0cbd00597658c1b9973d6b545546c6feeb5e701c7d164bfc036a03b0215a1bcb436d9f62e591ea317c734d70adae43edd2570420f055422  plasma-login-manager-6.8.2.tar.xz
+c3a852db76c26a5263183e60fa7c7c442fe7737c5f3cd2ffc0e441652ae05583b25b604fd58bab06cdc938bbe71623ef143c07d5edb55e554a6b9ec99627e928  plasma-login-manager-6.8.3.tar.xz
 77fcd3ace910cc694266afb32ac75258e954dfcefa206dfc5f42204b4e3e14528d47a9e28e6cb0aa7f1670450a42023ce4ee85eac76fce2806bab54b2d1aa37c  plasmalogin.pam
 44d0fce5ed4dd19c0a66cd3b191f33658dcaadf619711c8ed8dccfa8697e8464836780404307271922a910e3df631b8cecfec77822a252e3eabf12c28e65dfa1  plasmalogin-autologin.pam
 e82cf4dbca78ea73cc26378ca94dca12d9bb48fe13c29ff1e8403f44f4c83ba5000b8cfff0d2c4161ef9e8218edda82d4226ea571b70ffe7042ed3f2580538cd  plasmalogin-greeter.pam

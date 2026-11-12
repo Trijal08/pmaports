@@ -1,7 +1,7 @@
 # Forked from Alpine to add systemd!
 maintainer="team/kde <bribbers@disroot.org>"
 pkgname=kscreenlocker
-_pkgver=6.8.2
+_pkgver=6.8.3
 pkgver=9999$_pkgver
 pkgrel=0
 pkgdesc="Library and components for secure lock screen architecture"
@@ -76,7 +76,7 @@ package() {
 }
 
 sha512sums="
-e6b2b05e526af5679a9332c4420873d07be77d1bff9916f7c17e7f5cb8290273e1017b7446bc4444858a98f802ceb962636f842a3acd6849cfb84c14be24de13  kscreenlocker-6.8.2.tar.xz
+bff06e26968a66728540f310a6bfafcff0ae72bb37babd65539147fee686eb8691d658cc634e7ae11974aa1764e7c57d24ac72a8dec1215c447562e94dd36cc7  kscreenlocker-6.8.3.tar.xz
 cdbc45fb74a3c43fb2302fe09bf2f9f644ca93693e0110cf748c403762236aaeea8284a8d21fc495014c69b6d5fe4789aaff7687ce9f03dda270490fa5042e2b  kde.pam
 fe2f244b73b5cccf4b7125b9e3cac0a35566840e4ba2f69937fd8053aa56af71ee43dcbfa9c0f79de9ebe31f656e98a5d38955f77560be5c3535b08215ad8789  kde-fingerprint.pam
 2ae866d25224ba345ea9d5ddb2fce668de5c51d1cfbb4d7a048c50107ccd6cffc3231a46855599c0ba3d62ff002a26e45b69d9029f88f4ab42661465a5e526c5  kde-smartcard.pam

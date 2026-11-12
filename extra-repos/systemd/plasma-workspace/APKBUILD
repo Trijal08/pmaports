@@ -1,7 +1,7 @@
 # Forked from Alpine to add systemd!
 maintainer="team/kde <bribbers@disroot.org>"
 pkgname=plasma-workspace
-_pkgver=6.8.2
+_pkgver=6.8.3
 pkgver=9999$_pkgver
 pkgrel=0
 pkgdesc="KDE Plasma Workspace"
@@ -205,6 +205,6 @@ package() {
 }
 
 sha512sums="
-32fd7185d06ba5cd5f77e59b8eb013feaa842c2dff24431f4b75e081c961160a9d0302bcb14e397b1218b53713d6d4168618baee05291668885eb63085fc9c79  plasma-workspace-6.8.2.tar.xz
+663a8aff2195ff054f1544e449b58a8d1850ed158f5d9ffe75e38b5204bd0e51f2364ad315a1aeef07072e153d3f4f2edcd3c8869534742b5b57e519257291a4  plasma-workspace-6.8.3.tar.xz
 672bde528ca9a3c07fa80b0a26d29becc3c158389e3c8d273c829264cc7f8f5ba502e71715c2eacd76c77e90f461dd0238bb7e31876070eb8b7df767d6f3aa53  org.kde.timezone.rules
 "
