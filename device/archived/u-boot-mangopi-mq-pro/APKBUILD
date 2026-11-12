@@ -1,4 +1,5 @@
-maintainer="exkc <exxxxkc@getgoogleoff.me>"
+# Archived: the only maintainter don't want to maintain this package anymore
+maintainer=""
 pkgname=u-boot-mangopi-mq-pro
 pkgver=2022.11.01
 pkgrel=1
