@@ -1,9 +1,9 @@
 maintainer="Achill Gilgenast <achill@achill.org>"
 pkgname=postmarketos-repo-nightly
-pkgver=1
+pkgver=2
 pkgrel=0
 pkgdesc="Meta-package to install nightly repositories"
-url="https://nightly.postmarketos.org/"
+url="https://nightly.nura.eco/"
 arch="noarch !riscv64 !armhf" # not in nightly-builder
 license="Unlicense"
 # NOTE: pmbootstrap doesn't allow for-loops, so it is a bit repetitve
@@ -26,13 +26,13 @@ subpackages="
 	$pkgname-keys::all
 	$pkgname-phosh:_nightly
 	"
-source="https://nightly.postmarketos.org/desktop-nightly/aarch64-ci@nightly.postmarketos.org.rsa.pub
-	https://nightly.postmarketos.org/desktop-nightly/armv7-ci@nightly.postmarketos.org.rsa.pub
-	https://nightly.postmarketos.org/desktop-nightly/loongarch64-ci@nightly.postmarketos.org.rsa.pub
-	https://nightly.postmarketos.org/desktop-nightly/ppc64le-ci@nightly.postmarketos.org.rsa.pub
-	https://nightly.postmarketos.org/desktop-nightly/s390x-ci@nightly.postmarketos.org.rsa.pub
-	https://nightly.postmarketos.org/desktop-nightly/x86-ci@nightly.postmarketos.org.rsa.pub
-	https://nightly.postmarketos.org/desktop-nightly/x86_64-ci@nightly.postmarketos.org.rsa.pub
+source="https://nightly.nura.eco/desktop-nightly/aarch64-ci@nightly.postmarketos.org.rsa.pub
+	https://nightly.nura.eco/desktop-nightly/armv7-ci@nightly.postmarketos.org.rsa.pub
+	https://nightly.nura.eco/desktop-nightly/loongarch64-ci@nightly.postmarketos.org.rsa.pub
+	https://nightly.nura.eco/desktop-nightly/ppc64le-ci@nightly.postmarketos.org.rsa.pub
+	https://nightly.nura.eco/desktop-nightly/s390x-ci@nightly.postmarketos.org.rsa.pub
+	https://nightly.nura.eco/desktop-nightly/x86-ci@nightly.postmarketos.org.rsa.pub
+	https://nightly.nura.eco/desktop-nightly/x86_64-ci@nightly.postmarketos.org.rsa.pub
 	"
 options="!check !archcheck" # no tests, all is correct for -keys
 
@@ -53,7 +53,7 @@ _nightly() {
 	depends="$pkgname-keys"
 
 	mkdir -p "$subpkgdir"/usr/lib/apk/repositories.d
-	echo "https://nightly.postmarketos.org/$_repo-nightly/" >> "$subpkgdir"/usr/lib/apk/repositories.d/90-$subpkgname.list
+	echo "https://nightly.nura.eco/$_repo-nightly/" >> "$subpkgdir"/usr/lib/apk/repositories.d/90-$subpkgname.list
 }
 
 sha512sums="
