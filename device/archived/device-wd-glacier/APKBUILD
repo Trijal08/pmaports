@@ -1,5 +1,6 @@
+# Archived: request of the maintainer
 # Reference: <https://postmarketos.org/devicepkg>
-maintainer="exkc <exkc@exkc.moe>"
+maintainer=""
 pkgname=device-wd-glacier
 pkgdesc="WD MyCloud Gen2"
 pkgver=2
