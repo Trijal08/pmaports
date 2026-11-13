@@ -1,0 +1,75 @@
+maintainer="Anton Bambura <jenneron@protonmail.com>"
+pkgname=linux-qcom-handheld
+pkgver=7.3_git20261112
+pkgrel=0
+_commit="5dc2607571f98b51d2f2d161fcf9001ea2e75130"
+pkgdesc="Mainline Kernel for Qualcomm based handhelds"
+arch="aarch64"
+_carch="arm64"
+url="https://github.com/OpenHandheldCollective/linux"
+license="GPL-2.0-only"
+options="!check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+	pmb:kconfigcheck-uefi
+"
+makedepends="
+	bison
+	clang
+	elfutils-dev
+	findutils
+	flex
+	linux-headers
+	lld
+	llvm
+	openssl-dev
+	pahole
+	perl
+	postmarketos-installkernel
+	python3
+	zstd
+"
+source="linux-$_commit.tar.gz::https://github.com/OpenHandheldCollective/linux/archive/$_commit.tar.gz
+	config-${pkgname#linux-}.$arch
+"
+builddir="$srcdir/linux-$_commit"
+
+# Used internally by pmbootstrap. Don't touch.
+# TODO: Remove once minimum default pmbootstrap version supports
+# kernel packages without '_flavor' and '_config'.
+_config="config-${pkgname#linux-}.$arch"
+_flavor="${pkgname#linux-}"
+
+prepare() {
+	default_prepare
+	cp "$srcdir"/config-"${pkgname#linux-}"."$arch" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-${pkgname#linux-}"
+}
+
+package() {
+	install -Dm644 "$builddir"/arch/"$_carch"/boot/vmlinuz.efi \
+		"$pkgdir"/boot/linux.efi
+
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot/ \
+		INSTALL_MOD_PATH="$pkgdir"/usr \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
+
+	rm -f "$pkgdir"/usr/lib/modules/*/build "$pkgdir"/usr/lib/modules/*/source
+
+	install -Dm644 "$builddir"/include/config/kernel.release \
+		"$pkgdir"/usr/share/kernel/"${pkgname#linux-}"/kernel.release
+}
+
+sha512sums="
+959f79e7e63a6fe7a4a68d9980817c1ab8ce8c20f28eccd10244ba798966ae18b5d6450f6c259a3d8600b99d05fc2225b68641a11ea0a6117e8653827d3b7c7b  linux-5dc2607571f98b51d2f2d161fcf9001ea2e75130.tar.gz
+9a1c9998326d51e8297f139e1aaf50f5534a284f49464bc5e6ae4776933710b974347de39f49a38ba454ad5b25e1734d14b11b2357cba47e27a3172e19781f01  config-qcom-handheld.aarch64
+"
