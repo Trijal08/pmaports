@@ -1,0 +1,2 @@
+# iio-sensor-proxy with libssc: accelerometer mount matrix
+SUBSYSTEM=="misc", KERNEL=="fastrpc-*", IMPORT{builtin}="hwdb 'fastrpc:dt:$attr{[devicetree/base]compatible}'"

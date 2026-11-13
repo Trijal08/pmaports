@@ -1,0 +1,216 @@
+# qcom stuff
+backlight
+drm
+drm_client_lib
+drm_display_helper
+drm_kms_helper
+msm
+gpi
+i2c-qcom-geni
+spi-geni-qcom
+leds-qcom-lpg
+phy-qcom-qmp-combo
+wcd939x-usbss
+qrtr
+pmic_glink_altmode
+qcom-pmi632-lcdb-regulator
+qcom-pm8150l-lcdb-regulator
+qcom_pmic_tcpm
+
+# ayn-odin
+panel-innolux-td4328
+rmi_core
+rmi_i2c
+display-connector
+lontium-lt8912b
+
+# ayn-odin2
+panel-synaptics-td4328
+pwm_bl
+rmi_core
+rmi_i2c
+display-connector
+lontium-lt8912b
+gpio-sbu-mux
+
+# ayn-odin2mini
+panel-boe-xm91080g
+odin2mini-backlight
+hynitron_cstxxx
+display-connector
+lontium-lt8912b
+gpio-sbu-mux
+
+# ayn-odin2portal
+panel-chipone-icna35xx
+edt-ft5x06
+gpio-sbu-mux
+
+# ayn-odin3
+panel-chipone-icna35xx
+edt-ft5x06
+nb7vpq904m
+
+# ayn-thor
+panel-chipone-icna35xx
+panel-chipwealth-ch13726a
+edt-ft5x06
+gpio-sbu-mux
+
+# ayn-thor-lite
+panel-chipone-icna35xx
+panel-chipwealth-ch13726a
+edt-ft5x06
+
+# retroid-pocket-classic
+panel-chipwealth-ch13726a
+edt-ft5x06
+
+# anbernic-rg55g1
+panel-focaltech-ft7131m
+pwm_bl
+aw37503-regulator
+edt-ft5x06
+
+# mangmi-sm6115-air-x-mq65
+panel-td4310
+pwm_bl
+aw37503-regulator
+
+# mangmi-sm6115-air-x-mq66
+panel-hx83112a
+pwm_bl
+aw37503-regulator
+himax_hx83112a
+
+# mangmi-sm6115-air-x-mq66b
+panel-bm5460bb1
+pwm_bl
+aw37503-regulator
+
+# mangmi-sm6115-air-y
+panel-gh7005
+pwm_bl
+aw37503-regulator
+hynitron_cstxxx
+
+# mangmi-air-y-pro
+panel-mangmi-air-y-pro
+hynitron-cst66xx
+gpio-sbu-mux
+
+# mangmi-pocket-max
+panel-chipone-icna35xx
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-duolite
+panel-hx83112a
+panel-retroid-duolite-bottom
+wl818s
+wl818s_bl
+pwm_bl
+aw37503-regulator
+himax_hx83112b
+edt-ft5x06
+
+# retroidpocket-rp5
+panel-chipwealth-ch13726a
+panel-visionox-vtdr6130
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-rpflip2
+panel-chipwealth-ch13726a
+panel-visionox-vtdr6130
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-rpmini
+panel-chipwealth-ch13726a
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-rpminiv2
+panel-chipwealth-ch13726a
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-rp6
+panel-visionox-vtdr6130
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-rpnova
+panel-ilitek-il97680a
+edt-ft5x06
+gpio-sbu-mux
+
+# retroidpocket-rpduo
+panel-ilitek-il97680a
+panel-visionox-vtdr6130
+edt-ft5x06
+gpio-sbu-mux
+
+# ayaneo-pocketace
+panel-ar06-4inch
+sy7758
+sgm3804-regulator
+synaptics_dsx
+nb7vpq904m
+
+# ayaneo-pocketdmg
+panel-ar02-3inch
+sgm3804-regulator
+hynitron-cst66xx
+nb7vpq904m
+
+# ayaneo-pocketds
+panel-chipone-icna35xx
+panel-sitronix-st7703
+sy7758
+sgm3804-regulator
+gpio-pca953x
+edt-ft5x06
+goodix_ts
+nb7vpq904m
+
+# ayaneo-pocketevo
+panel-chipone-icna35xx
+edt-ft5x06
+nb7vpq904m
+
+# ayaneo-pocket-s1
+panel-wt0600-1k
+panel-renesas-r63419
+sy7758
+sgm3804-regulator
+goodix_ts
+nb7vpq904m
+
+# ayaneo-pocket-s-mini
+panel-ar16-4inch
+sy7758
+sgm3804-regulator
+hynitron-cst66xx
+nb7vpq904m
+
+# ayaneo-pocket-s2
+panel-renesas-r63419
+sy7758
+sgm3804-regulator
+goodix_ts
+nb7vpq904m
+
+# konkr-pocket-fit
+panel-ar14-144hz
+sy7758
+sgm3804-regulator
+chipone-tddi
+nb7vpq904m
+
+# konkr-pocket-fit-elite
+panel-ar14-144hz
+aw99706
+sgm3804-regulator
+chipone-tddi

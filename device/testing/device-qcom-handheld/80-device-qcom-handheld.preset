@@ -1,0 +1,3 @@
+# InputPlumber does not autostart on aarch64 devices yet
+# https://github.com/ShadowBlip/InputPlumber/issues/674
+enable inputplumber.service

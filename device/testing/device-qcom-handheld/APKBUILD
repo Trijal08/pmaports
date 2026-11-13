@@ -1,0 +1,72 @@
+# Reference: <https://postmarketos.org/devicepkg>
+maintainer="Anton Bambura <jenneron@protonmail.com>"
+pkgname=device-qcom-handheld
+pkgver=1
+pkgrel=0
+pkgdesc="Generic device package for various Qualcomm based handheld devices"
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	alsa-ucm-conf-qcom-handheld
+	firmware-ayn-audioreach-topology
+	firmware-ayn-odin-3
+	hexagonrpcd
+	inputplumber
+	linux-firmware-ath12k
+	linux-firmware-qca
+	linux-firmware-qcom
+	linux-qcom-handheld
+	make-dynpart-mappings
+	msm-firmware-loader
+	msm-firmware-loader-hexagonrpcd
+	postmarketos-base
+	soc-qcom
+	soc-qcom-qbootctl
+	systemd-boot
+	unl0kr-fbforcerefresh
+"
+makedepends="devicepkg-dev"
+subpackages="$pkgname-systemd $pkgname-udev"
+source="
+	50-fastrpc.hwdb
+	80-device-qcom-handheld.preset
+	81-libssc.rules
+	deviceinfo
+	kernel-cmdline.conf
+	hexagonrpcd-adsp-secure-sensorspd.service
+	modules-initfs
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+
+	# inputplumber
+	install -Dm644 "$srcdir"/80-device-qcom-handheld.preset \
+		-t "$pkgdir"/usr/lib/systemd/system-preset
+
+	# some of these devices use /dev/fastrpc-adsp-secure instead of /dev/fastrpc-adsp
+	install -Dm644 "$srcdir"/hexagonrpcd-adsp-secure-sensorspd.service \
+		-t "$pkgdir"/usr/lib/systemd/system
+
+	# mount matrix
+	install -Dm644 50-fastrpc.hwdb \
+		-t "$pkgdir"/usr/lib/udev/hwdb.d
+	install -Dm644 81-libssc.rules \
+		-t "$pkgdir"/usr/lib/udev/rules.d
+}
+
+sha512sums="
+e8d3c960f44489b6ee9f3fd75c3c5c527352a1607ed3d9103181f63977cf2415a89e4fcd09e5f109c9c1b723d3daf326addae8f1e09f2fc5cf0bc73b37353a27  50-fastrpc.hwdb
+c0ec03b01a32ba288e4fbda459e2200a4c74c1b812b7e797e88a466cef3258c82884fcbc8e1d2787bcb39ac1dfb31e2758459a6cbd0b9c81416878dc0e5ef09c  80-device-qcom-handheld.preset
+b30b684783145d724ba3b26995f08c30e5a60fee2dde643da2f551af2ee62bb116b1f1468d123b2c68ef6f65fbc7230d66e09250eac7f3a3455080a9dbf6c143  81-libssc.rules
+27d997f5de16fed31a5607da463faa31fd3313dba9a8627d2ea1ba0fd0cde5a353e3c1a06a859972dbd3ba95aadedc6f939be9cb3b27e1383a225bbfa5612db5  deviceinfo
+fa0d5aca99b159ffae8cee30f6409f0a7fd825d0ab5163a10b4fd6403b7ae8e35bed2fdcebb0099aaea31ef16b864dd31ce5a53ea03a2c0bed6d07ec06d750bc  kernel-cmdline.conf
+2e2751b0583c8c31dcad48d67eddb525ac968a0a030efd9fec58b73cd11cdd0f342c04734a5d9d511197dc78f645b1f97ee753526ecf6ce735fe6af815ccfd8b  hexagonrpcd-adsp-secure-sensorspd.service
+b30ab2cc64ce96c70f8da5b41838eb22e29cbc5f62445b5d38fd848c9eba1a86909c47a5f96de57db9e43d26792cf80d98572a1c1fb77622cedbf92cf154418c  modules-initfs
+"
