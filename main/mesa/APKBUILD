@@ -1,7 +1,7 @@
 # Contributor: David Heidelberg <david@ixit.cz>
 maintainer="team/alpine-desktop <achill@achill.org>"
 pkgname=mesa
-pkgver=26.3.0_git20260904
+pkgver=26.3.0
 pkgrel=0
 pkgdesc="Mesa DRI OpenGL library"
 url="https://www.mesa3d.org"
@@ -73,7 +73,7 @@ _quote_version="1.0.33"
 _syn_version="2.0.68"
 _unicode_ident_version="1.0.12"
 _rustc_hash_version="2.1.1"
-_commit=e34f755742f8c0a7c4121bdef94f3cc7dc9c44c2
+_commit=0a6fa60abb737d26ac8a316a4aad7c9ddf64f9e4
 source="mesa-$_commit.tar.gz::https://gitlab.freedesktop.org/mesa/mesa/-/archive/$_commit/mesa-$_commit.tar.gz
 	paste-$_paste_version.tar.gz::https://static.crates.io/crates/paste/paste-$_paste_version.crate
 	proc-macro2-$_proc_macro2_version.tar.gz::https://static.crates.io/crates/proc-macro2/proc-macro2-$_proc_macro2_version.crate
@@ -83,7 +83,6 @@ source="mesa-$_commit.tar.gz::https://gitlab.freedesktop.org/mesa/mesa/-/archive
 	rustc-hash-$_rustc_hash_version.tar.gz::https://static.crates.io/crates/rustc-hash/rustc-hash-$_rustc_hash_version.crate
 	23575.patch
 	riscv64-tls.patch
-	llvm23.patch
 	"
 builddir="$srcdir/mesa-$_commit"
 options="!check" # TODO
@@ -451,7 +450,7 @@ _vulkan_layers() {
 }
 
 sha512sums="
-c62719933f7932cd1f6315b710d4caeb2968ca08de663b3ec526f0566a8ee1c570e0205c7666b51216e2f795c651eb134a0a0eca53467fe0661286a29936fbe3  mesa-e34f755742f8c0a7c4121bdef94f3cc7dc9c44c2.tar.gz
+d874ac220c919b5357a634b335c263cc25c741cef6616206fd51435f94a9e16be97f6127d87738cb6027a91f97eb57b002cc56eb096b3e18b4df2e711683be4e  mesa-0a6fa60abb737d26ac8a316a4aad7c9ddf64f9e4.tar.gz
 3a793f0e5e773a7f7defc798a4c17ae9a40d715144632ea6cb0a8c785e14c4212046491df016bb9838281f8eaf327a79f01c1e2ac5f26785c028bc880faff9ee  paste-1.0.14.tar.gz
 1cdb7e22a35ae231d880c9420784c9acf97bda2db258b3d34aae5061dc1858449defe19a49e12c6a4173906aa72a4115059ac2db0fc760205fd2ab8b5b414434  proc-macro2-1.0.86.tar.gz
 c1e76c3c017e8554eebe309f8167fd56fce931981c06798aa85a0cc6d64a9cba6ab103f5a1324e69c6f9ca5dc47a8e31ff2e847850542748697afcd265b5939c  quote-1.0.33.tar.gz
@@ -460,5 +459,4 @@ bc1824e1e4452a40732fc69874d7e1a66f7803717a314790dcf48867eba34bc9441331ef031e3869
 87097d98d47f327d000041ab13acddc366f1500d9c3e5c82169c3358112c7a7c03701c9b3c2c81d9f9da65b7ebac1c479b179dfaf7c059cd0b929b4673e51084  rustc-hash-2.1.1.tar.gz
 91bdda3a4b5906963c8c0053ebb924b952dac3d50e66afee87a7abebf82141426b34dce7e1947fe18c54dedd33537792ec13a94504ff7ad890243507d57fdc88  23575.patch
 ce1887fb7d425b94c375a0547bee40c308809c01f5ce1bcddabcc69a7fcb445efb9d5f5c7bac49b2778ab40687c7bce204d278b0bf028d124c75e59083107fba  riscv64-tls.patch
-0ca39282aa42d0b10a5d88a49cc91aea94caa6a9785e7bf75071d101c09ec5debd63a4478053657e163c94007d765d1f05c98a12fe16ad044c3fc10ef1fc27e9  llvm23.patch
 "
