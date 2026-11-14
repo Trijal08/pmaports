@@ -1,4 +1,4 @@
-# Reference: <https://postmarketos.org/deviceinfo>
+# Reference: <https://nura.eco/deviceinfo>
 # Please use double quotes only. You can source this file in shell
 # scripts.
 
@@ -14,5 +14,6 @@ deviceinfo_drm="true"
 
 
 # Bootloader related
+deviceinfo_boot_part_start="8192"
 deviceinfo_boot_filesystem="fat32"
 
