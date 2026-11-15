@@ -67,6 +67,9 @@ enable drkonqi-coredump-processor@.service
 ## gnome
 enable gdm.service
 
+## steamos / opengamepadui
+enable steamos-manager.service
+
 ## optional dependency of gnome-usage
 enable vnstat.service
 
