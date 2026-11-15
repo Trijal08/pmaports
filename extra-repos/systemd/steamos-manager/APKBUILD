@@ -2,12 +2,13 @@
 maintainer="Victoria Brekenfeld <pkg@drakulix.de>"
 pkgname=steamos-manager
 pkgver=26.4.1
-pkgrel=0
+pkgrel=1
 pkgdesc="SteamOS Manager is a system daemon that aims to abstract Steam's interactions with the operating system."
 url="https://gitlab.steamos.cloud/holo/steamos-manager"
 # armv7: error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
 # ppc64le: error[E0659]: `STATX_TYPE` is ambiguous
-arch="all !armv7 !ppc64le"
+# riscv64: fails with pmb crossdirect
+arch="all !armv7 !ppc64le !riscv64"
 license="MIT"
 depends="orca"
 makedepends="
@@ -31,16 +32,17 @@ subpackages="
 	$pkgname-doc
 "
 # remote_battery_charge_limit1_autoadd_drop_remote test depends on race conditions on slow CI runners
-# ERROR: crossdirect: rustc version mismatch between native and build chroot.
-options="!check !pmb:crossdirect"
+options="!check"
 builddir="$srcdir/$pkgname-v$pkgver"
 
 build() {
-	make build CARGOFLAGS=auditable
+	# -vv to avoid being killed in bpo
+	make build CARGOFLAGS="auditable -vv"
 }
 
 package() {
-	make install DESTDIR="$pkgdir"
+	# -vv to avoid being killed in bpo
+	make install DESTDIR="$pkgdir" CARGOFLAGS="-vv"
 
 	# conflicts with orca package
 	rm $pkgdir/usr/lib/systemd/user/orca.service
