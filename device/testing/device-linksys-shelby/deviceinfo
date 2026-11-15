@@ -1,4 +1,4 @@
-# Reference: <https://postmarketos.org/deviceinfo>
+# Reference: <https://nura.eco/deviceinfo>
 # Please use double quotes only. You can source this file in shell
 # scripts.
 
@@ -12,7 +12,6 @@ deviceinfo_arch="armv7"
 
 # Device related
 deviceinfo_chassis="embedded"
-deviceinfo_external_storage="true"
 deviceinfo_no_framebuffer="true"
 
 # Bootloader related
@@ -26,7 +25,6 @@ deviceinfo_append_dtb="true"
 
 # legacy uboot on this device cannot use gpt
 deviceinfo_partition_type="msdos"
-
 
 # serial support
 deviceinfo_getty="ttyS0;115200"

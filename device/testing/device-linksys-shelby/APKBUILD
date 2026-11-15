@@ -1,15 +1,15 @@
-# Reference: <https://postmarketos.org/devicepkg>
+# Reference: <https://nura.eco/devicepkg>
 maintainer="exkc <exkc@exkc.moe>"
 pkgname=device-linksys-shelby
 pkgdesc="Linksys WRT1900ACS/WRT1900ACS V2"
-pkgver=1
+pkgver=2
 pkgrel=0
-url="https://postmarketos.org"
+url="https://nura.eco"
 license="MIT"
 arch="armv7"
 options="!check !archcheck"
 depends="
-	linux-postmarketos-marvell
+	linux-nura-marvell
 	postmarketos-base
 	u-boot-tools
 "
@@ -27,5 +27,5 @@ package() {
 }
 
 sha512sums="
-8f0c8c29b71adc67018cd03cdb4a53f3bb86d6201de12c5419849008130cc8f405550a3f78941af100a8af7a4da3844f26a08441eba0ace5521756b55a40093a  deviceinfo
+fb222aa02c3933da3b374310393f1e45944ed787c7aeea14aa7efddf0d63fd0b0368a2f65b47ce21c511bc7d0eb26f1500f25a01bcfe430240442ee1c02af543  deviceinfo
 "
