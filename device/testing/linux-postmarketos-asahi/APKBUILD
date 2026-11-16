@@ -1,6 +1,6 @@
 maintainer="Clayton Craft <clayton@craftyguy.net>"
 pkgname=linux-postmarketos-asahi
-pkgver=7.3.3_p2
+pkgver=7.3.4_p1
 pkgrel=0
 _rel=${pkgver#*_p}
 _kver=${pkgver%_p*}
@@ -88,6 +88,6 @@ package() {
 }
 
 sha512sums="
-bc25dcf650023f29dcfc656bae21561f314fd2b15a3186270ef3087a2c14a06a2d52db1736bd054b1cdb57f000be954d295a99406d85b0f838277700f7e80ddf  linux-postmarketos-asahi-7.3.3-2.tar.gz
-e67504e43441a0b4a208c9f1ad8630d6bb077ce8951ac7f5007c464d8136d099d62e9c4a3e1efc91f15b0ea0b112d4d4f7ef58592ff27e401399fe19a6197639  config-postmarketos-asahi.aarch64
+d8f6f9fcea409e7bec399ea0a506b63eb15fb3c118bbfab145981e261b537ac00629db374fe1dd3365bbf082105ff9329c546c4b906e85f91a8ea54eabc4db81  linux-postmarketos-asahi-7.3.4-1.tar.gz
+fd98011c59847f50f88c2f620d562d704393bc67b7db6af2c5ec78e39ff2405928265402b919b860e2233d46f5335f76f3f163f8f21384eac0d3901e67a442d4  config-postmarketos-asahi.aarch64
 "
