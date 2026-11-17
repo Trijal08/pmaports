@@ -1,10 +1,10 @@
-# Reference: <https://postmarketos.org/devicepkg>
+# Reference: <https://nura.eco/devicepkg>
 maintainer="Henrik Grimler <henrik@grimler.se>"
 pkgname=device-samsung-klimtlte
 pkgdesc="Samsung Galaxy Tab S 8.4 LTE"
-pkgver=7
-pkgrel=1
-url="https://postmarketos.org"
+pkgver=8
+pkgrel=0
+url="https://nura.eco"
 license="MIT"
 arch="armv7"
 options="!check !archcheck"
@@ -26,5 +26,5 @@ package() {
 }
 
 sha512sums="
-3a51546efd477ab6c8918212a46a813068751f9c6b30aa6a87a4504222b359db44bc594dd9b2b4431fa4a73cc24b0b3157d1efad6c779727d17c157e00bbd35a  deviceinfo
+e0ca8c5152a77817334bef77f6487641563c6beb0714825a957e5c1937ea9d0c83e6f913e370bc6466fa204ec71a033160356617bf96654e10109eb119cea563  deviceinfo
 "
