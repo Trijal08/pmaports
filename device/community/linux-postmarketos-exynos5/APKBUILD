@@ -2,14 +2,21 @@
 # and Hardkernel's odroidxu4_defconfig
 maintainer="Henrik Grimler <henrik@grimler.se>"
 pkgname=linux-postmarketos-exynos5
-pkgver=6.18.33
-pkgrel=1
+pkgver=6.18.63
+pkgrel=0
 pkgdesc="Mainline kernel fork for Samsung Exynos5 devices"
 arch="armv7"
 _carch="arm"
 _flavor="${pkgname#linux-}"
 url="https://gitlab.com/exynos5-mainline/linux"
 license="GPL-2.0-only"
+# To keep boot.img small the following options are deliberately not
+# enabled in the kernel config:
+#  - MODULE_COMPRESS_ZSTD
+#  - DEBUG_INFO_BTF
+#  - DEBUG_INFO_BTF_MODULES
+#  - DEBUG_INFO_DWARF5
+# and bpf has been left out of CONFIG_LSM.
 options="!strip !check !tracedeps
 	pmb:cross-native
 	pmb:kconfigcheck-community
@@ -17,13 +24,17 @@ options="!strip !check !tracedeps
 makedepends="
 	bison
 	clang
+	elfutils-dev
 	findutils
 	flex
+	linux-headers
 	lld
 	llvm
 	openssl-dev
+	pahole
 	perl
 	postmarketos-installkernel
+	python3
 	xz
 	zstd
 "
@@ -68,6 +79,6 @@ package() {
 }
 
 sha512sums="
-039faaba063d0867787de937be4f743d5fd7ac4b290774cbe13fe85db0a3cf54273583b1511920f35dcf3b6837accd1153d3133b9249efe46e0cf04292da1a53  linux-postmarketos-exynos5-v6.18.33-exynos5-lts.tar.bz2
-2caeba4253a09f1ea4e2ee816eaa221f8ebb29d794481a418690ca128440958f97a40adb3226b80193668403a1eda161cdff9389bc58cad5e997e055516bfb1d  config-postmarketos-exynos5.armv7
+0952012c1a034ce32082475c44948bfa3f286ac57af513a3f03861bf474fd1b8ce3542deff999b65121cc16d2713d2232ca02328ab263386942752b9d3949983  linux-postmarketos-exynos5-v6.18.63-exynos5-lts.tar.bz2
+425aac864914459f42ac0fc3a24fbb19c4c5da302ed60dba34a7732c798c772d17ce04a958fd0f3236e68577a0da077344fd7011c303a94b578853d986f33059  config-postmarketos-exynos5.armv7
 "
