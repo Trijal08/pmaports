@@ -36,3 +36,4 @@ enable drkonqi-coredump-launcher.socket
 
 ## steamos / opengamepadui
 enable steamos-manager.service
+enable decky-loader.service
