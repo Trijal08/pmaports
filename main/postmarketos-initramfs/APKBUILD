@@ -1,4 +1,3 @@
-# Co-Maintainer: Clayton Craft <clayton@craftyguy.net>
 maintainer="Ferass El Hafidi <funderscore@postmarketos.org>"
 pkgname=postmarketos-initramfs
 pkgver=3.12.6
