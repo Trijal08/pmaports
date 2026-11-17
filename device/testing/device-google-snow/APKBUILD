@@ -1,10 +1,10 @@
-# Reference: <https://postmarketos.org/devicepkg>
+# Reference: <https://nura.eco/devicepkg>
 maintainer="Henrik Grimler <henrik@grimler.se>"
 pkgname=device-google-snow
 pkgdesc="Samsung Chromebook"
-pkgver=12
+pkgver=13
 pkgrel=0
-url="https://postmarketos.org"
+url="https://nura.eco"
 license="MIT"
 arch="armv7"
 options="!check !archcheck"
@@ -49,7 +49,7 @@ sway() {
 }
 
 sha512sums="
-34354aa7561009dc859d4c59b60139b31c5157c4a063080ee903fe8553e3be0878e5c25c63ec2908df8e44a75e1014c783c66fe2a054058af8c717485f29b726  deviceinfo
+a1f8a83627945df2599ac144e9beffe8b390d91e067a317ef7bb9c06042104d954fc2b06b1978b091ac56b759f05988c760fef7a9af99091163e8b68ebfdf599  deviceinfo
 97e88eaa9b8e7989a20d2572479fe5d1fe0284de862da11c91b1f347099d5704673837db01a6b0c289fee0a2d7236f64fba31fd6001475f957c23203e34fd6fb  kernel-cmdline.conf
 e12a68f919182cb4e6812a5dd13fce8dc15266d2ac16aa5f0a31034f111cb403c020ebaaa4d94309f4baf2f71379327c57c08029e27c506d152695e9a2b04b2b  modules-initfs
 8a8f593694528a9323ef4a0aff7e9c6ad45608957eb042d425663f682885c2f95eb01db4fe87b7c43a90de48f3e5f8b10cab4b13c547b5b0d31b924fcb083cad  HiFi.conf

@@ -1,4 +1,4 @@
-# Reference: <https://postmarketos.org/deviceinfo>
+# Reference: <https://nura.eco/deviceinfo>
 # Please use double quotes only. You can source this file in shell
 # scripts.
 
@@ -12,12 +12,12 @@ deviceinfo_arch="armv7"
 
 # Device related
 deviceinfo_chassis="laptop"
-deviceinfo_external_storage="true"
 deviceinfo_screen_width="1366"
 deviceinfo_screen_height="768"
 deviceinfo_drm="true"
 deviceinfo_disable_dhcpd="true"
 deviceinfo_create_initfs_extra="true"
+deviceinfo_initfs_compression="lzma"
 
 # Bootloader related
 deviceinfo_cgpt_kpart="/boot/vmlinuz.kpart"
