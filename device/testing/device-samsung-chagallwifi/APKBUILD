@@ -1,10 +1,10 @@
-# Reference: <https://postmarketos.org/devicepkg>
+# Reference: <https://nura.eco/devicepkg>
 maintainer="Henrik Grimler <henrik@grimler.se>"
 pkgname=device-samsung-chagallwifi
 pkgdesc="Samsung Galaxy Tab S 10.5"
-pkgver=7
-pkgrel=1
-url="https://postmarketos.org"
+pkgver=8
+pkgrel=0
+url="https://nura.eco"
 license="MIT"
 arch="armv7"
 options="!check !archcheck"
@@ -26,5 +26,5 @@ package() {
 }
 
 sha512sums="
-5551c856269829f482a24f2205cae6f98121c934a51899eb1b9adcc21b8488e5983d2764230b40090ccd81d87717ea4c99fbe139464137f9335d0af5a83240a9  deviceinfo
+e3e18a3c202a4a169cf11e886bb02694394395ddb9964a59cefa2055d68d4a53897feb6b05512a27116e211c3a378a01b58adbf5dd4242b01b4ab52550e50801  deviceinfo
 "
