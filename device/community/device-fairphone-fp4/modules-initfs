@@ -1,3 +1,17 @@
+dispcc-sm6350
+gpi
+gpucc-sm6350
 himax_hx83112b
+i2c-qcom-geni
+icc-osm-l3
+libcomposite
 msm
 panel-himax-hx83112a
+phy-qcom-qmp-combo
+phy-qcom-qmp-ufs
+phy-qcom-qusb2
+qcom-lcdb-regulator
+qcom-pon
+qcom-refgen-regulator
+qcom-wled
+ufs-qcom

@@ -2,7 +2,7 @@
 maintainer="Luca Weiss <luca@lucaweiss.eu>"
 pkgname=device-fairphone-fp4
 pkgdesc="Fairphone 4"
-pkgver=13
+pkgver=14
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
@@ -66,5 +66,5 @@ sha512sums="
 fdf1973c32c3834f2e1194d2366fbe1ce6b1ac6ee6211fb720677793f3dcea9adaeeada0e7284d72de848692939e2bc2977997d72ab2126d4f4f8c19428ac846  52-fairphone-fp4.conf
 2c16ba75e0077b2b1eaefa4c73b287475505a1aeb291ec29316d41cc094277320f9d2aaabfd91eb1dc0f488ab2d61a94faef16e7afe0f1e226779113761b9a37  81-libssc-fairphone-fp4.rules
 7bb0da47b15ab975b2c673e89f1894e2099b2d12814c1baa87e26d3ccf730e27bb2a3d3d066ef8d3d0c4e5301f5e9d6aaf4990ceeb5999d3f804195537f3ad42  deviceinfo
-c68ffdabbe54070afb9f05eccead9af305cf7e66572e25afff9534d5f225959a10455bb6aa68e9b9c14c063dc0a26c104f85502797303090933bcb44b9ddab9f  modules-initfs
+cb302d6863bc4bbbefcd3184c0abf4776c9975de335061716e7c0489a80e33a208471421b3d61a5a353cb43f6ce90c204f66860a220ce7d4bd03e98b19f6c981  modules-initfs
 "
