@@ -1,8 +1,8 @@
 maintainer="Nickolay Goppen <setotau@mainlining.org>"
 pkgname=alsa-ucm-conf-qcom-sdm660
-pkgver=1.2.15_git20260721
+pkgver=1.2.16_git20261118
 pkgrel=1
-_commit="8cfa1a20c94eede091596a293163fa5f9b4e3c12"
+_commit="99f1f6af11642c3305a4c2de7a21d9d0ae7b9197"
 pkgdesc="ALSA UCM configuration for SDM660 devices"
 url="https://github.com/sdm660-mainline/alsa-ucm-conf"
 arch="aarch64"
@@ -18,5 +18,5 @@ package() {
 }
 
 sha512sums="
-8467ff6ea6b645f57d0ecf661942d9dcc1050c47744c1c98e1955c311795ddc7b1a6efd2fc4698395770343ca1ae163ec68fee9a7a943af7aa13cb08ec468f97  alsa-ucm-conf-qcom-sdm660-8cfa1a20c94eede091596a293163fa5f9b4e3c12.tar.gz
+aa18ff25f8a8fa2cb166592d96517332f60e3ab035611b8855854ede6320a3338b430b4a65e1c082bc32cc4e21c576e055126e62466d49d7592f8f647cb5545d  alsa-ucm-conf-qcom-sdm660-99f1f6af11642c3305a4c2de7a21d9d0ae7b9197.tar.gz
 "
