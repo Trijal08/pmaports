@@ -9,6 +9,7 @@ ext4
 kernel/arch/*/crypto/
 kernel/crypto/
 libaes
+libcomposite
 loop
 nls_ascii
 nls_cp437
