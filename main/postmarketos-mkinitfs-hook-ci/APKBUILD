@@ -1,7 +1,6 @@
-# Co-Maintainer: Pablo Correa Gomez <pabloyoyoista@postmarketos.org>
-maintainer="Casey Connolly <kcxt@postmarketos.org>"
+maintainer="Pablo Correa Gomez <pabloyoyoista@postmarketos.org>"
 pkgname=postmarketos-mkinitfs-hook-ci
-pkgver=6
+pkgver=7
 pkgrel=0
 pkgdesc="Hook for doing automated CI tests in the initramfs"
 url="https://postmarketos.org"
