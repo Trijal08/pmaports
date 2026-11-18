@@ -1,14 +1,14 @@
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=alsa-ucm-conf-qcom-handheld
 pkgver=1.2.16_git20261113
-pkgrel=0
+pkgrel=1
 _commit="ce3f69c89b0479b6eb2e9db993100c6f2dca78f8"
 pkgdesc="ALSA UCM configuration for Qualcomm handheld devices"
-url="https://gitlab.com/jenneron/alsa-ucm-conf"
+url="https://github.com/OpenHandheldCollective/alsa-ucm-conf"
 arch="aarch64"
 license="BSD-3-Clause"
 provides="alsa-ucm-conf=0.${pkgver%_*}-r$pkgrel" # versioned provides need to be below default version
-source="$pkgname-$_commit.tar.gz::https://gitlab.com/jenneron/alsa-ucm-conf/-/archive/$_commit/alsa-ucm-conf-$_commit.tar.gz"
+source="$pkgname-$_commit.tar.gz::https://github.com/OpenHandheldCollective/alsa-ucm-conf/archive/$_commit.tar.gz"
 builddir="$srcdir/alsa-ucm-conf-$_commit"
 options="!check"
 
