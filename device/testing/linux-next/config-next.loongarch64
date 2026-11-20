@@ -937,7 +937,6 @@ CONFIG_PACKET=y
 # CONFIG_PACKET_DIAG is not set
 # CONFIG_INET_PSP is not set
 CONFIG_UNIX=y
-CONFIG_AF_UNIX_OOB=y
 # CONFIG_UNIX_DIAG is not set
 CONFIG_TLS=m
 CONFIG_TLS_DEVICE=y
@@ -1903,6 +1902,7 @@ CONFIG_MHI_BUS=m
 #
 # ARM System Control and Management Interface Protocol
 #
+# CONFIG_ARM_SCMI_PROTOCOL is not set
 # end of ARM System Control and Management Interface Protocol
 
 # CONFIG_FIRMWARE_MEMMAP is not set
@@ -2871,7 +2871,7 @@ CONFIG_USB_RTL8152=m
 # CONFIG_USB_LAN78XX is not set
 CONFIG_USB_USBNET=m
 # CONFIG_USB_NET_AX8817X is not set
-# CONFIG_USB_NET_AX88179_178A is not set
+# CONFIG_USB_NET_AX88179 is not set
 CONFIG_USB_NET_CDCETHER=m
 CONFIG_USB_NET_CDC_EEM=m
 CONFIG_USB_NET_CDC_NCM=m
@@ -7599,6 +7599,7 @@ CONFIG_IIO_ST_ACCEL_SPI_3AXIS=m
 # CONFIG_TI_ADS8344 is not set
 # CONFIG_TI_ADS8688 is not set
 # CONFIG_TI_LMP92064 is not set
+# CONFIG_TI_TLA2528 is not set
 # CONFIG_TI_TLC4541 is not set
 # CONFIG_TI_TSC2046 is not set
 # CONFIG_VERSAL_SYSMON_I2C is not set
@@ -7633,6 +7634,7 @@ CONFIG_IIO_ST_ACCEL_SPI_3AXIS=m
 #
 # CONFIG_AD7150 is not set
 # CONFIG_AD7746 is not set
+# CONFIG_FDC1004 is not set
 # end of Capacitance to digital converters
 
 #
@@ -8069,6 +8071,7 @@ CONFIG_HID_SENSOR_CUSTOM_INTEL_HINGE=m
 # CONFIG_SX9360 is not set
 # CONFIG_SX9500 is not set
 # CONFIG_SRF08 is not set
+# CONFIG_TF_LUNA is not set
 # CONFIG_VCNL3020 is not set
 # CONFIG_VCNL36829 is not set
 # CONFIG_VL53L0X_I2C is not set
