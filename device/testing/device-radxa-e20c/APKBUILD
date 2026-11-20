@@ -1,0 +1,43 @@
+# Reference: <https://nura.eco/devicepkg>
+maintainer="Federico Amedeo Izzo <federico@izzo.pro>"
+pkgname=device-radxa-e20c
+pkgver=1
+pkgrel=0
+pkgdesc="Radxa E20C"
+url="https://nura.eco"
+arch="aarch64"
+license="MIT"
+depends="
+	linux-firmware-rtl_nic
+	linux-postmarketos-rockchip
+	postmarketos-base
+	u-boot-radxa-e20c
+	"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	gunzip-vmlinuz.sh
+	kernel-cmdline.conf
+	"
+options="!archcheck !check"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+
+	# Rockchip u-boot does not support compressed kernels. Boot-deploy hook
+	# makes sure it is gunzipped. Kernel is compressed because other devices it
+	# supports has smaller boot partitions. This is a workaround until we move
+	# to mainline u-boot that is a work in progress.
+	install -Dm755 "$srcdir"/gunzip-vmlinuz.sh \
+		-t "$pkgdir"/usr/share/boot-deploy/hooks/
+}
+
+sha512sums="
+df374a7f20248291cf1445db390ffbb21abfe49d13d8d4372ffec68e9a26da0290dd9ff5985b323235e9a0f47dc402b89907d6046d2774cd611a4d564e6baa6e  deviceinfo
+6ef912bcf4e09d248dc93b0be8d98e0c720b497892b50e8f0ab076032cccf317f650126cef4a9b48ebbe573255433f87a9a3f9799dca35e492af8933177a1c98  gunzip-vmlinuz.sh
+51be0af5b2354ce9c917138b4433d480653ecd700b17ff4a92fdfa7e7825eee80f41a811a95709b48aa9d1938e3e8ad70120dbd7aa7df6e2cc725570db5b19db  kernel-cmdline.conf
+"

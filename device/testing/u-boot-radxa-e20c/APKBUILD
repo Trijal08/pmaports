@@ -1,0 +1,68 @@
+maintainer="Federico Amedeo Izzo <federico@izzo.pro>"
+pkgname=u-boot-radxa-e20c
+pkgver=2017.09
+pkgrel=0
+_ddr_ver=1.13
+_trust_ver=1.21
+pkgdesc="U-Boot fork for the Radxa E20C"
+url="https://github.com/radxa/u-boot"
+arch="aarch64"
+license="GPL-2.0"
+options="!check !tracedeps"
+makedepends="
+	bash
+	bc
+	bison
+	coreutils
+	dtc
+	flex
+	openssl-dev
+	python3
+	py3-setuptools
+	python3-dev
+	swig
+	u-boot-tools
+"
+_repository="u-boot"
+_commit="5f685f833a8eec686f0105c1cbd5f42d502d486f"
+_rkbin_commit="e6c4cb5c9e6918f4f2fbbfa781e38309b9656bcb"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/radxa/$_repository/archive/$_commit.tar.gz
+	https://github.com/radxa/rkbin/raw/$_rkbin_commit/bin/rk35/rk3528_bl31_v$_trust_ver.elf
+	https://github.com/radxa/rkbin/raw/$_rkbin_commit/bin/rk35/rk3528_ddr_1056MHz_v$_ddr_ver.bin
+	https://github.com/radxa/rkbin/raw/$_rkbin_commit/bin/rk35/rk3528_spl_loader_v1.13.106.bin
+
+	0001-menu-fix-timeout-duration.patch
+
+	update-u-boot
+"
+builddir="$srcdir/$_repository-$_commit"
+
+build() {
+	export ROCKCHIP_TPL="$srcdir"/rk3528_ddr_1056MHz_v$_ddr_ver.bin
+	export BL31="$srcdir"/rk3528_bl31_v$_trust_ver.elf
+
+	make rock-2-rk3528_defconfig
+	make all u-boot.itb
+
+	# make idbloader.img
+	mkimage -n rk3528 -T rksd -d "$ROCKCHIP_TPL:$builddir"/spl/u-boot-spl.bin "$builddir"/idbloader.img
+}
+
+package() {
+	install -D -m755 "$srcdir"/update-u-boot "$pkgdir"/usr/bin/update-u-boot
+	install -Dm644 \
+		"$builddir"/idbloader.img \
+		"$builddir"/u-boot.itb \
+		"$srcdir"/rk3528_spl_loader_v1.13.106.bin \
+		-t "$pkgdir"/usr/share/u-boot/radxa-e20c
+}
+
+sha512sums="
+2f7f250f33ca2d6365f0f31d0b7d43877f05161a34d6c62957bfcfe108eadcaec2a2cf475e8167a4601db41af2669b339b65336f859ac6e45a725f786c4151cc  u-boot-radxa-e20c-5f685f833a8eec686f0105c1cbd5f42d502d486f.tar.gz
+fcf1f189a27b7e17619ccdc7de54e7034b221c22b8862fc432d2d2a7f23e918cebbd5a82bec0107c9090c2bc52bb4e4d4d947f5aa03c21fef8808f0933846a5e  rk3528_bl31_v1.21.elf
+33541ee1b06dbe8941bf3a2eb7a198fb3ddd06d9121cf223df20e327f43ad1bc418130caf7eed2432a59ca254abd6a94694c341719373153822a14322669c9f3  rk3528_ddr_1056MHz_v1.13.bin
+ac1136a0b0100d910b4f3ec2a8be6f52bc96b4c85b0b1ea22b7cc04cb16298fe0d25fd82d5849c2b8c0ca4559b0b301d374c38bdd54336b43067567255aeb63b  rk3528_spl_loader_v1.13.106.bin
+36baf3b8618928e8927229353157ccecb5477e6ed868b9425a04acc2b297026084bd5ed96785292ab2ccb74b9f6328fe032b55505749b103cd68e25777dc3334  0001-menu-fix-timeout-duration.patch
+c38b421d48f399ab30707cb244460d9dfc9050592dbafd13f09be11aeda2a19d325f2599cf2650e6855034999a1daf54324e9a65979f9a5d5dc55fe012421384  update-u-boot
+"
