@@ -1,7 +1,7 @@
 # Reference: <https://postmarketos.org/devicepkg>
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=device-qcom-handheld
-pkgver=1
+pkgver=2
 pkgrel=0
 pkgdesc="Generic device package for various Qualcomm based handheld devices"
 url="https://postmarketos.org"
@@ -14,6 +14,8 @@ depends="
 	firmware-ayn-odin-3
 	hexagonrpcd
 	inputplumber
+	linux-firmware-ath10k
+	linux-firmware-ath11k
 	linux-firmware-ath12k
 	linux-firmware-qca
 	linux-firmware-qcom
