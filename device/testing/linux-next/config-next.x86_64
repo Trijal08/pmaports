@@ -1142,7 +1142,6 @@ CONFIG_ZSMALLOC=y
 #
 # Zsmalloc is a common backend allocator for zswap & zram
 #
-# CONFIG_ZSMALLOC_STAT is not set
 CONFIG_ZSMALLOC_CHAIN_SIZE=8
 # end of Zsmalloc allocator options
 
@@ -6261,6 +6260,7 @@ CONFIG_SND_SOC_TAS2781_I2C=m
 # CONFIG_SND_SOC_TAS6424 is not set
 # CONFIG_SND_SOC_TAS675X is not set
 # CONFIG_SND_SOC_TDA7419 is not set
+# CONFIG_SND_SOC_TFA9865 is not set
 # CONFIG_SND_SOC_TFA9879 is not set
 CONFIG_SND_SOC_TFA989X=m
 # CONFIG_SND_SOC_TLV320ADC3XXX is not set
