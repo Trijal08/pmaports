@@ -1,8 +1,8 @@
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=linux-qcom-handheld
-pkgver=7.3_git20261112
+pkgver=7.4_rc3_git20261123
 pkgrel=0
-_commit="5dc2607571f98b51d2f2d161fcf9001ea2e75130"
+_commit="bc8bc120029f1aaa94b679524fee7f16b461360f"
 pkgdesc="Mainline Kernel for Qualcomm based handhelds"
 arch="aarch64"
 _carch="arm64"
@@ -70,6 +70,6 @@ package() {
 }
 
 sha512sums="
-959f79e7e63a6fe7a4a68d9980817c1ab8ce8c20f28eccd10244ba798966ae18b5d6450f6c259a3d8600b99d05fc2225b68641a11ea0a6117e8653827d3b7c7b  linux-5dc2607571f98b51d2f2d161fcf9001ea2e75130.tar.gz
-9a1c9998326d51e8297f139e1aaf50f5534a284f49464bc5e6ae4776933710b974347de39f49a38ba454ad5b25e1734d14b11b2357cba47e27a3172e19781f01  config-qcom-handheld.aarch64
+cc2d7d457b82da09a6999b5d0793df1b9142f2d12b1358ab1cc1efe658d252a3f244b16dd745b53bcfc60f6845a26b6e50ed8af7cfa8596878018b753e191ecc  linux-bc8bc120029f1aaa94b679524fee7f16b461360f.tar.gz
+08b9f411b9358a7b64276021485c11a5ac714c53224027a06e8275821e83daf9f06600bac4d914b0d7ff50e1edf974dfb5e57403d10eda4d403f05a737e57a45  config-qcom-handheld.aarch64
 "
