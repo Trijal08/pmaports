@@ -191,6 +191,7 @@ IIO_ST_ACCEL_I2C_3AXIS = "m"
 IIO_ST_ACCEL_SPI_3AXIS = "m"
 INPUT_REGULATOR_HAPTIC = "m"
 INPUT_TOUCHSCREEN = "y"
+KEYBOARD_GPIO = "m"
 MOUSE_BCM5974 = "m"
 RMI4_CORE = "m"
 RMI4_I2C = "m"
@@ -219,6 +220,8 @@ I2C_HID_OF_GOODIX = "m"
 ["category:input".">=0.0.0"."aarch64 loongarch64 riscv64 x86 x86_64"]
 I2C_HID_ACPI = "m"
 ["category:input".">=0.0.0"."x86_64"]
+INPUT_SOC_BUTTON_ARRAY = "m"
+INTEL_HID_EVENT = "m"
 STEAM_FF = "y"
 
 # led and light devices
