@@ -3,7 +3,7 @@
 maintainer="chiffa <chiffathefoxx@gmail.com>"
 pkgname=device-samsung-beyond1lte-downstream
 pkgdesc="Samsung Galaxy S10 (Downstream)"
-pkgver=7
+pkgver=8
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
@@ -28,7 +28,7 @@ package() {
 }
 
 sha512sums="
-911429ffa6d21010ac5714072c4678967856417595a819566e3ad068cdfb2cac5c59343a32e1fca2a2f7b9ace6644b1d43ce1bba985b7bee286d47df46ed844a  deviceinfo
+a9aea2a8963aba6e8f2eef194966414f64483bdc34b099e7e4ee31332f84a18ad0b75cc377a0112f1c5f16b654255b12f5e646607fb84ca9c30938189ac3709e  deviceinfo
 cb0731b5e71b427024bb47cd70aa48d3be409a89aa476f3fd4dea8e5b42ef87371a65bbe836bca7da04c0384178ad293b44da8a88557ad04fc57857bef502050  kernel-cmdline.conf
 03deb65563f4b4421491643854927e88b2d5880b8b19ee6baa4d3fa1ec3f7d7a1c2977fd2c3c41270254efea6fa0c5fdae0a382e7c427d5a3bf6fad34c25375e  initfs-hook.sh
 "
