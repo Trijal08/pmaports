@@ -17,6 +17,9 @@ qcom-pmi632-lcdb-regulator
 qcom-pm8150l-lcdb-regulator
 qcom_pmic_tcpm
 
+# volume up
+gpio-keys
+
 # ayn-odin
 panel-innolux-td4328
 rmi_core

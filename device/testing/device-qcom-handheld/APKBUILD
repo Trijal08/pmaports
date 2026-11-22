@@ -1,7 +1,7 @@
 # Reference: <https://postmarketos.org/devicepkg>
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=device-qcom-handheld
-pkgver=2
+pkgver=3
 pkgrel=0
 pkgdesc="Generic device package for various Qualcomm based handheld devices"
 url="https://postmarketos.org"
@@ -70,5 +70,5 @@ b30b684783145d724ba3b26995f08c30e5a60fee2dde643da2f551af2ee62bb116b1f1468d123b2c
 27d997f5de16fed31a5607da463faa31fd3313dba9a8627d2ea1ba0fd0cde5a353e3c1a06a859972dbd3ba95aadedc6f939be9cb3b27e1383a225bbfa5612db5  deviceinfo
 fa0d5aca99b159ffae8cee30f6409f0a7fd825d0ab5163a10b4fd6403b7ae8e35bed2fdcebb0099aaea31ef16b864dd31ce5a53ea03a2c0bed6d07ec06d750bc  kernel-cmdline.conf
 2e2751b0583c8c31dcad48d67eddb525ac968a0a030efd9fec58b73cd11cdd0f342c04734a5d9d511197dc78f645b1f97ee753526ecf6ce735fe6af815ccfd8b  hexagonrpcd-adsp-secure-sensorspd.service
-b30ab2cc64ce96c70f8da5b41838eb22e29cbc5f62445b5d38fd848c9eba1a86909c47a5f96de57db9e43d26792cf80d98572a1c1fb77622cedbf92cf154418c  modules-initfs
+55a95426b11d7cc857e048ba3234a6e81348562d386191ae4b849259f355dbaf475d877c324c95f531253e43dae9d80e9759f5a6aa3f11fde19c6476029f55cc  modules-initfs
 "
