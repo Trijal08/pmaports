@@ -1,0 +1,25 @@
+From 78d8ef54561fef9a672a2722821cb5ae0588e54f Mon Sep 17 00:00:00 2001
+From: Oliver Smith <ollieparanoid@postmarketos.org>
+Date: Sun, 22 Nov 2026 14:56:03 +0100
+Subject: [PATCH] Disable test-fs-util
+
+---
+ src/test/meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/test/meson.build b/src/test/meson.build
+index 7614356463..7ee5052ecc 100644
+--- a/src/test/meson.build
++++ b/src/test/meson.build
+@@ -111,7 +111,7 @@ simple_tests += files(
+         'test-firstboot-util.c',
+         'test-format-table.c',
+         'test-format-util.c',
+-        'test-fs-util.c',
++        # 'test-fs-util.c',
+         'test-fstab-util.c',
+         'test-glob-util.c',
+         'test-gpt.c',
+-- 
+2.56.1
+

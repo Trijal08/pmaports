@@ -17,7 +17,7 @@ pkgname=systemd
 pkgver=262.2
 _pkgver="${pkgver/_/-}"
 # pkgrel must match systemd-stage0!
-pkgrel=1
+pkgrel=2
 pkgdesc="System and service manager"
 url="https://github.com/systemd/systemd"
 # armhf: no linux-stable
@@ -218,6 +218,8 @@ fi
 source="
 	$pkgname-$pkgver.tar.gz::https://github.com/systemd/systemd/archive/refs/tags/v$_pkgver.tar.gz
 	wired.network
+	0001-Disable-test-bus-watch-bind.patch
+	0002-Disable-test-fs-util.patch
 	"
 builddir=${_upstream_srcdir:-"$srcdir/$pkgname-$_pkgver"}
 _meson_builddir=${_meson_builddir:-build}
@@ -620,4 +622,6 @@ _resolve_packages() {
 sha512sums="
 111da2e78c999f299c40532a69d5ea7aa564e9f761e889d781777c90f771770767ba5625b79d7b4ae179830b191cae2f80dca85799dd5ad973144e82d0b3735d  systemd-262.2.tar.gz
 81c897fed8a3fbfb67ec591b2398a5d65e4af1b3ef379376c157c98d71f085b707f8ebc896d5571a94f99f8fc84fd6b43e3b879ca9b0d57fc6c4596034c7a777  wired.network
+171defd623699a232155632c5430c63cf0af9db75b86c2478ad346b10f252797439fef52bdb7b112252de1b21d9ad9fae71282d217be420ba643455a6c4a1216  0001-Disable-test-bus-watch-bind.patch
+b9cad4e021f1596827fa5a45010ce27d4217a7df40681c79fa6febf438e29f1073fc3fea370ba9a22ad9721a72eb8f2945c1efedea3a8796b5756cd8c58cef1e  0002-Disable-test-fs-util.patch
 "

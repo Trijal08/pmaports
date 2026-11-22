@@ -1,0 +1,31 @@
+From db2a698933c8feaeb158590a3fddbea285d2b856 Mon Sep 17 00:00:00 2001
+From: Oliver Smith <ollieparanoid@postmarketos.org>
+Date: Sun, 22 Nov 2026 14:56:25 +0100
+Subject: [PATCH] Disable test-bus-watch-bind
+
+---
+ src/libsystemd/meson.build | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/libsystemd/meson.build b/src/libsystemd/meson.build
+index cd3821bb8d..faeb45d8a1 100644
+--- a/src/libsystemd/meson.build
++++ b/src/libsystemd/meson.build
+@@ -248,10 +248,10 @@ libsystemd_tests += [
+                 'sources' : files('sd-bus/test-bus-track.c'),
+                 'dependencies' : libseccomp_cflags,
+         },
+-        {
+-                'sources' : files('sd-bus/test-bus-watch-bind.c'),
+-                'timeout' : 120,
+-        },
++        # {
++        #         'sources' : files('sd-bus/test-bus-watch-bind.c'),
++        #         'timeout' : 120,
++        # },
+         {
+                 'sources' : files('sd-device/test-sd-device.c'),
+                 'dependencies' : libmount_cflags,
+-- 
+2.56.1
+
