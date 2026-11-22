@@ -1,9 +1,9 @@
 maintainer="Anton Bambura <jenneron@protonmail.com>"
-pkgname=firmware-ayn-odin-3
+pkgname=firmware-qcom-wcn7860
 pkgver=2
 _commit="8834a0c80f5b24fee5ed9e18c1560dc48a6f1bd9"
 pkgrel=0
-pkgdesc="Firmware for AYN Odin 3"
+pkgdesc="Firmware for Qualcomm WCN7860"
 url="https://github.com/ROCKNIX/extra-firmware"
 arch="aarch64"
 license="proprietary"
