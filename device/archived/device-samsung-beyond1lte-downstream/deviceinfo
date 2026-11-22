@@ -11,7 +11,6 @@ deviceinfo_arch="aarch64"
 
 # Device related
 deviceinfo_chassis="handset"
-deviceinfo_external_storage="true"
 deviceinfo_screen_width="1440"
 deviceinfo_screen_height="3040"
 
