@@ -2,7 +2,7 @@
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=device-ayn-odin-3
 pkgdesc="AYN Odin 3"
-pkgver=5
+pkgver=6
 pkgrel=0
 url="https://postmarketos.org"
 license="MIT"
@@ -11,7 +11,7 @@ options="!check !archcheck"
 depends="
 	alsa-ucm-conf-ayn
 	firmware-ayn-audioreach-topology
-	firmware-ayn-odin-3
+	firmware-qcom-wcn7860
 	hexagonrpcd
 	linux-ayn-odin-3
 	linux-firmware-ath12k
