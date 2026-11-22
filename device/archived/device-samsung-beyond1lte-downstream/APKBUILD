@@ -1,11 +1,11 @@
 # Archived: Downstream port, only for testing. Use mainline port!
-# Reference: <https://postmarketos.org/devicepkg>
+# Reference: <https://nura.eco/devicepkg>
 maintainer="chiffa <chiffathefoxx@gmail.com>"
 pkgname=device-samsung-beyond1lte-downstream
 pkgdesc="Samsung Galaxy S10 (Downstream)"
 pkgver=8
 pkgrel=0
-url="https://postmarketos.org"
+url="https://nura.eco"
 license="MIT"
 arch="aarch64"
 options="!check !archcheck"
@@ -28,7 +28,7 @@ package() {
 }
 
 sha512sums="
-03fab1b8957fc4e0615e8c712ae4dc1225f72015435818c916e208a11029772e748621a0581b1a14a3a2ccd9621b715abc2d9a57fdde6e19d751091365baae4f  deviceinfo
+9eda1803e86163871d281ec38c939f81e1eb12aa5e6d0bb2ad14a67fddf957ac498010e58d1dfc8296a9ac726f1beceb3890f667b1787a29207b58988cd60412  deviceinfo
 cb0731b5e71b427024bb47cd70aa48d3be409a89aa476f3fd4dea8e5b42ef87371a65bbe836bca7da04c0384178ad293b44da8a88557ad04fc57857bef502050  kernel-cmdline.conf
 03deb65563f4b4421491643854927e88b2d5880b8b19ee6baa4d3fa1ec3f7d7a1c2977fd2c3c41270254efea6fa0c5fdae0a382e7c427d5a3bf6fad34c25375e  initfs-hook.sh
 "
