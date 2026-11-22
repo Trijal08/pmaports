@@ -1,5 +1,5 @@
 # Archived: Downstream port, only for testing. Use mainline port!
-# Reference: <https://postmarketos.org/vendorkernel>
+# Reference: <https://nura.eco/vendorkernel>
 # Kernel config based on: arch/arm64/configs/exynos9820-beyond1lte_defconfig
 
 maintainer="chiffa <chiffathefoxx@gmail.com>"
