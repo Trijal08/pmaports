@@ -1,7 +1,7 @@
 # Reference: <https://postmarketos.org/devicepkg>
 maintainer="Anton Bambura <jenneron@protonmail.com>"
 pkgname=device-qcom-handheld
-pkgver=4
+pkgver=5
 pkgrel=0
 pkgdesc="Generic device package for various Qualcomm based handheld devices"
 url="https://postmarketos.org"
@@ -24,6 +24,7 @@ depends="
 	msm-firmware-loader
 	msm-firmware-loader-hexagonrpcd
 	postmarketos-base
+	rmtfs
 	soc-qcom
 	soc-qcom-qbootctl
 	systemd-boot
