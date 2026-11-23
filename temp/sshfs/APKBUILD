@@ -1,0 +1,48 @@
+# Fork from Alpine to fix a committing failure blocking Plasma images until
+# Alpine figures out what to do with packages like this.
+#
+# See https://gitlab.alpinelinux.org/alpine/apk-tools/-/work_items/11231
+# and https://gitlab.alpinelinux.org/alpine/aports/-/work_items/18583
+maintainer="Aster Boese <asterboese@mailbox.org>"
+pkgname=sshfs
+_pkgver=3.7.7
+pkgver=999.$_pkgver
+pkgrel=0
+pkgdesc="FUSE client based on the SSH File Transfer Protocol"
+url="https://github.com/libfuse/sshfs"
+arch="all"
+license="GPL-2.0-or-later"
+depends="openssh-client fuse3"
+makedepends="fuse3-dev glib-dev meson coreutils py3-docutils"
+subpackages="$pkgname-doc"
+source="https://github.com/libfuse/sshfs/releases/download/sshfs-$_pkgver/sshfs-$_pkgver.tar.xz"
+options="!check" # requires FUSE kernel module to run tests
+builddir="$srcdir/$pkgname-$_pkgver"
+
+# secfixes:
+#   3.7.6-r0:
+#     - CVE-2026-47187
+#     - CVE-2026-48711
+
+build() {
+	abuild-meson \
+		--sbindir=/usr/bin \
+		. output
+	meson compile -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+
+	mkdir -p "$pkgdir"/usr/share/doc/$pkgname/
+	install -Dm644 README.md ChangeLog.rst AUTHORS COPYING \
+		"$pkgdir"/usr/share/doc/$pkgname/
+
+	# Remove this as it breaks apk-tools on usr-merged systems
+	# mkdir -p "$pkgdir"/sbin
+	# ln -s /usr/sbin/mount.sshfs "$pkgdir"/sbin/mount.sshfs
+}
+
+sha512sums="
+874bba77e566def8211fb4b743385830daa89b3c0826de9e878aed4c558529a9d0c0fe785dfa803db7bbebf4ebfd4f65253d2ae4e87225c13b343daa787902ea  sshfs-3.7.7.tar.xz
+"
