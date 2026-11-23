@@ -1,7 +1,7 @@
 maintainer="Trijal Saha <trijalsaha2012@gmail.com>"
 pkgname=linux-postmarketos-zumapro
 pkgver=7.4_rc4
-pkgrel=0
+pkgrel=1
 pkgdesc="Google zumapro (Pixel 9 Series) close-to-mainline kernel"
 arch="aarch64"
 _carch="arm64"
@@ -52,6 +52,20 @@ prepare() {
 
 build() {
 	unset LDFLAGS
+
+	# Force the Rust bindgen output to be regenerated every build.
+	# Kbuild does not reliably re-run bindgen on a config-only change, and
+	# pmbootstrap reuses the in-tree build dir across rebuilds of the same
+	# commit. A stale rust/bindings/bindings_generated.rs then carries an old
+	# struct layout (e.g. task_struct with mm at the wrong offset), which
+	# silently miscompiles the Rust binder -> ->mmap returns EINVAL and no
+	# Android binder userspace (servicemanager, HALs) can start. Deleting the
+	# generated files makes `make` rebuild them against the current headers +
+	# .config; it is cheap (bindgen is fast) and the dependent crates rebuild.
+	rm -f rust/bindings/bindings_generated.rs \
+		rust/bindings/bindings_helpers_generated.rs \
+		rust/uapi/uapi_generated.rs
+
 	make ARCH="$_carch" LLVM=1 \
 		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-postmarketOS"
 }
