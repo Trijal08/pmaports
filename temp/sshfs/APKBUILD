@@ -1,4 +1,4 @@
-# Fork from Alpine to fix a committing failure blocking Plasma images until
+# Forked from Alpine to fix a committing failure blocking Plasma images until
 # Alpine figures out what to do with packages like this.
 #
 # See https://gitlab.alpinelinux.org/alpine/apk-tools/-/work_items/11231
